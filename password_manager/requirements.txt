@@ -173,7 +173,7 @@ joblib>=1.3.0
 tensorflow>=2.13.0
 
 # Deep Learning - PyTorch & Transformers (Behavioral Recovery)
-torch>=2.12.0
+torch>=2.14.1+cpu
 # No ceiling: capping this at <5.0 (an earlier revision of this file did,
 # citing GHSA-fgcw-684q-jj6r / CVE-2026-5241 as a "breaking major release
 # we don't need") was itself the bug. pip-audit's CI job resolves an
