@@ -160,9 +160,37 @@ class CommitmentServiceDowngradeTests(SimpleTestCase):
     or failed quantum encryption must not silently land there outside
     DEBUG/tests."""
 
-    def _service(self):
+    def _service(self, use_quantum=True):
         from behavioral_recovery.services.commitment_service import CommitmentService
-        return CommitmentService(use_quantum=True, use_blockchain=False)
+        return CommitmentService(use_quantum=use_quantum, use_blockchain=False)
+
+    @DENY_SIM
+    def test_classical_path_refused_when_quantum_explicitly_off(self):
+        with self.assertRaises(ImproperlyConfigured):
+            self._service(use_quantum=False)._encrypt_embedding(EMBEDDING)
+
+    @DENY_SIM
+    def test_classical_path_refused_when_quantum_init_failed(self):
+        """__init__ swallows an init error and sets use_quantum=False; that
+        must not reopen the base64 path."""
+        with patch('behavioral_recovery.services.commitment_service.get_quantum_crypto_service',
+                   side_effect=RuntimeError('init failed')):
+            service = self._service()
+        self.assertFalse(service.use_quantum)
+        with self.assertRaises(ImproperlyConfigured):
+            service._encrypt_embedding(EMBEDDING)
+
+    @override_settings(QUANTUM_CRYPTO={'ENABLED': False, 'ALLOW_SIMULATION': False})
+    def test_explicit_feature_opt_out_uses_labelled_classical_path(self):
+        """QUANTUM_CRYPTO_ENABLED=False is an operator opt-out (as for
+        LatticeCryptoEngine): no Kyber, even with liboqs present, and no 500."""
+        oqs, kem = fake_oqs()
+        with real_liboqs(oqs):
+            service = self._service()
+            result = service._encrypt_embedding(EMBEDDING)
+        self.assertFalse(service.use_quantum)
+        self.assertIsInstance(result, bytes)
+        oqs.KeyEncapsulation.assert_not_called()
 
     @DENY_SIM
     def test_refused_fallback_is_raised_not_downgraded_to_base64(self):

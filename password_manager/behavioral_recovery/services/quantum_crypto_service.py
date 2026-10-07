@@ -59,6 +59,7 @@ def simulation_allowed() -> bool:
 
 
 def _require_simulation_allowed(operation: str) -> None:
+    """Raise ImproperlyConfigured before a fallback `operation` unless simulation is allowed."""
     if not simulation_allowed():
         from django.core.exceptions import ImproperlyConfigured
         raise ImproperlyConfigured(
