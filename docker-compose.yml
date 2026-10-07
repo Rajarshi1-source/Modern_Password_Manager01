@@ -1,10 +1,15 @@
 # =============================================================================
 # Docker Compose - Password Manager (Development)
 # =============================================================================
-# IMPORTANT: DEBUG defaults to False here, so a deploy that forgets to set it
-# keeps the production guards ON (HTTPS redirect, secure session/CSRF cookies,
-# strict rate limits). For LOCAL development set DEBUG=True in .env (the example
-# at docker/env.example ships it, or use docker/docker-compose.dev.yml).
+# IMPORTANT: DEBUG has NO default here -- set it explicitly in .env or compose
+# refuses to start. Either silent default is a trap: True skips the production
+# guards (HTTPS redirect, secure session/CSRF cookies, strict rate limits);
+# False switches on production-only startup checks (JWT_PRIVATE_KEY,
+# DATA_ENCRYPTION_KEY, ...) whose settings this file does not forward, so the
+# backend would crash-loop. This is a DEVELOPMENT stack: use DEBUG=True (the
+# example at docker/env.example ships it). The hot-reload override
+# docker/docker-compose.dev.yml pairs with docker/docker-compose.yml, NOT this
+# file:  docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up --build
 # DEBUG=True enables:
 #   - Lenient rate limiting (30/min vs 3/min for auth)
 #   - Disabled HTTPS redirect (prevents SSL errors)
@@ -86,7 +91,7 @@ services:
       - ./password_manager:/app
       - static_volume:/app/staticfiles
     environment:
-      - DEBUG=${DEBUG:-False}
+      - "DEBUG=${DEBUG:?Set DEBUG=True in .env for local development}"
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
@@ -118,7 +123,7 @@ services:
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
-      - DEBUG=${DEBUG:-False}
+      - "DEBUG=${DEBUG:?Set DEBUG=True in .env for local development}"
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
@@ -312,7 +317,7 @@ services:
     ports:
       - "${WEBSOCKET_PORT:-8001}:8001"
     environment:
-      - DEBUG=${DEBUG:-False}
+      - "DEBUG=${DEBUG:?Set DEBUG=True in .env for local development}"
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
@@ -342,7 +347,7 @@ services:
       - ./password_manager:/app
       - media_volume:/app/media
     environment:
-      - DEBUG=${DEBUG:-False}
+      - "DEBUG=${DEBUG:?Set DEBUG=True in .env for local development}"
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
@@ -366,7 +371,7 @@ services:
     volumes:
       - ./password_manager:/app
     environment:
-      - DEBUG=${DEBUG:-False}
+      - "DEBUG=${DEBUG:?Set DEBUG=True in .env for local development}"
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
