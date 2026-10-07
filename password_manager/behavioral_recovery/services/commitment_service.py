@@ -16,7 +16,9 @@ import base64
 
 # Import quantum crypto service (Phase 2A)
 try:
-    from .quantum_crypto_service import QuantumCryptoService, get_quantum_crypto_service
+    from .quantum_crypto_service import (
+        QuantumCryptoService, get_quantum_crypto_service, simulation_allowed,
+    )
     QUANTUM_CRYPTO_AVAILABLE = True
 except ImportError:
     QUANTUM_CRYPTO_AVAILABLE = False
@@ -365,6 +367,10 @@ class CommitmentService:
                 return quantum_encrypted, public_key, private_key
                 
             except Exception as e:
+                # The "classical" path below is plain base64, not encryption.
+                # Outside DEBUG/tests, never downgrade to it: surface the error.
+                if not simulation_allowed():
+                    raise
                 logger.error(f"Quantum encryption failed: {e}. Falling back to classical.")
                 # Fall through to classical encryption
         
