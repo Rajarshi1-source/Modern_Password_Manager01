@@ -136,7 +136,7 @@ packaging==25.0
 # Build tooling, pulled in transitively. Floored at 83.0.0 for PYSEC-2026-3447
 # (a file could bypass an NFC exclusion rule and be packed into a source
 # distribution). NOTE this floor governs THIS file only: the prod install
-# (Dockerfile.prod / security.yml) resolves requirements-prod.txt under
+# (security.yml) resolves requirements-prod.txt under
 # requirements-constraints.txt, whose deliberate setuptools<81 ceiling wins
 # there — see the rationale beside that pin before "fixing" the mismatch.
 # A floor, not an ==: setuptools is a build requirement for other

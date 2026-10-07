@@ -534,14 +534,8 @@ Common utilities, constants, and helpers.
   - The image that actually ships is **`docker/backend/Dockerfile`** — it is
     what every workflow builds (`ci.yml`, `backend-ci.yml`, `ci-sbom.yml`) and
     what Kubernetes deploys — and it is on 3.12.
-  - **`password_manager/Dockerfile.prod` is NOT that image and is not
-    deployable.** No workflow builds it, and it carries a recorded
-    startup-blocking defect (its distroless runtime supplies its own
-    `ENTRYPOINT`, so the `CMD` becomes arguments to the interpreter). Its
-    builder is pinned to 3.11 to match that runtime's ABI. Treat it as stale
-    until it has a build-and-run smoke test; see the header of that file.
   - `SECURITY.md` is the authority here: it lists Python below 3.12 as
-    unsupported, so 3.12 is the floor everything except the exception above
+    unsupported, so 3.12 is the floor everything
     builds and tests on.
     Raising the config to match that statement, rather than lowering the
     statement to match a lagging config, is the direction a password manager
