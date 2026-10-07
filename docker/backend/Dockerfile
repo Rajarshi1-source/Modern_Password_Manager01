@@ -220,7 +220,7 @@ RUN pip install --upgrade "pip>=25.0" "setuptools>=78.1.1,<82" "wheel>=0.46.2" &
     pip install --prefer-binary --retries 5 -r requirements-core.txt
 
 RUN pip install --prefer-binary --retries 5 -r requirements-ml.txt || \
-    echo "::warning title=ML dependencies skipped::pip failed on requirements-ml.txt, so this image has NO ML layer. Expected only for disk exhaustion or an unsupported platform; otherwise it is a dependency conflict - see the Dependency Compatibility workflow (Shipped image leg), which resolves core + ml together."
+    echo "::warning title=ML dependencies skipped::pip failed on requirements-ml.txt, so this image has NO ML layer. Possible causes include disk exhaustion, an unsupported platform, dependency conflicts, or package-index/build errors. Check the Dependency Compatibility workflow (Shipped image leg) for resolver conflicts; it resolves core + ml together."
 
 RUN pip install --prefer-binary --retries 5 \
     gunicorn daphne "uvicorn[standard]" redis django-redis
@@ -298,53 +298,60 @@ COPY --from=crypto-builder /usr/local/include/oqs /usr/local/include/oqs
 # Copy virtual environment from deps-builder
 COPY --from=deps-builder /opt/venv /opt/venv
 
-# Strip vendor test directories and example/test private keys shipped by
-# third-party packages (e.g. autobahn's wamp/cryptosign.py:165 example key
-# that Trivy flagged as #1559/#1560 "Asymmetric Private Key"). Also drop
+# Strip example/test private keys shipped by third-party packages (e.g.
+# autobahn's wamp/cryptosign.py:165 example key that Trivy flagged as
+# #1559/#1560 "Asymmetric Private Key"). Vendor ``test``/``tests``/``testing``
+# DIRECTORIES are deliberately NOT removed wholesale: several are runtime
+# packages that get imported at startup -- django/test (needed by
+# rest_framework_simplejwt), torch/testing, numpy/testing, absl/testing,
+# web3/testing -- and deleting them left an image that could not start Django.
+# A Trivy secret scan of the venv with them intact reports nothing beyond the
+# autobahn cryptosign pair handled below. Also drop
 # the system-site pip (24.0 in the base image, Trivy #1550/#1551/#1761) —
 # the application uses the /opt/venv interpreter so the system pip is dead
 # weight. Finally upgrade any system-site stale wheels (python-dotenv 1.0.0,
 # Trivy #1556) by removing them so only the venv's pinned version remains.
 #
 # autobahn.wamp.cryptosign:
-#   We use Django Channels' ASGI dispatcher, not the WAMP protocol. The
-#   entire ``autobahn/wamp`` package is dead code in our image. Removing
-#   it eliminates Trivy #1559/#1560 (documentation-purpose Ed25519 key in
-#   cryptosign.py:165 mis-detected as a real secret) and trims the image.
-#   Also remove the compiled __pycache__ entry so Trivy's secret scan
-#   doesn't re-fire on the .pyc copy.
-RUN find /opt/venv -depth -type d \( -name tests -o -name test -o -name testing \) -prune -exec rm -rf {} + && \
-    find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o -name "example_key*.pem" \) -delete && \
+#   We use Django Channels' ASGI dispatcher, not WAMP cryptosign auth, so the
+#   ``cryptosign`` modules are dead code in our image. Removing them
+#   eliminates Trivy #1559/#1560 (documentation-purpose Ed25519 key in
+#   cryptosign.py:165 mis-detected as a real secret). Also remove the compiled
+#   __pycache__ entry so Trivy's secret scan doesn't re-fire on the .pyc copy.
+#   Do NOT remove the whole ``autobahn/wamp`` package: since autobahn 26.x,
+#   ``autobahn/websocket/interfaces.py`` imports ``autobahn.wamp.types``
+#   unconditionally, so without it ``import daphne.server`` raises
+#   ModuleNotFoundError and Django cannot start. The import check below fails
+#   the build if that ever happens again.
+RUN find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o -name "example_key*.pem" \) -delete && \
     /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1,<82" "wheel>=0.46.2" && \
     # autobahn 25.12.2 ships cryptosign code at two locations:
     # ``autobahn/wamp/cryptosign.py`` AND ``autobahn/twisted/cryptosign.py``
     # (with their compiled __pycache__/*.pyc siblings). Both contain the
     # documentation-purpose Ed25519 keypair that Trivy flags as a
     # secret. We don't use WAMP cryptosign auth in either subpackage, so
-    # remove the wamp directory wholesale and ``-delete`` any remaining
-    # cryptosign source/bytecode files anywhere under ``autobahn/``. The
-    # guard below matches the same pattern, so any future relocation
-    # the strip misses is caught loudly.
-    find /opt/venv -type d -path "*/autobahn/wamp" -prune -exec rm -rf {} + && \
+    # ``-delete`` every cryptosign source/bytecode file anywhere under
+    # ``autobahn/``. The rest of ``autobahn/wamp`` stays: autobahn imports
+    # it at load time (see the comment above the RUN). The guard below
+    # matches the same pattern, so any future relocation the strip misses
+    # is caught loudly.
     find /opt/venv -type f -path "*/autobahn/*cryptosign*.py*" -delete && \
-    # Fail the build if the strip left autobahn/wamp behind — without this
+    # Fail the build if any cryptosign file survived the strip — without this
     # guard, a future autobahn upgrade that reorganises the package layout
     # would silently re-introduce Trivy #1559/#1560 (the example Ed25519
     # private key in autobahn.wamp.cryptosign) without us noticing until a
-    # subsequent scan ran. The probe checks two complementary signatures
-    # so a future relocation of cryptosign.py outside ``autobahn/wamp/``
-    # still trips the guard: (a) the canonical directory; (b) any file
-    # under ``autobahn/`` whose name contains ``cryptosign``. A loud
-    # failure here is better than a quiet regression of a documented
-    # zero-knowledge-adjacent finding.
-    if find /opt/venv \( \
-            -type d -path "*/autobahn/wamp" \
-            -o -type f -path "*/autobahn/*cryptosign*.py*" \
-       \) -print -quit | grep -q .; then \
+    # subsequent scan ran. A loud failure here is better than a quiet
+    # regression of a documented zero-knowledge-adjacent finding.
+    if find /opt/venv -type f -path "*/autobahn/*cryptosign*.py*" -print -quit | grep -q .; then \
         echo "ERROR: autobahn cryptosign artefacts survived strip — Trivy #1559/#1560 will re-fire." >&2; \
-        find /opt/venv \( -type d -path "*/autobahn/wamp" -o -type f -path "*/autobahn/*cryptosign*.py*" \) -print >&2; \
+        find /opt/venv -type f -path "*/autobahn/*cryptosign*.py*" -print >&2; \
         exit 1; \
     fi && \
+    # The strip must not break what the app imports at startup. Nothing in CI
+    # ever RAN this image, so removing autobahn/wamp and the test directories
+    # wholesale shipped an image whose Django could not start. Import the two
+    # packages that were hit (daphne -> autobahn.wamp, simplejwt -> django.test.signals).
+    /opt/venv/bin/python -c "import autobahn.twisted.websocket, daphne.server, django.test.signals" && \
     # Brace-grouped so the trailing ``|| true`` ONLY swallows failures
     # from the system-site cleanup (where a missing path is fine). The
     # earlier links in the && chain — strip, pip-upgrade, and the
