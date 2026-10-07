@@ -208,17 +208,24 @@ def _twisted_loopback():
     previous = os.getcwd()
     os.chdir(workdir)  # relative names: Twisted's endpoint syntax treats ':' (C:\...) as a separator
     out = {}
+    sent = b"ping"
 
     class Echo(protocol.Protocol):
         def dataReceived(self, data):
             self.transport.write(data)
 
     class Client(protocol.Protocol):
+        received = b""
+
         def connectionMade(self):
-            self.transport.write(b"ping")
+            self.transport.write(sent)
 
         def dataReceived(self, data):
-            out["echo"] = data
+            # TCP/TLS may deliver the echo in several chunks: wait for all of it.
+            self.received += data
+            if len(self.received) < len(sent):
+                return
+            out["echo"] = self.received
             out["cn"] = self.transport.getPeerCertificate().get_subject().CN
             self.transport.loseConnection()
             reactor.stop()
@@ -241,7 +248,7 @@ def _twisted_loopback():
         reactor.run()
     finally:
         os.chdir(previous)
-    assert out.get("echo") == b"ping", out
+    assert out.get("echo") == sent, out
     assert out.get("cn") == "localhost", out
 
 
