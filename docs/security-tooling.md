@@ -90,9 +90,9 @@ two checks so none of that depends on someone remembering:
 1. **Resolve** — `pip install --dry-run` (nothing installed) over the sets that
    matter: `requirements.txt` (what the test suites install), `requirements-core.txt`
    + `requirements-ml.txt` **together** (what `docker/backend/Dockerfile` ships;
-   the Dockerfile installs the ML layer with `|| echo "ML deps skipped"`, so a
-   conflict there would otherwise silently ship an image without its ML
-   dependencies), and both lock files. A conflict fails in about a minute.
+   the Dockerfile installs the ML layer with `|| echo "::warning ...skipped"`, so a
+   conflict there would otherwise ship an image without its ML dependencies,
+   flagged only by a build-log warning), and both lock files. A conflict fails in about a minute.
 2. **Smoke** — `.github/scripts/dependency_smoke.py` runs the crypto/TLS stack
    at the *resolved* versions: primitives cross-checked against `hashlib` /
    `pycryptodome` / RFC vectors (stored data must still decrypt), a real TLS

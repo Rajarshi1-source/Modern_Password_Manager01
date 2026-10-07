@@ -11,8 +11,9 @@ name: Dependency Compatibility
 #      app pins cryptography 50.x, or fido2 2.0.x capping <48) fails here in
 #      about a minute instead of 25 minutes into the backend tests -- or, for the
 #      ML layer of docker/backend/Dockerfile, never: that layer is installed with
-#      `|| echo "ML deps skipped"`, so a conflict there silently ships an image
-#      without its ML dependencies. core + ml are therefore resolved TOGETHER.
+#      `|| echo "::warning ...skipped"`, so a conflict there ships an image
+#      without its ML dependencies (with only a build-log warning). core + ml are
+#      therefore resolved TOGETHER.
 #
 #   2. SMOKE -- .github/scripts/dependency_smoke.py exercises the crypto / TLS
 #      stack at the versions step 1 resolved. Resolution only compares version

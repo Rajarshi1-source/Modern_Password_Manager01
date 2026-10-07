@@ -220,7 +220,7 @@ RUN pip install --upgrade "pip>=25.0" "setuptools>=78.1.1,<82" "wheel>=0.46.2" &
     pip install --prefer-binary --retries 5 -r requirements-core.txt
 
 RUN pip install --prefer-binary --retries 5 -r requirements-ml.txt || \
-    echo "ML deps skipped (insufficient disk space or unsupported platform)"
+    echo "::warning title=ML dependencies skipped::pip failed on requirements-ml.txt, so this image has NO ML layer. Expected only for disk exhaustion or an unsupported platform; otherwise it is a dependency conflict - see the Dependency Compatibility workflow (Shipped image leg), which resolves core + ml together."
 
 RUN pip install --prefer-binary --retries 5 \
     gunicorn daphne "uvicorn[standard]" redis django-redis
