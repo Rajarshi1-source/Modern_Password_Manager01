@@ -1,8 +1,11 @@
 # =============================================================================
 # Docker Compose - Password Manager (Development)
 # =============================================================================
-# IMPORTANT: For development, ensure DEBUG=True in environment variables
-# This enables:
+# IMPORTANT: DEBUG defaults to False here, so a deploy that forgets to set it
+# keeps the production guards ON (HTTPS redirect, secure session/CSRF cookies,
+# strict rate limits). For LOCAL development set DEBUG=True in .env (the example
+# at docker/env.example ships it, or use docker/docker-compose.dev.yml).
+# DEBUG=True enables:
 #   - Lenient rate limiting (30/min vs 3/min for auth)
 #   - Disabled HTTPS redirect (prevents SSL errors)
 #   - Detailed error messages
@@ -83,7 +86,7 @@ services:
       - ./password_manager:/app
       - static_volume:/app/staticfiles
     environment:
-      - DEBUG=${DEBUG:-True}
+      - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
@@ -115,7 +118,7 @@ services:
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
-      - DEBUG=${DEBUG:-True}
+      - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
@@ -309,7 +312,7 @@ services:
     ports:
       - "${WEBSOCKET_PORT:-8001}:8001"
     environment:
-      - DEBUG=${DEBUG:-True}
+      - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
@@ -339,7 +342,7 @@ services:
       - ./password_manager:/app
       - media_volume:/app/media
     environment:
-      - DEBUG=${DEBUG:-True}
+      - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
@@ -363,7 +366,7 @@ services:
     volumes:
       - ./password_manager:/app
     environment:
-      - DEBUG=${DEBUG:-True}
+      - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
