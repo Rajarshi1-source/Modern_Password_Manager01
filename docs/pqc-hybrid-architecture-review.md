@@ -149,7 +149,7 @@ told to leave it alone.
 | Login | `hooks/useAuth.jsx` | Posts `{username, password}` in both the cookie and token flows. |
 | Signup | `App.jsx` | Posts **both** `password` and a PBKDF2-SHA256 `auth_hash` (310 000 iterations, salt `pwm-auth\|<email>`). |
 | Tokens | `hooks/useAuth.jsx` | HttpOnly-cookie flow exists but is **opt-in** (`VITE_USE_COOKIE_AUTH`, default off). |
-| CSP | `docker/frontend/security-headers.conf` | `script-src 'self' 'unsafe-eval'`; kept deliberately for WASM glue (FHE and Kyber). |
+| CSP | `docker/frontend/security-headers.conf` | `script-src 'self' 'unsafe-eval'`; required by the FHE loader's `new Function(...)` dynamic import (`fheService.js`) and by Kyber's WASM glue. |
 | TLS | `docker/nginx/nginx.conf` | `ssl_ecdh_curve` is commented out; image is `nginx:1.27-alpine`. **No hybrid post-quantum TLS.** |
 
 ### 3.3 Findings
@@ -285,9 +285,10 @@ These are fixable, but they show the plan is an illustration, not a drop-in desi
 - **`@noble/post-quantum` is not independently audited.** Its README says so
   explicitly (internal self-audit at `0.6.1`, April 2026; a reproducibility study
   against `0.7.0`, "not a full audit"). Same caveat as liboqs's own warning.
-- **CSP.** The plan's `script-src 'self'` would break the app's FHE WASM glue, which
-  needs `'unsafe-eval'` (see `security-headers.conf`). Moving ML-KEM to pure
-  TypeScript removes only the Kyber reason for it.
+- **CSP.** The plan's `script-src 'self'` would block the FHE loader's `new Function(...)`
+  dynamic import and Kyber's WASM glue, which both require `'unsafe-eval'` (see
+  `docker/frontend/security-headers.conf`). Moving ML-KEM to pure TypeScript removes
+  only Kyber's requirement; the FHE loader still needs it.
 
 ---
 
