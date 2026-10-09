@@ -181,16 +181,26 @@ class CommitmentServiceDowngradeTests(SimpleTestCase):
             service._encrypt_embedding(EMBEDDING)
 
     @override_settings(QUANTUM_CRYPTO={'ENABLED': False, 'ALLOW_SIMULATION': False})
-    def test_explicit_feature_opt_out_uses_labelled_classical_path(self):
-        """QUANTUM_CRYPTO_ENABLED=False is an operator opt-out (as for
-        LatticeCryptoEngine): no Kyber, even with liboqs present, and no 500."""
+    def test_feature_opt_out_skips_kyber_but_refuses_plaintext_write(self):
+        """QUANTUM_CRYPTO_ENABLED=False opts out of PQC, not of encryption:
+        Kyber is not used (even with liboqs present), and the write is refused
+        rather than stored as readable base64."""
         oqs, kem = fake_oqs()
         with real_liboqs(oqs):
             service = self._service()
-            result = service._encrypt_embedding(EMBEDDING)
+            with self.assertRaises(ImproperlyConfigured):
+                service._encrypt_embedding(EMBEDDING)
         self.assertFalse(service.use_quantum)
-        self.assertIsInstance(result, bytes)
         oqs.KeyEncapsulation.assert_not_called()
+
+    @override_settings(QUANTUM_CRYPTO={'ENABLED': False, 'ALLOW_SIMULATION': False})
+    def test_feature_opt_out_still_verifies_existing_rows(self):
+        """Non-write paths keep working under the opt-out."""
+        import base64
+        import json
+        stored = base64.b64encode(json.dumps(EMBEDDING).encode('utf-8'))
+        result = self._service().verify_behavioral_similarity(stored, EMBEDDING)
+        self.assertTrue(result['passed'])
 
     @DENY_SIM
     def test_refused_fallback_is_raised_not_downgraded_to_base64(self):

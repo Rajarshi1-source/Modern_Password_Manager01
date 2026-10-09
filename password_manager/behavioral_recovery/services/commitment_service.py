@@ -42,14 +42,13 @@ def _classical_storage_allowed():
     Whether an embedding may be stored on the plain-base64 "classical" path.
 
     That path is encoding, not encryption, so it is allowed only where
-    QUANTUM_CRYPTO['ALLOW_SIMULATION'] is True (DEBUG, tests, passive commands)
-    or when the operator explicitly turned PQC off (QUANTUM_CRYPTO_ENABLED=False),
-    in which case the row is honestly labelled 'base64'. Never as a silent
-    production downgrade.
+    QUANTUM_CRYPTO['ALLOW_SIMULATION'] is True (DEBUG, tests, passive commands).
+    QUANTUM_CRYPTO_ENABLED=False opts out of PQC, not of encryption: it stops
+    Kyber being used, but commitment writes are then refused rather than
+    stored readable. Reads and verification of existing rows are unaffected.
     """
     from django.conf import settings
-    allow_simulation = getattr(settings, 'QUANTUM_CRYPTO', {}).get('ALLOW_SIMULATION', False)
-    return bool(allow_simulation) or not _quantum_crypto_enabled()
+    return bool(getattr(settings, 'QUANTUM_CRYPTO', {}).get('ALLOW_SIMULATION', False))
 
 
 class CommitmentService:
@@ -399,8 +398,8 @@ class CommitmentService:
             from django.core.exceptions import ImproperlyConfigured
             raise ImproperlyConfigured(
                 "Refusing to store a behavioral embedding as plain base64: quantum "
-                "encryption is unavailable, QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False "
-                "and QUANTUM_CRYPTO_ENABLED is not False."
+                "encryption is unavailable or disabled (QUANTUM_CRYPTO_ENABLED) and "
+                "QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False."
             )
 
         # Classical encryption (legacy/fallback)

@@ -274,10 +274,13 @@ reachable, F1) would have been converted into **unencrypted** storage.
 DEBUG behaviour is unchanged. *2026-10-08 (review of #553):* the base64 path
 itself is now guarded, because it was also reachable when quantum was off from
 the start (explicit `use_quantum=False`, or `__init__` swallowing an
-initialization error). It is allowed only with `ALLOW_SIMULATION`, or when the
-operator sets `QUANTUM_CRYPTO_ENABLED=False`. That flag is documented in
-`env.example` for behavioral commitments but was never read here; it is now an
-explicit opt-out (as in `LatticeCryptoEngine`), stored honestly as `base64`.
+initialization error). It is allowed only with `ALLOW_SIMULATION`.
+`QUANTUM_CRYPTO_ENABLED=False` (documented in `env.example` for behavioral
+commitments, but never read here before) now stops Kyber being used. It opts
+out of PQC, **not of encryption**. There is no real classical encryption path,
+so commitment writes are refused rather than stored as readable base64.
+Reads and verification of existing rows are unaffected. (An intermediate commit
+let the opt-out store labelled base64; reverted after review on 2026-10-10.)
 `QUANTUM_FALLBACK_ENABLED` stays unwired on purpose: it defaults to `True`, so
 honouring it would reopen the silent downgrade by default. Still open in DEBUG only: when the AES fallback
 succeeds, `_create_commitment` and `tasks.py` still label the row
