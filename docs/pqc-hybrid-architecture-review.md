@@ -259,9 +259,15 @@ produces correct output.
 `_fallback_encrypt` derives its AES key from `HKDF(public_key)`, while
 `_fallback_decrypt` uses `HKDF(private_key[:32])`. The two keys are unrelated
 random bytes, so a fallback round trip always fails the GCM tag check. Since F1 made
-the fallback the only path, no behavioral commitment written so far is decryptable
-by this service. Together with F3 (the Kyber private key is discarded), **nothing in
-the current behavioral-recovery store can be decrypted**. Not fixed: after the F7
+the fallback the only path, no `quantum_encrypted_embedding` blob written so far can
+be decrypted by `QuantumCryptoService`. Together with F3 (the Kyber private key is
+discarded), **no quantum-mode commitment (fallback-AES or Kyber) can be decrypted
+or verified**, because its `encrypted_embedding` is `b''`. This does **not** extend
+to the whole store. Rows on the legacy `base64` path (`encryption_algorithm='base64'`)
+remain readable through `CommitmentService._decrypt_embedding`. So do rows upgraded
+by `tasks.async_migrate_commitments_to_quantum`, which copies `encrypted_embedding`
+into `legacy_encrypted_embedding` but leaves `encrypted_embedding` itself in place.
+A recovery or migration plan must keep those rows. Not fixed: after the F7
 change the fallback runs only in DEBUG/tests. Decide F3's key custody first; the
 fallback can then be fixed or deleted to match.
 
