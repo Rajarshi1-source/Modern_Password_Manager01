@@ -58,67 +58,16 @@
 # in requirements.txt for the compatibility evidence. The PYSEC-2026-3552
 # entry had already expired on 2026-10-05, which was failing this job.
 
-# Django advisories disclosed 2026-08 against our 5.1.15 pin. All six fixes
-# require Django 5.2.15+/6.0.6+ or 5.2.16+/6.0.7+ -- a MINOR version upgrade,
-# not a patch bump, and far too large a change to make inside this PR's own
-# scope (adaptive password feature, not a framework upgrade). Verified all
-# six are unreachable rather than assumed, by grepping the whole codebase:
-#
-# Unlike the no-fix entries below (torch, nltk), a fix already exists for
-# all six -- this is a deferred-upgrade suppression, not a no-fix one. The
-# header's generic "file a tracking issue after two renewals" policy is
-# written for advisories with no available fix; it under-serves this case,
-# where the actual blocker is scheduling the Django 5.2/6.0 upgrade itself.
-# No such tracking issue exists in this repo as of 2026-08 (checked via
-# `gh issue list`) -- filing one is an explicit action for a human to take,
-# not fabricated here. Until it exists, treat every renewal of this block
-# as a prompt to re-ask whether the upgrade can be scheduled, not a reflex
-# date bump.
-#
-# CVE-2026-48587 (GHSA-923m-gv2p-w5qp), CVE-2026-8404 (GHSA-8cjm-8mp7-r2xf),
-# CVE-2026-48588 (GHSA-3h9f-r86x-qvjx): all three are cache-poisoning/leak
-# bugs in Vary-header and Cache-Control handling inside
-# UpdateCacheMiddleware/cache_page/vary_on_headers. Zero usage anywhere:
-# no django.middleware.cache in MIDDLEWARE, no CACHE_MIDDLEWARE_* settings,
-# no @cache_page/@vary_on_headers decorator, no direct patch_vary_headers/
-# has_vary_header call.
-CVE-2026-48587 exp:2026-10-08
-CVE-2026-8404 exp:2026-10-08
-CVE-2026-48588 exp:2026-10-08
-
-# CVE-2026-6873 (GHSA-h7pc-vwp9-298g): non-injective salt derivation in
-# HttpRequest.get_signed_cookie. Zero calls to get_signed_cookie anywhere in
-# the codebase.
-CVE-2026-6873 exp:2026-10-12
-
-# CVE-2026-53877 (GHSA-crhf-3pfg-w68w): buffer over-read in
-# django.contrib.gis.gdal.GDALRaster. `django.contrib.gis` is commented OUT
-# of INSTALLED_APPS (settings/base.py) and never enabled; the only
-# django.contrib.gis import anywhere in the codebase is
-# django.contrib.gis.geoip2.GeoIP2 (IP geolocation, a different submodule
-# entirely) -- zero references to GDALRaster or gdal at all.
-CVE-2026-53877 exp:2026-10-12
-
-# CVE-2026-53878 (GHSA-8qcx-xf44-272x): DomainNameValidator doesn't strip
-# newlines, enabling header injection if a validated value reaches an HTTP
-# response header. Zero usage of DomainNameValidator anywhere.
-CVE-2026-53878 exp:2026-10-15
-
-# CVE-2026-15830 (PYSEC-2026-3717, GHSA disclosed 2026-08, found on PR #483's
-# scan 2026-08-19 -- not part of the original six-CVE batch above, added here
-# as a 7th because it shares the exact same fix path (Django 5.2.17+/6.0.8+,
-# the same deferred minor upgrade) and the exact same non-reachability shape
-# as CVE-2026-53877 two entries up: unbounded recursion / segfault in
-# django.contrib.gis.geos.GEOSGeometry when parsing a deeply nested
-# GEOMETRYCOLLECTION from WKT/WKB/hex-WKB. Verified, not assumed: zero
-# `GEOSGeometry(`, `GeometryField`, or `geos=True` anywhere in the codebase
-# (grep), `django.contrib.gis` stays commented out of INSTALLED_APPS, and the
-# only django.contrib.gis import anywhere (`django.contrib.gis.geoip2.GeoIP2`,
-# honeypot_credentials/services/access_interceptor.py +
-# logging_manager/models.py) only ever calls `.city(ip)` and reads the
-# returned dict's string keys (`.get('country_name')`, `.get('city')`, etc.)
-# -- it never constructs a Geometry object, so no WKT/WKB ever reaches GEOS.
-CVE-2026-15830 exp:2026-10-20
+# Django advisories CVE-2026-48587, CVE-2026-8404, CVE-2026-48588,
+# CVE-2026-6873, CVE-2026-53877, CVE-2026-53878 and CVE-2026-15830
+# (PYSEC-2026-3717) -- ALL SEVEN REMOVED 2026-10-10, not renewed. They were
+# deferred-upgrade suppressions against the old 5.1.15 pin, waiting on the
+# Django 5.2 upgrade; that upgrade shipped (PR #512) and every requirements
+# file now pins Django==5.2.17, at or past each fix (5.2.15+/5.2.16+/5.2.17+).
+# Verified against the source pip-audit queries rather than assumed:
+# https://pypi.org/pypi/Django/5.2.17/json lists ZERO vulnerabilities. The
+# first three had expired on 2026-10-08 and were failing the expiry
+# pre-check; the other four would have done so between 10-12 and 10-20.
 
 # PYSEC-2025-189/190/191 — REMOVED 2026-08-11, not renewed. Re-checked
 # against OSV directly rather than assumed stale: each has `last_affected`
@@ -171,8 +120,10 @@ CVE-2026-15830 exp:2026-10-20
 # correction didn't name these two IDs, and the exp date (2026-10-10) isn't
 # imminent — noted here so their own next renewal doesn't re-verify against
 # the lock-file pin again by habit. Worth removing outright at that point.
-CVE-2025-3000 exp:2026-10-10
-PYSEC-2025-194 exp:2026-10-10
+#
+# REMOVED 2026-10-10 (their expiry date), as planned above. `torch>=2.12.0`
+# now resolves to torch 2.14.1, and https://pypi.org/pypi/torch/2.14.1/json
+# lists ZERO vulnerabilities, so pip-audit no longer raises either alias.
 
 # PYSEC-2025-195/196/197 — REMOVED 2026-08-23, not renewed. The round-1
 # renewal (2026-08-22) re-checked the reachability argument but never
