@@ -62,6 +62,25 @@ if not LIBOQS_AVAILABLE:
                 logger.warning("[WARNING] pqcrypto not available - using simulated Kyber (NOT for production)")
 
 
+def _require_simulation_allowed() -> None:
+    """
+    Refuse the simulated KEM unless QUANTUM_CRYPTO['ALLOW_SIMULATION'] is True.
+
+    Checked per operation rather than at construction, because the module-level
+    instances below are built at import time. Same switch as LatticeCryptoEngine:
+    True for DEBUG, tests and passive management commands; False when serving
+    in production (settings/base.py). Missing means False (fail closed).
+    """
+    from django.conf import settings
+    if not getattr(settings, 'QUANTUM_CRYPTO', {}).get('ALLOW_SIMULATION', False):
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            "Refusing simulated Kyber: neither liboqs nor pqcrypto is available "
+            "and QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False. The simulation is "
+            "NOT post-quantum (or even a real KEM) and must never run in production."
+        )
+
+
 class ProductionKyber:
     """
     Production-ready CRYSTALS-Kyber implementation.
@@ -123,6 +142,7 @@ class ProductionKyber:
         elif self.implementation == 'pqcrypto':
             return self._generate_keypair_pqcrypto()
         else:
+            _require_simulation_allowed()
             return self._generate_keypair_simulation()
     
     def encapsulate(self, public_key: bytes) -> Tuple[bytes, bytes]:
@@ -140,6 +160,7 @@ class ProductionKyber:
         elif self.implementation == 'pqcrypto':
             return self._encapsulate_pqcrypto(public_key)
         else:
+            _require_simulation_allowed()
             return self._encapsulate_simulation(public_key)
     
     def decapsulate(self, ciphertext: bytes, private_key: bytes) -> bytes:
@@ -158,6 +179,7 @@ class ProductionKyber:
         elif self.implementation == 'pqcrypto':
             return self._decapsulate_pqcrypto(ciphertext, private_key)
         else:
+            _require_simulation_allowed()
             return self._decapsulate_simulation(ciphertext, private_key)
     
     # ==================== liboqs Implementation ====================

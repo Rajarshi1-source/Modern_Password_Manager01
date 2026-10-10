@@ -6,6 +6,9 @@ of behavioral embeddings using hybrid Kyber + AES approach.
 
 Note: In local development without Docker, the code uses AES-256-GCM fallback.
       In production (Docker), liboqs is compiled and installed for real PQC.
+      When QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False (production serving),
+      the fallback is refused with ImproperlyConfigured instead of being
+      used silently.
 """
 
 import os
@@ -22,21 +25,69 @@ _IN_DOCKER = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER',
 _SUPPRESS_CRYPTO_WARNINGS = _DEBUG_MODE and not _IN_DOCKER
 _liboqs_warning_shown = False
 
-# Try to import liboqs for production Kyber implementation
+# Try to import liboqs for production Kyber implementation.
+# liboqs-python exports ``KeyEncapsulation`` and ``Signature``; there is no
+# ``KEM`` (a ``from oqs import KEM`` here always failed, so this service ran
+# its non-post-quantum fallback even with liboqs installed).
+#
+# The catch is deliberately broad: liboqs is an optional dependency, and this
+# module is imported through the URLconf (behavioral_recovery.urls -> views ->
+# commitment_service), so letting an unexpected import-time error propagate
+# would take down every endpoint, not just this feature. Safety does not rely
+# on the swallow being silent: every operation without liboqs is refused
+# unless QUANTUM_CRYPTO['ALLOW_SIMULATION'] is set. The wrapper reports a
+# missing/unloadable C library as SystemExit, so the cause is recorded below
+# and carried into the log line and the refusal messages.
+_LIBOQS_IMPORT_ERROR = None
 try:
-    from oqs import KEM
+    import oqs
     LIBOQS_AVAILABLE = True
     logger.info("liboqs-python available - using production Kyber-768")
-except (ImportError, Exception, SystemExit):
+except (ImportError, Exception, SystemExit) as _exc:
+    oqs = None
     LIBOQS_AVAILABLE = False
+    _LIBOQS_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
     if not _liboqs_warning_shown and not _SUPPRESS_CRYPTO_WARNINGS:
         _liboqs_warning_shown = True
         if not _DEBUG_MODE:
-            logger.warning("liboqs-python not available - using fallback encryption")
+            logger.warning(
+                "liboqs-python not available (%s) - using fallback encryption",
+                _LIBOQS_IMPORT_ERROR,
+            )
 
 # Import for AES-GCM
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.backends import default_backend
+
+
+def simulation_allowed() -> bool:
+    """
+    Whether the non-post-quantum fallback may be used.
+
+    Same switch as LatticeCryptoEngine: QUANTUM_CRYPTO['ALLOW_SIMULATION'] is
+    True for DEBUG, tests and passive management commands, and False for real
+    production serving (settings/base.py). Missing means False (fail closed).
+    """
+    from django.conf import settings
+    return bool(getattr(settings, 'QUANTUM_CRYPTO', {}).get('ALLOW_SIMULATION', False))
+
+
+def _liboqs_unavailable_detail() -> str:
+    """` (<why the import failed>)` for error messages, or '' when unknown."""
+    return f" ({_LIBOQS_IMPORT_ERROR})" if _LIBOQS_IMPORT_ERROR else ""
+
+
+def _require_simulation_allowed(operation: str) -> None:
+    """Raise ImproperlyConfigured before a fallback `operation` unless simulation is allowed."""
+    if not simulation_allowed():
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            f"Refusing behavioral-embedding {operation}: liboqs is not available"
+            f"{_liboqs_unavailable_detail()} "
+            "and QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False. The fallback is NOT "
+            "quantum-resistant and must never run in production. Install "
+            "liboqs-python, or enable ALLOW_SIMULATION for a non-production context."
+        )
 
 
 class QuantumCryptoService:
@@ -61,19 +112,18 @@ class QuantumCryptoService:
     SHARED_SECRET_SIZE = 32
     
     def __init__(self):
-        """Initialize Kyber KEM"""
+        """
+        Initialize the service.
+
+        No KEM object is held here: in liboqs-python the secret key lives on
+        the KeyEncapsulation object, so a shared one would decapsulate with
+        whichever key it last generated. One is created per operation instead.
+        """
         if LIBOQS_AVAILABLE:
-            try:
-                self.kem = KEM(self.ALGORITHM)
-                self.backend = default_backend()
-                logger.info(f"Initialized production {self.ALGORITHM} KEM")
-            except Exception as e:
-                logger.error(f"Failed to initialize Kyber: {e}")
-                raise
-        else:
-            if not _SUPPRESS_CRYPTO_WARNINGS:
-                logger.debug("Using fallback encryption (AES-256-GCM)")
-            self.backend = default_backend()
+            logger.info(f"Initialized production {self.ALGORITHM} KEM")
+        elif not _SUPPRESS_CRYPTO_WARNINGS:
+            logger.debug("Using fallback encryption (AES-256-GCM)")
+        self.backend = default_backend()
     
     def generate_keypair(self) -> Tuple[bytes, bytes]:
         """
@@ -85,8 +135,9 @@ class QuantumCryptoService:
         if LIBOQS_AVAILABLE:
             try:
                 # Generate Kyber keypair
-                public_key = self.kem.generate_keypair()
-                private_key = self.kem.export_secret_key()
+                with oqs.KeyEncapsulation(self.ALGORITHM) as kem:
+                    public_key = kem.generate_keypair()
+                    private_key = kem.export_secret_key()
                 
                 logger.debug(f"Generated Kyber-768 keypair: pub={len(public_key)}B, priv={len(private_key)}B")
                 return public_key, private_key
@@ -96,6 +147,7 @@ class QuantumCryptoService:
                 raise
         else:
             # Fallback: generate random keys (not quantum-resistant)
+            _require_simulation_allowed('key generation')
             return self._fallback_generate_keypair()
     
     def encrypt_behavioral_embedding(self, embedding: list, public_key: bytes) -> Dict:
@@ -121,7 +173,8 @@ class QuantumCryptoService:
         if LIBOQS_AVAILABLE:
             try:
                 # Step 1: Kyber encapsulation
-                kyber_ciphertext, shared_secret = self.kem.encap_secret(public_key)
+                with oqs.KeyEncapsulation(self.ALGORITHM) as kem:
+                    kyber_ciphertext, shared_secret = kem.encap_secret(public_key)
                 
                 logger.debug(f"Kyber encapsulation: ct={len(kyber_ciphertext)}B, ss={len(shared_secret)}B")
                 
@@ -130,6 +183,7 @@ class QuantumCryptoService:
                 raise
         else:
             # Fallback encryption
+            _require_simulation_allowed('encryption')
             return self._fallback_encrypt(embedding, public_key)
         
         # Step 2: AES-256-GCM encryption with shared secret
@@ -177,20 +231,28 @@ class QuantumCryptoService:
         Returns:
             128-dimensional behavioral DNA array
         """
-        if LIBOQS_AVAILABLE:
-            try:
-                # Step 1: Kyber decapsulation
-                kyber_ciphertext = base64.b64decode(encrypted_data['kyber_ciphertext'])
-                shared_secret = self.kem.decap_secret(kyber_ciphertext)
-                
-                logger.debug(f"Kyber decapsulation successful: ss={len(shared_secret)}B")
-                
-            except Exception as e:
-                logger.error(f"Kyber decapsulation failed: {e}")
-                raise
-        else:
-            # Fallback decryption
+        # Dispatch on how the blob was written, not on what is installed now:
+        # a stored fallback blob must not be fed to Kyber, nor the reverse.
+        if not self.is_quantum_protected(encrypted_data):
+            _require_simulation_allowed('decryption')
             return self._fallback_decrypt(encrypted_data, private_key)
+        if not LIBOQS_AVAILABLE:
+            from django.core.exceptions import ImproperlyConfigured
+            raise ImproperlyConfigured(
+                "Kyber-encrypted behavioral embedding cannot be decrypted: "
+                f"liboqs is not available{_liboqs_unavailable_detail()}."
+            )
+        try:
+            # Step 1: Kyber decapsulation with the caller's private key
+            kyber_ciphertext = base64.b64decode(encrypted_data['kyber_ciphertext'])
+            with oqs.KeyEncapsulation(self.ALGORITHM, private_key) as kem:
+                shared_secret = kem.decap_secret(kyber_ciphertext)
+                
+            logger.debug(f"Kyber decapsulation successful: ss={len(shared_secret)}B")
+                
+        except Exception as e:
+            logger.error(f"Kyber decapsulation failed: {e}")
+            raise
         
         # Step 2: AES-256-GCM decryption
         try:

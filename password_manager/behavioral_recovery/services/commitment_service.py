@@ -31,6 +31,26 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _quantum_crypto_enabled():
+    """QUANTUM_CRYPTO['ENABLED'] (QUANTUM_CRYPTO_ENABLED); default True, like LatticeCryptoEngine."""
+    from django.conf import settings
+    return getattr(settings, 'QUANTUM_CRYPTO', {}).get('ENABLED', True)
+
+
+def _classical_storage_allowed():
+    """
+    Whether an embedding may be stored on the plain-base64 "classical" path.
+
+    That path is encoding, not encryption, so it is allowed only where
+    QUANTUM_CRYPTO['ALLOW_SIMULATION'] is True (DEBUG, tests, passive commands).
+    QUANTUM_CRYPTO_ENABLED=False opts out of PQC, not of encryption: it stops
+    Kyber being used, but commitment writes are then refused rather than
+    stored readable. Reads and verification of existing rows are unaffected.
+    """
+    from django.conf import settings
+    return bool(getattr(settings, 'QUANTUM_CRYPTO', {}).get('ALLOW_SIMULATION', False))
+
+
 class CommitmentService:
     """
     Service for creating and verifying behavioral commitments
@@ -48,7 +68,7 @@ class CommitmentService:
     
     def __init__(self, use_quantum=True, use_blockchain=True):
         self.threshold = self.SIMILARITY_THRESHOLD
-        self.use_quantum = use_quantum and QUANTUM_CRYPTO_AVAILABLE
+        self.use_quantum = use_quantum and QUANTUM_CRYPTO_AVAILABLE and _quantum_crypto_enabled()
         self.use_blockchain = use_blockchain and BLOCKCHAIN_AVAILABLE
         
         # Initialize quantum crypto if available
@@ -365,9 +385,23 @@ class CommitmentService:
                 return quantum_encrypted, public_key, private_key
                 
             except Exception as e:
+                # The "classical" path below is plain base64, not encryption.
+                # Outside DEBUG/tests, never downgrade to it: surface the error.
+                if not _classical_storage_allowed():
+                    raise
                 logger.error(f"Quantum encryption failed: {e}. Falling back to classical.")
                 # Fall through to classical encryption
-        
+
+        # Also reached when quantum was off from the start (explicit
+        # use_quantum=False, or service initialization failed in __init__).
+        if not _classical_storage_allowed():
+            from django.core.exceptions import ImproperlyConfigured
+            raise ImproperlyConfigured(
+                "Refusing to store a behavioral embedding as plain base64: quantum "
+                "encryption is unavailable or disabled (QUANTUM_CRYPTO_ENABLED) and "
+                "QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False."
+            )
+
         # Classical encryption (legacy/fallback)
         logger.info("Using classical encryption (not quantum-resistant)")
         
