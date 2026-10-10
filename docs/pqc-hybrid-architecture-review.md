@@ -439,8 +439,10 @@ email-derived salt, or the `BYTEA`-only item format.
    for `kyber_crypto.py` and `behavioral_recovery`, refusing the operation, using the
    existing `QUANTUM_CRYPTO['ALLOW_SIMULATION']` rather than a new flag (F7). Also
    closed the base64 downgrade that would have absorbed the refusal (F11).
-   `auth_module/services/quantum_crypto_service.py` (`pqcrypto`) was not changed in
-   this pass; check it for the same pattern.
+   This does **not** cover `auth_module/services/quantum_crypto_service.py`. It is
+   not a `pqcrypto` path but an unconditional simulation (F13), with no
+   `ALLOW_SIMULATION` check at all. It was left unchanged and is still unresolved;
+   see item 2b.
 2a. Decide F3's key custody (where the behavioral-commitment private key lives), then
    fix or delete the broken fallback (F10) and the DEBUG mislabelling (F11).
 2b. Replace the unconditional simulation in `auth_module/services/quantum_crypto_service.py`
