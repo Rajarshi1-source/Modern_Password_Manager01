@@ -29,17 +29,31 @@ _liboqs_warning_shown = False
 # liboqs-python exports ``KeyEncapsulation`` and ``Signature``; there is no
 # ``KEM`` (a ``from oqs import KEM`` here always failed, so this service ran
 # its non-post-quantum fallback even with liboqs installed).
+#
+# The catch is deliberately broad: liboqs is an optional dependency, and this
+# module is imported through the URLconf (behavioral_recovery.urls -> views ->
+# commitment_service), so letting an unexpected import-time error propagate
+# would take down every endpoint, not just this feature. Safety does not rely
+# on the swallow being silent: every operation without liboqs is refused
+# unless QUANTUM_CRYPTO['ALLOW_SIMULATION'] is set. The wrapper reports a
+# missing/unloadable C library as SystemExit, so the cause is recorded below
+# and carried into the log line and the refusal messages.
+_LIBOQS_IMPORT_ERROR = None
 try:
     import oqs
     LIBOQS_AVAILABLE = True
     logger.info("liboqs-python available - using production Kyber-768")
-except (ImportError, Exception, SystemExit):
+except (ImportError, Exception, SystemExit) as _exc:
     oqs = None
     LIBOQS_AVAILABLE = False
+    _LIBOQS_IMPORT_ERROR = f"{type(_exc).__name__}: {_exc}"
     if not _liboqs_warning_shown and not _SUPPRESS_CRYPTO_WARNINGS:
         _liboqs_warning_shown = True
         if not _DEBUG_MODE:
-            logger.warning("liboqs-python not available - using fallback encryption")
+            logger.warning(
+                "liboqs-python not available (%s) - using fallback encryption",
+                _LIBOQS_IMPORT_ERROR,
+            )
 
 # Import for AES-GCM
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -58,12 +72,18 @@ def simulation_allowed() -> bool:
     return bool(getattr(settings, 'QUANTUM_CRYPTO', {}).get('ALLOW_SIMULATION', False))
 
 
+def _liboqs_unavailable_detail() -> str:
+    """` (<why the import failed>)` for error messages, or '' when unknown."""
+    return f" ({_LIBOQS_IMPORT_ERROR})" if _LIBOQS_IMPORT_ERROR else ""
+
+
 def _require_simulation_allowed(operation: str) -> None:
     """Raise ImproperlyConfigured before a fallback `operation` unless simulation is allowed."""
     if not simulation_allowed():
         from django.core.exceptions import ImproperlyConfigured
         raise ImproperlyConfigured(
-            f"Refusing behavioral-embedding {operation}: liboqs is not available "
+            f"Refusing behavioral-embedding {operation}: liboqs is not available"
+            f"{_liboqs_unavailable_detail()} "
             "and QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False. The fallback is NOT "
             "quantum-resistant and must never run in production. Install "
             "liboqs-python, or enable ALLOW_SIMULATION for a non-production context."
@@ -220,7 +240,7 @@ class QuantumCryptoService:
             from django.core.exceptions import ImproperlyConfigured
             raise ImproperlyConfigured(
                 "Kyber-encrypted behavioral embedding cannot be decrypted: "
-                "liboqs is not available."
+                f"liboqs is not available{_liboqs_unavailable_detail()}."
             )
         try:
             # Step 1: Kyber decapsulation with the caller's private key

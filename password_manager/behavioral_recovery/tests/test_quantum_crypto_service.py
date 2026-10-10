@@ -79,6 +79,54 @@ class LiboqsImportTests(SimpleTestCase):
         self.assertIs(probe.oqs, api)
 
 
+class LiboqsImportFailureTests(SimpleTestCase):
+    """The import-time catch stays broad (this module is imported through the
+    URLconf, so an escaping error would break every endpoint), but the cause
+    must not be lost."""
+
+    def _load_with_oqs_raising(self, exc):
+        import tempfile
+        from pathlib import Path
+
+        spec = importlib.util.spec_from_file_location('_qcs_failure_probe', qcs.__file__)
+        probe = importlib.util.module_from_spec(spec)
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, 'oqs.py').write_text(f'raise {exc}\n')
+            saved = sys.modules.pop('oqs', None)
+            sys.path.insert(0, tmp)
+            try:
+                spec.loader.exec_module(probe)
+            finally:
+                sys.path.remove(tmp)
+                sys.modules.pop('oqs', None)
+                if saved is not None:
+                    sys.modules['oqs'] = saved
+        return probe
+
+    def test_unloadable_library_systemexit_is_recorded_not_raised(self):
+        """liboqs-python reports a missing/unloadable C library as SystemExit."""
+        probe = self._load_with_oqs_raising("SystemExit('Could not load liboqs shared library')")
+        self.assertFalse(probe.LIBOQS_AVAILABLE)
+        self.assertIsNone(probe.oqs)
+        self.assertEqual(
+            probe._LIBOQS_IMPORT_ERROR,
+            'SystemExit: Could not load liboqs shared library',
+        )
+
+    def test_unexpected_import_error_does_not_break_module_import(self):
+        probe = self._load_with_oqs_raising("RuntimeError('symbol lookup failed')")
+        self.assertFalse(probe.LIBOQS_AVAILABLE)
+        self.assertIn('symbol lookup failed', probe._LIBOQS_IMPORT_ERROR)
+
+    @DENY_SIM
+    def test_refusal_message_carries_the_cause(self):
+        with patch.multiple(qcs, create=True, LIBOQS_AVAILABLE=False, oqs=None,
+                            _LIBOQS_IMPORT_ERROR='SystemExit: Could not load liboqs shared library'):
+            with self.assertRaises(ImproperlyConfigured) as ctx:
+                qcs.QuantumCryptoService().generate_keypair()
+        self.assertIn('Could not load liboqs shared library', str(ctx.exception))
+
+
 class RealKyberPathTests(SimpleTestCase):
     @DENY_SIM
     def test_round_trip_uses_key_encapsulation_and_supplied_private_key(self):
