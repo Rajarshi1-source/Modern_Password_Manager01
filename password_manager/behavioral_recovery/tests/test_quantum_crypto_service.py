@@ -7,11 +7,13 @@ with the right algorithm and the caller's private key. Findings F1, F2 and F7
 in docs/pqc-hybrid-architecture-review.md.
 """
 
+import hashlib
 import importlib.util
 import sys
 import types
 from unittest.mock import MagicMock, patch
 
+from cryptography.exceptions import InvalidTag
 from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase, override_settings
 
@@ -28,14 +30,25 @@ DENY_SIM = override_settings(QUANTUM_CRYPTO={'ALLOW_SIMULATION': False})
 
 
 def fake_oqs():
-    """A stand-in for liboqs-python with a working KeyEncapsulation."""
+    """A stand-in for liboqs-python with a working KeyEncapsulation.
+
+    As in liboqs, decapsulation uses the context's secret key: a context
+    built with PRIV yields SHARED, any other key a different secret.
+    """
     oqs = MagicMock(name='oqs')
     kem = oqs.KeyEncapsulation.return_value
     kem.__enter__.return_value = kem
     kem.generate_keypair.return_value = PUB
     kem.export_secret_key.return_value = PRIV
     kem.encap_secret.return_value = (KYBER_CT, SHARED)
-    kem.decap_secret.return_value = SHARED
+
+    def construct(alg, secret_key=None):
+        kem.decap_secret.return_value = (
+            SHARED if secret_key in (None, PRIV) else hashlib.sha256(secret_key).digest()
+        )
+        return kem
+
+    oqs.KeyEncapsulation.side_effect = construct
     return oqs, kem
 
 
@@ -85,25 +98,21 @@ class RealKyberPathTests(SimpleTestCase):
             self.assertEqual(encrypted['algorithm'], 'kyber768-aes256gcm')
             self.assertTrue(svc.is_quantum_protected(encrypted))
 
-            other_private_key = b'O' * 2400
             oqs.KeyEncapsulation.reset_mock()
             self.assertEqual(
-                svc.decrypt_behavioral_embedding(encrypted, other_private_key),
+                svc.decrypt_behavioral_embedding(encrypted, private_key),
                 EMBEDDING,
             )
-            oqs.KeyEncapsulation.assert_called_once_with('Kyber768', other_private_key)
+            oqs.KeyEncapsulation.assert_called_once_with('Kyber768', private_key)
             kem.decap_secret.assert_called_once_with(KYBER_CT)
 
-    @ALLOW_SIM
-    def test_wrong_shared_secret_does_not_decrypt(self):
-        """The AES key really comes from the decapsulated secret."""
-        oqs, kem = fake_oqs()
-        with real_liboqs(oqs):
-            svc = qcs.QuantumCryptoService()
-            encrypted = svc.encrypt_behavioral_embedding(EMBEDDING, PUB)
-            kem.decap_secret.return_value = b'X' * 32
-            with self.assertRaises(Exception):
-                svc.decrypt_behavioral_embedding(encrypted, PRIV)
+            # A different private key decapsulates to a different secret, so
+            # the AES-GCM tag check fails: the supplied key really reaches the
+            # KEM and the AES key really comes from its output.
+            other_private_key = b'O' * 2400
+            with self.assertRaises(InvalidTag):
+                svc.decrypt_behavioral_embedding(encrypted, other_private_key)
+            oqs.KeyEncapsulation.assert_called_with('Kyber768', other_private_key)
 
 
 class FailClosedTests(SimpleTestCase):
