@@ -33,7 +33,7 @@ locally, or the code itself). Section 8 lists what was **not** verified.
 | 1 | Does bumping to liboqs-python `0.16.0.1` (liboqs `0.16.0`) remove `Kyber768`? | **No.** At tag `0.16.0`, `OQS_ENABLE_KEM_KYBER` is `ON` by default and `kyber_512/768/1024` are enabled. The `0.12.0` notice ("last release to include Kyber") has not been carried out as of `0.16.0`. Kyber round 3 remains deprecated and could still be removed later. |
 | 2 | What does the bump remove? | Dilithium (removed in liboqs `0.15.0`) and SPHINCS+ (removed in `0.16.0`). **Neither is used anywhere in this codebase.** |
 | 3 | Is it safe to just bump the pin in `requirements-lock.txt` (the Copilot suggestion)? | **No, for process reasons, not algorithm reasons.** `DEPENDENCY_POLICY.md` requires the C library and the Python wrapper to move together, with refreshed commit SHAs, in one PR, validated against a freshly built image. The Docker image builds both from pinned git SHAs; the lock line only documents that. A lock-only bump recreates the "lock lies about what is installed" problem the Dockerfile already complains about. |
-| 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several.** The most serious one at review time was fixed on 2026-10-07 (F1, F2, F7 backend): `behavioral_recovery/services/quantum_crypto_service.py` **used to** do `from oqs import KEM`, which does not exist in any liboqs-python version, so it ran its non-post-quantum fallback even in the Docker image, with only log warnings. It now does `import oqs`, uses `oqs.KeyEncapsulation("Kyber768")`, and **refuses** the fallback (`ImproperlyConfigured`) unless `QUANTUM_CRYPTO['ALLOW_SIMULATION']` is true. **Still open:** F13 (`auth_module`'s recovery KEM is an unconditional simulation), F3/F10 (behavioral commitments cannot be verified), F14 and F12. See section 3.3. |
+| 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several.** The most serious one at review time was fixed on 2026-10-07 (F1, F2, F7 backend): `behavioral_recovery/services/quantum_crypto_service.py` **used to** do `from oqs import KEM`, which does not exist in any liboqs-python version, so it ran its non-post-quantum fallback even in the Docker image, with only log warnings. It now does `import oqs`, uses `oqs.KeyEncapsulation("Kyber768")`, and **refuses** the fallback (`ImproperlyConfigured`) unless `QUANTUM_CRYPTO['ALLOW_SIMULATION']` is true. F13 (`auth_module`'s recovery KEM was an unconditional simulation) was fixed on 2026-10-12. **Still open:** F3/F10 (behavioral commitments cannot be verified), F14 and F12. See section 3.3. |
 | 5 | Does CI protect against a liboqs regression? | **No.** No test job installs the Python wrapper, so `import oqs` fails and the backend selects a *simulated* KEM. Since 2026-10-07 production serving refuses that simulation, but `TESTING` still allows it (`ALLOW_SIMULATION`), so CI keeps running against it. A broken liboqs bump would pass CI. |
 | 6 | Is the proposed architecture better than what exists? | **Parts of it are; the whole is not.** Its password handling (never send the master password; one Argon2id run split with HKDF) and its use of standardized ML-KEM are better than the current code. Its single `K_master`, session-level hybrid handshake and storage schema are weaker than, or redundant with, what exists. Section 6. |
 | 7 | What is the most valuable post-quantum change? | **Not application-layer.** The master password reaches the server on every login; a recorded TLS session decrypted later reveals it directly. Stop sending it (and do not replace it with a replayable derived value), then enable hybrid post-quantum TLS at the edge. Sections 6-7. |
@@ -142,7 +142,7 @@ told to leave it alone.
 |---|---|---|
 | `ProductionKyber` + `HybridEncryption` | `auth_module/services/kyber_crypto.py` | Kyber768 KEM (liboqs, else `pqcrypto`, else **simulated**) + HKDF-SHA256 (`info=b'kyber-hybrid-encryption-v1'`) + AES-256-GCM, 96-bit random nonce, optional AAD hash. A KEM-DEM construction; **no X25519**. |
 | Kyber API | `auth_module/kyber_views.py`, `models.py` (`algorithm` default `'Kyber768'`, optional `x25519_*` columns) | Endpoints for keygen/encrypt/decrypt; the algorithm is stored per key, which is what makes a versioned migration possible. |
-| Other Kyber users | `auth_module/services/quantum_crypto_service.py` (**unconditional simulation**: `pqcrypto` appears only in docstrings; corrected 2026-10-07, see F13), `security/services/lattice_crypto_engine.py` (liboqs, `Kyber512/768/1024`) | Three independent Kyber consumers, three different code paths. |
+| Other Kyber users | `auth_module/services/quantum_crypto_service.py` (was an **unconditional simulation**; since 2026-10-12 it delegates to `ProductionKyber`, see F13), `security/services/lattice_crypto_engine.py` (liboqs, `Kyber512/768/1024`) | Three independent Kyber consumers, three different code paths. |
 | Behavioral recovery | `behavioral_recovery/services/quantum_crypto_service.py` | See F1–F3. |
 | Account auth | `PASSWORD_HASHERS = [Argon2PasswordHasher]`; JWT (`rest_framework_simplejwt`) | Server-side Argon2 hashing of whatever password it receives. |
 | Vault storage | `vault/models/vault_models.py` `EncryptedVaultItem`: `encrypted_data` (text blob), `crypto_version`, `crypto_metadata` | Versioned opaque blob. |
@@ -328,11 +328,49 @@ fails with `InvalidTag`. Consumers:
   a real KEM would not match. That decrypt cannot succeed as written.
 
 Severity: **high, functional as well as security**. A recovery path that cannot
-recover is worse than none, because users rely on it. Not fixed here; it needs its
-own PR (route through `kyber_crypto.ProductionKyber`, which has the F7 guard, and
-redesign where the recovery-side Kyber private key comes from). Existing stored
-shards and recovery blobs cannot be migrated: their secrets were never
-reconstructible.
+recover is worse than none, because users rely on it.
+
+**Fixed 2026-10-12** (branch `fix/pqc-review-f12-f13-f14-backups`):
+- `QuantumCryptoService.generate_kyber_keypair` / `kyber_encapsulate` /
+  `kyber_decapsulate` (and the `Kyber` wrapper) now delegate to
+  `kyber_crypto.ProductionKyber`: liboqs `KeyEncapsulation("Kyber768")`, with the
+  simulated KEM refused unless `QUANTUM_CRYPTO['ALLOW_SIMULATION']` is true (F7).
+  liboqs pins are unchanged.
+- Passkey-primary recovery: Kyber keygen cannot be derived from the recovery key.
+  The pinned liboqs-python 0.10.0 has no `generate_keypair_seed`, and liboqs 0.11.0's
+  `kem_kyber_768.c` has no derandomized keypair entry point (both checked at their
+  tags). So `encrypt_passkey_credential` now generates a keypair per backup and
+  stores its **private key AES-256-GCM-wrapped** under an HKDF subkey of the
+  recovery key's Argon2id output, with AAD bound to the public key. Decryption
+  unwraps that key and decapsulates with it. The blob is `version: 2`, and a
+  `version: 1` blob is refused with a message saying it was never decryptable. The
+  `user_kyber_public_key` parameter is gone, because a caller-supplied public key
+  without its private key is exactly the bug.
+- A second defect on the same path: `_derive_master_key_from_recovery_key` called
+  `argon2.PasswordHasher.hash(..., salt=)`, which the pinned argon2-cffi 21.3.0 does
+  not accept (`TypeError`). **Every backup creation failed**, before Kyber was
+  reached. It now uses `argon2.low_level.hash_secret_raw` (Argon2id, same cost
+  parameters, raw 32-byte output; the old code took the last 32 characters of the
+  encoded hash string) and has no silent PBKDF2 fallback.
+- `ProductionKyber`'s simulated KEM (DEBUG/tests only) now round-trips. Its private
+  key embeds the public key, as a real Kyber-768 secret key does, and
+  decapsulation recomputes the secret from it. Before, its decapsulation hashed
+  `ct[:32] + sk[:32]` and never matched.
+- Tests: `auth_module/tests/test_recovery_kyber_real_kem.py` runs against a fake
+  `oqs` whose decapsulation depends on the secret key. It covers the shard round
+  trip, a wrong key, the `Kyber768` algorithm, the matching private key being used,
+  wrong recovery key, swapped public key, a v1 blob, and the simulation gate.
+  13 of its 14 tests fail on the previous code.
+
+**Nothing to migrate:** existing shards and recovery blobs were never decryptable,
+and on the pinned argon2-cffi no passkey-primary backup could even be created.
+
+**Still open (not fixed here):** `quantum_recovery_views.py` setup encrypts each
+guardian shard to a freshly generated guardian keypair and **discards the private
+key** (`guardian_public_key, _ = …`), and wraps the user's Kyber private key
+under a random throwaway password (`master_key_derived = secrets.token_bytes(32)`,
+marked "Placeholder"). With a real KEM these shards still cannot be opened. That
+flow needs guardians to supply their own public keys, which is a product decision.
 
 **F8: the raw master password is sent to the server on every login.** Both login
 flows post `password: credentials.password`; signup posts the password and an
@@ -451,13 +489,12 @@ email-derived salt, or the `BYTEA`-only item format.
    closed the base64 downgrade that would have absorbed the refusal (F11).
    This does **not** cover `auth_module/services/quantum_crypto_service.py`. It is
    not a `pqcrypto` path but an unconditional simulation (F13), with no
-   `ALLOW_SIMULATION` check at all. It was left unchanged and is still unresolved;
-   see item 2b.
+   `ALLOW_SIMULATION` check at all. It was left unchanged then; see item 2b.
 2a. Decide F3's key custody (where the behavioral-commitment private key lives), then
    fix or delete the broken fallback (F10) and the DEBUG mislabelling (F11).
 2b. Replace the unconditional simulation in `auth_module/services/quantum_crypto_service.py`
    (F13) with `ProductionKyber`, and redesign passkey-primary recovery's Kyber key
-   custody. Highest functional priority in this list: recovery cannot work today.
+   custody. **Done 2026-10-12** (F13), except the guardian-shard flow noted there.
 2c. Wire the clipboard-clear setting (F12).
 3. Frontend: when the Kyber module does not load, surface it (and block, or require
    explicit user consent) instead of silently continuing X25519-only. Verify the

@@ -2,7 +2,9 @@
 Production-Ready CRYSTALS-Kyber Integration
 
 This module provides real post-quantum cryptography using CRYSTALS-Kyber.
-Falls back to simulated implementation if liboqs is not available.
+Without liboqs (or pqcrypto) it can fall back to a simulated KEM, but only
+when QUANTUM_CRYPTO['ALLOW_SIMULATION'] is True; otherwise every operation
+raises ImproperlyConfigured.
 
 Security Level: NIST Level 3 (Kyber-768)
 
@@ -222,7 +224,15 @@ class ProductionKyber:
     
     # ==================== Simulation Implementation ====================
     # WARNING: Only for development/testing - NOT SECURE
-    
+    #
+    # Laid out like a real Kyber-768 secret key (indcpa_sk || pk || H(pk) || z),
+    # so decapsulation can recover the public key from the private key and
+    # reproduce the encapsulated secret. Anyone holding the PUBLIC key can
+    # compute the shared secret too: this is a functional stand-in that lets
+    # round trips work in DEBUG and tests, not a KEM.
+
+    _SIM_PK_OFFSET = 1152
+
     def _generate_keypair_simulation(self) -> Tuple[bytes, bytes]:
         """
         SIMULATION ONLY - Generate fake keypair.
@@ -230,16 +240,18 @@ class ProductionKyber:
         """
         logger.debug("SIMULATION: Generating fake Kyber keypair")
         public_key = os.urandom(self.PUBLIC_KEY_SIZE)
-        private_key = os.urandom(self.PRIVATE_KEY_SIZE)
-        
-        # Store relationship for simulation (in production, this would be mathematical)
-        # We hash the private key to create a deterministic "public" key relationship
-        # This is NOT how real Kyber works - it's just for testing
-        self._sim_private_key = private_key
-        self._sim_public_key = public_key
-        
+        private_key = (
+            os.urandom(self._SIM_PK_OFFSET)
+            + public_key
+            + hashlib.sha256(public_key).digest()
+            + os.urandom(32)
+        )
         return public_key, private_key
-    
+
+    @staticmethod
+    def _simulated_secret(public_key: bytes, ciphertext: bytes) -> bytes:
+        return hashlib.sha256(b'simulated-kyber768|' + public_key + ciphertext).digest()
+
     def _encapsulate_simulation(self, public_key: bytes) -> Tuple[bytes, bytes]:
         """
         SIMULATION ONLY - Generate fake encapsulation.
@@ -247,25 +259,16 @@ class ProductionKyber:
         """
         logger.debug("SIMULATION: Generating fake encapsulation")
         ciphertext = os.urandom(self.CIPHERTEXT_SIZE)
-        shared_secret = os.urandom(self.SHARED_SECRET_SIZE)
-        
-        # Store for simulation
-        self._sim_ciphertext = ciphertext
-        self._sim_shared_secret = shared_secret
-        
-        return ciphertext, shared_secret
-    
+        return ciphertext, self._simulated_secret(public_key, ciphertext)
+
     def _decapsulate_simulation(self, ciphertext: bytes, private_key: bytes) -> bytes:
         """
-        SIMULATION ONLY - Return the stored shared secret.
+        SIMULATION ONLY - Recompute the secret from the embedded public key.
         WARNING: Not cryptographically secure!
         """
         logger.debug("SIMULATION: Returning simulated shared secret")
-        
-        # In simulation, we return a deterministic secret based on the ciphertext and private key
-        # This allows multiple instances to work together (sort of)
-        combined = ciphertext[:32] + private_key[:32]
-        return hashlib.sha256(combined).digest()
+        public_key = private_key[self._SIM_PK_OFFSET:self._SIM_PK_OFFSET + self.PUBLIC_KEY_SIZE]
+        return self._simulated_secret(public_key, ciphertext)
 
 
 class HybridKyberEncryption:
