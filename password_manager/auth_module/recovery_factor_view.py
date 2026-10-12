@@ -32,6 +32,7 @@ from rest_framework.views import APIView
 from auth_module.recovery_throttling import RecoveryThrottle
 from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
 from auth_module.quantum_recovery_models import RecoveryAuditLog
+from shared.client_ip import get_client_ip
 
 
 ENVELOPE_VERSION = 'wdek-1'
@@ -47,11 +48,7 @@ def _valid_envelope(blob):
     return all(k in blob for k in _REQUIRED_FIELDS)
 
 
-def _client_ip(request):
-    xff = request.META.get('HTTP_X_FORWARDED_FOR')
-    if xff:
-        return xff.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR')
+_client_ip = get_client_ip
 
 
 class RecoveryFactorListCreateView(APIView):

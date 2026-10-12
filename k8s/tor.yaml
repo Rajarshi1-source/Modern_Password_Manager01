@@ -350,6 +350,12 @@ spec:
         # the same reason; this makes the two deployment paths agree.
         - name: TOR_ENABLED
           value: "true"
+        # Tor connects straight to this listener: no proxy of ours writes
+        # X-Forwarded-For, so never trust it (F14). settings/base.py also
+        # forces 0 when ONION_LISTENER is set; pinned here to override the
+        # ConfigMap's clearnet value of 1.
+        - name: TRUSTED_PROXY_COUNT
+          value: "0"
         # Headless service, not the ClusterIP one: the source address of the
         # traffic is the tor POD's, so this must resolve to pod IPs. An empty
         # list fails closed, so this is required for onion ingress to work.

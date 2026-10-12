@@ -45,6 +45,7 @@ from ..services.predictive_expiration_service import (
 from ..services.threat_intelligence_service import (
     get_threat_intelligence_service
 )
+from shared.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -249,10 +250,7 @@ class ForceRotationView(APIView):
         }, status=status.HTTP_202_ACCEPTED)
     
     def _get_client_ip(self, request):
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            return x_forwarded_for.split(',')[0].strip()
-        return request.META.get('REMOTE_ADDR')
+        return get_client_ip(request)
 
 
 class CompleteRotationView(APIView):

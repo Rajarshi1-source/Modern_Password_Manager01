@@ -60,6 +60,7 @@ from auth_module.recovery_throttling import (
 from auth_module.time_locked_models import TimeLockedRecovery, ServerHalfReleaseLog
 from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
 from auth_module.quantum_recovery_models import RecoveryAuditLog
+from shared.client_ip import get_client_ip
 
 
 _WDEK_ENVELOPE_VERSION = 'wdek-1'
@@ -90,18 +91,8 @@ except ImportError:  # pragma: no cover — Unit 7 not landed
 log = logging.getLogger(__name__)
 
 
-def _client_ip(request):
-    """Return the client's IP address, honouring an X-Forwarded-For header.
-
-    If the deployment is behind a trusted proxy, the proxy populates
-    ``X-Forwarded-For`` with the original client; we take the leftmost
-    entry. Otherwise we fall back to ``REMOTE_ADDR``. The value is used
-    only for audit logging, not for any auth decision.
-    """
-    xff = request.META.get('HTTP_X_FORWARDED_FOR')
-    if xff:
-        return xff.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR')
+# Used only for audit logging, not for any auth decision.
+_client_ip = get_client_ip
 
 
 def _user_agent(request):

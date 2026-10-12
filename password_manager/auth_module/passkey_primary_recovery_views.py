@@ -28,20 +28,14 @@ from .recovery_throttling import (
     progressive_lockout
 )
 from .recovery_monitoring import metrics_collector
+from shared.client_ip import get_client_ip
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
 recovery_service = PasskeyPrimaryRecoveryService()
 
 
-def _get_client_ip(request):
-    """Extract client IP from request."""
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(',')[0]
-    else:
-        ip = request.META.get('REMOTE_ADDR')
-    return ip
+_get_client_ip = get_client_ip
 
 
 @api_view(['POST'])

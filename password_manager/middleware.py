@@ -10,6 +10,7 @@ from django.http import HttpResponseRedirect, HttpResponseForbidden, HttpRespons
 from asgiref.sync import iscoroutinefunction, markcoroutinefunction, sync_to_async
 import logging
 import ipaddress
+from shared.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -381,12 +382,7 @@ class SecurityMiddleware:
     
     def _get_client_ip(self, request):
         """Get the client's IP address from the request"""
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(',')[0].strip()
-        else:
-            ip = request.META.get('REMOTE_ADDR')
-        return ip
+        return get_client_ip(request)
     
     def _is_ip_allowed(self, client_ip):
         """Check if the client IP is in the allowed IP ranges"""

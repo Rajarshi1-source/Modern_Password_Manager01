@@ -36,6 +36,7 @@ from stegano_vault.serializers import (
     StegoAccessEventSerializer,
     StegoVaultSerializer,
 )
+from shared.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +47,7 @@ logger = logging.getLogger(__name__)
 
 
 def _client_ip(request) -> str:
-    xff = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "") or ""
+    return get_client_ip(request, default="")
 
 
 def _user_agent(request) -> str:

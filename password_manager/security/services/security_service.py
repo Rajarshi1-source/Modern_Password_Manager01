@@ -10,7 +10,7 @@ import ipaddress
 import json
 import logging
 from datetime import timedelta
-from ipware import get_client_ip
+from shared.client_ip import get_client_ip
 import user_agents
 from ..models import (
     LoginAttempt, SocialMediaAccount, UserDevice, 
@@ -106,7 +106,7 @@ class SecurityService:
             
             if result_type == 'duress' and duress_code:
                 # Build request context for duress activation
-                ip_address, _ = get_client_ip(request)
+                ip_address = get_client_ip(request)
                 _data = getattr(request, 'data', None)
                 if _data is None:
                     _data = getattr(request, 'POST', None) or {}
@@ -158,7 +158,7 @@ class SecurityService:
         Returns a LoginAttempt object with risk assessment
         """
         try:
-            ip_address, _ = get_client_ip(request)
+            ip_address = get_client_ip(request)
             # Be resilient to non-DRF requests (plain WSGIRequest from RequestFactory)
             _data = getattr(request, 'data', None)
             if _data is None:

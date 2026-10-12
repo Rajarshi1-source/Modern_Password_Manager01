@@ -48,6 +48,7 @@ import time
 import logging
 import uuid
 from typing import Optional
+from shared.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -194,9 +195,7 @@ class StrictSecurityThrottle(BaseThrottle):
         if request.user and request.user.is_authenticated:
             return f"user:{request.user.pk}"
         else:
-            xff = request.META.get('HTTP_X_FORWARDED_FOR')
-            remote_addr = request.META.get('REMOTE_ADDR')
-            return xff.split(',')[0].strip() if xff else remote_addr
+            return get_client_ip(request)
     
     def wait(self):
         """

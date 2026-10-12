@@ -143,12 +143,8 @@ def get_client_ip(request) -> str:
     Returns:
         str: Client IP address
     """
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(',')[0].strip()
-    else:
-        ip = request.META.get('REMOTE_ADDR')
-    return ip or '127.0.0.1'
+    from .client_ip import get_client_ip as _client_ip
+    return _client_ip(request, default='127.0.0.1')
 
 
 def get_user_agent_info(user_agent_string: str) -> Dict[str, str]:

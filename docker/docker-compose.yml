@@ -207,6 +207,10 @@ services:
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      # Client IP (F14). 0 = use REMOTE_ADDR and ignore X-Forwarded-For.
+      # Set 1 only if port 8000 is NOT published, so every request comes
+      # through nginx (which overwrites the header with the real client).
+      - TRUSTED_PROXY_COUNT=${TRUSTED_PROXY_COUNT:-0}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       - DATABASE_HOST=pgbouncer
       - DATABASE_PORT=6432

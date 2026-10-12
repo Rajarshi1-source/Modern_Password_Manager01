@@ -23,6 +23,7 @@ from ..models import (
     SessionType,
 )
 from . import duress_bridge, duress_detector, feature_matcher
+from shared.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +38,7 @@ def _get_profile(user) -> HeartbeatProfile:
 def _ip_from(request) -> Optional[str]:
     if request is None:
         return None
-    ip = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() \
-        or request.META.get('REMOTE_ADDR')
-    return ip or None
+    return get_client_ip(request)
 
 
 def _reading_from(session: HeartbeatSession, features: Dict[str, Any],

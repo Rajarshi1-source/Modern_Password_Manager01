@@ -155,14 +155,7 @@ def generate_request_id():
     import uuid
     return str(uuid.uuid4())
 
-def get_client_ip(request):
-    """Extract client IP address from request"""
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        ip = x_forwarded_for.split(',')[0]
-    else:
-        ip = request.META.get('REMOTE_ADDR')
-    return ip
+from shared.client_ip import get_client_ip  # noqa: E402,F401  (re-exported)
 
 def constant_time_compare(a, b):
     """Compare two strings in constant time to prevent timing attacks"""
