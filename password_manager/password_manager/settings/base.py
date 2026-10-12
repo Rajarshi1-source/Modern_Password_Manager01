@@ -1316,6 +1316,25 @@ if not DEBUG:
     else:
         SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+# Client IP (F14, docs/pqc-hybrid-architecture-review.md). Number of reverse
+# proxies we run in front of Django that write X-Forwarded-For. The client IP
+# is taken that many entries from the RIGHT of the header (shared/client_ip.py);
+# the leftmost entry is client-supplied and never trusted. 0 = ignore the
+# header and use REMOTE_ADDR. k8s sets 1 (ingress-nginx replaces the header
+# with $remote_addr). Set it only when Django is unreachable except through
+# those proxies, or a direct client can still choose the value.
+TRUSTED_PROXY_COUNT = int(os.environ.get('TRUSTED_PROXY_COUNT', '0'))
+if TRUSTED_PROXY_COUNT < 0:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('TRUSTED_PROXY_COUNT must be >= 0')
+if ONION_LISTENER:
+    # Tor connects straight to this process; no proxy of ours wrote the header.
+    TRUSTED_PROXY_COUNT = 0
+# DRF's throttles read NUM_PROXIES with the same right-hand semantics. Unset,
+# they key anonymous clients on the WHOLE X-Forwarded-For string, which a
+# client can change on every request to get a fresh bucket.
+REST_FRAMEWORK['NUM_PROXIES'] = TRUSTED_PROXY_COUNT
+
 # ==============================================================================
 # ENHANCED CORS SETTINGS FOR JWT-BASED SPA
 # ==============================================================================

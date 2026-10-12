@@ -673,6 +673,51 @@ ingress-nginx forwarded-header settings, which were not verified.**
 that takes the hop a configured number of trusted proxies back from the right (or
 `REMOTE_ADDR` behind a single trusted proxy), used everywhere. Not PQC; its own PR.
 
+**Fixed 2026-10-12** (branch `fix/pqc-review-f12-f13-f14-backups`).
+
+*Does a client-supplied `X-Forwarded-For` reach Django?* Checked against the
+ingress-nginx source at `controller-v1.15.1` (latest release; the repo does not pin
+a controller version). The defaults are `use-forwarded-headers: false`,
+`compute-full-forwarded-for: false` and `enable-real-ip: false`
+(`internal/ingress/controller/config/config.go`), and in that case
+`nginx.tmpl` sets `proxy_set_header X-Forwarded-For $remote_addr`, **replacing**
+the client's header. So:
+- **k8s (ingress-nginx, default ConfigMap): no.** Nothing in the repo changes
+  those defaults. `$remote_addr` is the client, or the cloud LB/node address
+  when the LB does SNAT. But the code also used **django-ipware 4.0.2** in four
+  places (`security_service`, `account_protection`, duress-code and geofence
+  views). By default ipware takes the leftmost `X-Forwarded-For` **and** falls
+  back to `Client-IP`, `X-Real-IP`, `X-Cluster-Client-IP`, `Forwarded` and `Via`.
+  ingress-nginx strips none of those, so those four sites were spoofable in k8s too.
+- **docker compose (`docker/nginx/nginx.conf`): yes.** Every location used
+  `$proxy_add_x_forwarded_for`, which **appends** to the client's header, so the
+  leftmost entry was client-chosen. Backend port 8000 is also published directly.
+- **Onion listener: yes.** Tor connects straight to Django.
+- **DRF throttles:** with `NUM_PROXIES` unset, DRF keys anonymous clients on the
+  **whole** `X-Forwarded-For` string, so changing it per request gave a fresh
+  bucket wherever the header passes through.
+
+*Fix:* `shared/client_ip.get_client_ip` is now the only parser. It takes the entry
+`TRUSTED_PROXY_COUNT` places from the right (same arithmetic as DRF), or
+`REMOTE_ADDR` when the count is 0 or the header is absent. It replaces 22
+hand-rolled copies and the 4 ipware calls. Settings read `TRUSTED_PROXY_COUNT`
+(default **0**, fail closed), force it to 0 when `ONION_LISTENER`, and set
+`REST_FRAMEWORK['NUM_PROXIES']` from it. Deployment changes:
+- `k8s/configmap.yaml` sets 1, and `k8s/tor.yaml` pins backend-onion to 0.
+- Both compose files default to 0, because port 8000 is published.
+- `docker/nginx/nginx.conf` now overwrites the header with `$remote_addr`.
+
+Tests: `shared/tests/test_client_ip.py`. A spoofed leftmost hop no longer changes
+the recovery lockout key and no longer passes `ALLOWED_IP_RANGES`, and DRF agrees
+with the helper. 5 of its 11 tests fail on the old call sites; the other 6 test
+the new helper itself.
+
+Not changed: the `allow-backend` NetworkPolicy admits port 8000 from any source.
+With a count of 1, an in-cluster client that bypasses the ingress could still choose
+the address. Restricting `from` to the ingress-nginx namespace is the follow-up.
+`django-ipware` is now unused, but it stays pinned, so the requirements files are
+untouched.
+
 ### 9.2 Resulting priorities (added to section 6)
 
 - **P0 (ops, not PQC, but most urgent here):** make the k8s backup durable and

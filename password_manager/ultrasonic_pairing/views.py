@@ -24,6 +24,7 @@ from .serializers import (
     PairingSessionSummarySerializer,
 )
 from .services import pairing_service
+from shared.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,7 @@ def _disabled_response():
 
 
 def _request_meta(request):
-    ip = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() \
-        or request.META.get('REMOTE_ADDR')
+    ip = get_client_ip(request)
     return ip or None, request.META.get('HTTP_USER_AGENT', '')[:255]
 
 

@@ -12,6 +12,7 @@ from django.utils import timezone
 import hashlib
 import logging
 import time
+from shared.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -115,13 +116,8 @@ class ProgressiveLockoutThrottle(BaseThrottle):
         return f'{self.cache_key_prefix}_{ip_hash}'
     
     def _get_client_ip(self, request):
-        """Extract client IP from request."""
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(',')[0].strip()
-        else:
-            ip = request.META.get('REMOTE_ADDR', 'unknown')
-        return ip
+        """Client IP for the lockout bucket (never the client-chosen XFF hop)."""
+        return get_client_ip(request, default='unknown')
     
     def allow_request(self, request, view):
         """Check if request is allowed based on lockout status."""

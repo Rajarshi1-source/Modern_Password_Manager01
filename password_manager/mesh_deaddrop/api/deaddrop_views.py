@@ -60,6 +60,7 @@ from ..services.location_verification_service import (
     VerificationMethod,
     VerificationResult,
 )
+from shared.client_ip import get_client_ip
 
 
 # =============================================================================
@@ -318,10 +319,7 @@ class DeadDropCollectView(APIView):
     
     def _get_client_ip(self, request):
         """Get client IP address."""
-        x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded:
-            return x_forwarded.split(',')[0].strip()
-        return request.META.get('REMOTE_ADDR')
+        return get_client_ip(request)
 
 
 class DeadDropCancelView(APIView):

@@ -454,12 +454,7 @@ def start_calibration(request):
 
 # Helper functions
 
-def get_client_ip(request):
-    """Extract client IP from request."""
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        return x_forwarded_for.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR')
+from shared.client_ip import get_client_ip  # noqa: E402  (re-exported)
 
 
 def format_challenge_for_response(challenge):

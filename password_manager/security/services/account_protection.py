@@ -11,7 +11,7 @@ import requests
 import json
 import logging
 from datetime import timedelta, datetime
-from ipware import get_client_ip
+from shared.client_ip import get_client_ip
 import user_agents
 import geoip2.database
 import hashlib
@@ -415,8 +415,7 @@ class AccountProtectionService:
     
     def get_client_ip(self, request):
         """Extract client IP address"""
-        ip, is_routable = get_client_ip(request)
-        return ip or '127.0.0.1'
+        return get_client_ip(request, default='127.0.0.1')
     
     def get_location_from_ip(self, ip_address):
         """Get location from IP address using GeoIP"""

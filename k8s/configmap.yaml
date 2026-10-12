@@ -13,6 +13,13 @@ data:
   DJANGO_SETTINGS_MODULE: "password_manager.settings"
   DEBUG: "False"
   ALLOWED_HOSTS: "yourapp.com,www.yourapp.com,api.yourapp.com"
+  # Client IP (F14): ingress-nginx is the one proxy in front of the backend.
+  # With its defaults (use-forwarded-headers / compute-full-forwarded-for
+  # false) it REPLACES X-Forwarded-For with $remote_addr, so Django takes the
+  # rightmost entry. If you put an L7 load balancer in front and enable
+  # use-forwarded-headers + compute-full-forwarded-for, raise this to 2.
+  # backend-onion (tor.yaml) pins it to 0.
+  TRUSTED_PROXY_COUNT: "1"
   
   # Database
   DATABASE_HOST: "postgres-service"

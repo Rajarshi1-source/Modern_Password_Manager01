@@ -60,7 +60,7 @@ class SecurityServiceTestCase(TestCase):
     def test_analyze_successful_login_normal_case(self, mock_get_ip):
         """Test analysis of a normal successful login"""
         # Mock IP detection
-        mock_get_ip.return_value = ('192.168.1.100', True)
+        mock_get_ip.return_value = '192.168.1.100'
         
         request = self.create_mock_request()
         
@@ -84,7 +84,7 @@ class SecurityServiceTestCase(TestCase):
     @patch('security.services.security_service.get_client_ip')
     def test_analyze_suspicious_login_new_device(self, mock_get_ip):
         """Test analysis of login from new device"""
-        mock_get_ip.return_value = ('10.0.0.1', True)
+        mock_get_ip.return_value = '10.0.0.1'
         
         request = self.create_mock_request(ip='10.0.0.1')
         
@@ -102,7 +102,7 @@ class SecurityServiceTestCase(TestCase):
     @patch('security.services.security_service.get_client_ip')
     def test_analyze_failed_login_brute_force(self, mock_get_ip):
         """Test analysis of failed login that looks like brute force"""
-        mock_get_ip.return_value = ('10.0.0.1', True)
+        mock_get_ip.return_value = '10.0.0.1'
         
         # Create multiple recent failed attempts
         for i in range(5):
@@ -132,7 +132,7 @@ class SecurityServiceTestCase(TestCase):
     @patch('security.services.security_service.NotificationService.send_suspicious_login_alert')
     def test_handle_suspicious_login_triggers_alert(self, mock_send_alert, mock_get_ip):
         """Test that suspicious logins trigger security alerts"""
-        mock_get_ip.return_value = ('10.0.0.1', True)
+        mock_get_ip.return_value = '10.0.0.1'
         
         request = self.create_mock_request(ip='10.0.0.1')
         
@@ -158,7 +158,7 @@ class SecurityServiceTestCase(TestCase):
     @patch('security.services.security_service.get_client_ip')
     def test_device_registration_on_successful_login(self, mock_get_ip):
         """Test that successful logins register/update device info"""
-        mock_get_ip.return_value = ('192.168.1.100', True)
+        mock_get_ip.return_value = '192.168.1.100'
         
         request = self.create_mock_request()
         
@@ -181,7 +181,7 @@ class SecurityServiceTestCase(TestCase):
     @patch('security.services.security_service.get_client_ip')
     def test_account_locking_on_high_risk(self, mock_get_ip):
         """Test that social accounts are locked on very high risk logins"""
-        mock_get_ip.return_value = ('10.0.0.1', True)
+        mock_get_ip.return_value = '10.0.0.1'
         
         request = self.create_mock_request(ip='10.0.0.1')
         

@@ -15,7 +15,7 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from ipware import get_client_ip
+from shared.client_ip import get_client_ip
 
 from ..models import (
     LocationHistory, ImpossibleTravelEvent,
@@ -55,7 +55,7 @@ class RecordLocationView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
         data = serializer.validated_data
-        client_ip, _ = get_client_ip(request)
+        client_ip = get_client_ip(request)
         
         # Get device if provided
         device = None

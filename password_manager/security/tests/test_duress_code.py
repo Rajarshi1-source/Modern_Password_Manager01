@@ -771,7 +771,7 @@ class SecurityServiceIntegrationTests(TestCase):
     @patch('security.services.security_service.get_client_ip')
     def test_check_for_duress_code_detects_duress(self, mock_get_ip):
         """Test that check_for_duress_code correctly detects duress code"""
-        mock_get_ip.return_value = ('192.168.1.100', False)
+        mock_get_ip.return_value = '192.168.1.100'
         
         from security.services.security_service import SecurityService
         

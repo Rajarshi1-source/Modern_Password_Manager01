@@ -34,15 +34,12 @@ from .services import (
     RateLimited,
     user_opted_in,
 )
+from shared.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
 
-def _client_ip(request):
-    xff = request.META.get('HTTP_X_FORWARDED_FOR')
-    if xff:
-        return xff.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR')
+_client_ip = get_client_ip
 
 
 # ---------------------------------------------------------------------------
