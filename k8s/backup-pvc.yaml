@@ -1,0 +1,36 @@
+# =============================================================================
+# Durable storage for the db-backup CronJob (k8s/cronjobs.yaml).
+#
+# Before this, /backups was an emptyDir, deleted with the pod, so no backup
+# ever survived (docs/pqc-hybrid-architecture-review.md, section 9).
+#
+# Files here are age-encrypted to BACKUP_AGE_RECIPIENT (app-config). The
+# matching private key must NOT be stored in the cluster. Keep it offline;
+# the restore drill (k8s/restore-drill-job.yaml) takes it as a short-lived
+# Secret.
+#
+# A PVC in the same cluster survives pod and node loss, not the loss of the
+# cluster, its storage backend or its account. For off-site copies, snapshot
+# this volume with your CSI driver's VolumeSnapshot, or copy the (already
+# encrypted) files to object storage from outside the cluster. An in-cluster
+# uploader would need an egress rule in allow-maintenance (network-policy.yaml).
+#
+# Apply once:  kubectl apply -f k8s/backup-pvc.yaml
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: db-backups
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: maintenance
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Omitted storageClassName = the cluster default. Prefer a class with
+  # reclaimPolicy: Retain, so deleting the PVC does not delete the backups.
+  resources:
+    requests:
+      # 14 daily backups (BACKUP_KEEP) of a compressed dump, plus headroom.
+      storage: 20Gi

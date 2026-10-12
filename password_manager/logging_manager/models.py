@@ -111,3 +111,19 @@ class RecoveryAttemptLog(models.Model):
         
         log_entry.save()
         return log_entry
+
+
+class BackupStatus(models.Model):
+    """Last SUCCESSFUL run of a backup job; exported as a Prometheus gauge.
+
+    Written only after the backup file is complete, fsynced and renamed into
+    place, never on failure, so "time since last success" measures what was
+    actually kept rather than what was attempted.
+    """
+    name = models.CharField(max_length=64, primary_key=True)
+    last_success_at = models.DateTimeField()
+    last_size_bytes = models.BigIntegerField(default=0)
+    last_file = models.CharField(max_length=255, blank=True)
+
+    def __str__(self):
+        return f"{self.name} @ {self.last_success_at.isoformat()}"

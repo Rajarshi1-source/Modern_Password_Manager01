@@ -59,3 +59,30 @@ data:
             annotations:
               summary: Metrics scrape target down
               description: A pod that exposes /metrics is not responding to Prometheus (check pod, NetworkPolicy, or annotations).
+          # Backups (db-backup CronJob). The timestamp is stamped only after the
+          # encrypted file is fully written, fsynced and renamed into place, so
+          # this measures backups KEPT, not attempts. Every backend pod exports
+          # the same value from the database, hence max(). 0 = never succeeded.
+          - alert: VaultBackupStale
+            expr: time() - max by (backup) (vault_backup_last_success_timestamp_seconds) > 26 * 3600
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: No successful database backup for over 26 hours
+              description: >-
+                {{ $labels.backup }} last succeeded {{ $value | humanizeDuration }} ago
+                (daily schedule). Check the db-backup CronJob's last Job, the
+                db-backups PVC, and BACKUP_AGE_RECIPIENT in app-config.
+          # The gauge disappears when no backend is scraped or the backend cannot
+          # read BackupStatus; then VaultBackupStale cannot fire either.
+          - alert: VaultBackupMetricMissing
+            expr: absent(vault_backup_last_success_timestamp_seconds)
+            for: 1h
+            labels:
+              severity: warning
+            annotations:
+              summary: Backup freshness metric is missing
+              description: >-
+                vault_backup_last_success_timestamp_seconds has not been scraped for
+                an hour, so backup staleness is not being monitored.

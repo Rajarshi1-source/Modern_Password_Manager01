@@ -20,6 +20,13 @@ data:
   # use-forwarded-headers + compute-full-forwarded-for, raise this to 2.
   # backend-onion (tor.yaml) pins it to 0.
   TRUSTED_PROXY_COUNT: "1"
+
+  # Database backups (db-backup CronJob). age PUBLIC key (age1...) that every
+  # backup is encrypted to; create the pair OFF-cluster with `age-keygen` and
+  # keep the private key offline. Empty = the job fails (no plaintext backups)
+  # and VaultBackupStale fires.
+  BACKUP_AGE_RECIPIENT: ""
+  BACKUP_KEEP: "14"
   
   # Database
   DATABASE_HOST: "postgres-service"
