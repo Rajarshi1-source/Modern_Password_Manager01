@@ -10,6 +10,7 @@ from rest_framework import status
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
+import base64
 import logging
 import json
 
@@ -110,15 +111,13 @@ def setup_primary_passkey_recovery(request):
                 'username': user.username,
             }
             
-            # Generate Kyber keypair
-            kyber_public_key, _ = recovery_service.quantum_crypto.generate_kyber_keypair()
-            
-            # Encrypt credential data
+            # Encrypt credential data (generates the backup's Kyber keypair and
+            # keeps its private key wrapped under the recovery key)
             encrypted_data, encryption_metadata = recovery_service.encrypt_passkey_credential(
                 credential_data=credential_data,
                 recovery_key=recovery_key,
-                user_kyber_public_key=kyber_public_key
             )
+            kyber_public_key = base64.b64decode(encryption_metadata['kyber_public_key'])
             
             # Create backup record
             backup = PasskeyRecoveryBackup.objects.create(

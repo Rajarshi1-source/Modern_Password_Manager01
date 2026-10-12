@@ -11,6 +11,7 @@ Provides comprehensive testing for the passkey recovery system including:
 from django.core.management.base import BaseCommand, CommandError
 from django.contrib.auth import get_user_model
 from django.db import transaction
+import base64
 import json
 import time
 import sys
@@ -310,16 +311,12 @@ class Command(BaseCommand):
         """Test creating a recovery backup."""
         from ..passkey_primary_recovery_models import PasskeyRecoveryBackup
         from ..services.passkey_primary_recovery_service import PasskeyPrimaryRecoveryService
-        from ..services.kyber_crypto import production_kyber
         
         service = PasskeyPrimaryRecoveryService()
         
         # Generate recovery key
         recovery_key = service.generate_recovery_key()
         recovery_key_hash = service.hash_recovery_key(recovery_key)
-        
-        # Generate Kyber keypair
-        kyber_public_key, _ = production_kyber.generate_keypair()
         
         # Create test credential data
         credential_data = {
@@ -333,8 +330,8 @@ class Command(BaseCommand):
         encrypted_data, metadata = service.encrypt_passkey_credential(
             credential_data=credential_data,
             recovery_key=recovery_key,
-            user_kyber_public_key=kyber_public_key
         )
+        kyber_public_key = base64.b64decode(metadata['kyber_public_key'])
         
         # Create backup in database
         with transaction.atomic():
