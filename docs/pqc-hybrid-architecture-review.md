@@ -239,9 +239,19 @@ together without a deliberate protocol decision.
 liboqs nor `pqcrypto` imports. `ci.yml` installs `liboqs-dev` best-effort
 (C library only); no requirements file used by tests installs the Python wrapper
 (`requirements.txt` has it commented out: "Installed from source in Docker"), so
-the test suite runs against the simulation. Only `test_quantum_entanglement.py`
-and a management command mention Kyber. **A regression in liboqs or in the real
-path cannot fail CI today.**
+the test suite runs against the simulation. The tests that touch Kyber or `oqs`
+(all four stay off the native wrapper, in different ways):
+- `security/tests/test_quantum_entanglement.py` runs `LatticeCryptoEngine` in
+  simulation, and patches its `LIBOQS_AVAILABLE` flag to test fail-closed;
+- `auth_module/tests/test_kyber_crypto_fail_closed.py` (added 2026-10-07) patches
+  the `LIBOQS_AVAILABLE` / `PQCRYPTO_AVAILABLE` **flags** to force the simulated
+  KEM. It never references `oqs`;
+- `behavioral_recovery/tests/test_quantum_crypto_service.py` (added 2026-10-07)
+  substitutes a **fake `oqs`** (a mock, or a stub module for the import test);
+- `auth_module/management/commands/test_passkey_recovery.py` is a management
+  command, not a collected test.
+
+**A regression in liboqs or in the real path cannot fail CI today.**
 *Backend fail-closed fixed 2026-10-07.* Rather than add a new `REQUIRE_REAL_PQC`
 flag, both `ProductionKyber`'s simulation and the behavioral-recovery fallback now
 use the **existing** switch that `LatticeCryptoEngine` already fails closed on:
