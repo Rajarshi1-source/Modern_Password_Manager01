@@ -53,6 +53,9 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/alertmanager
+            - name: receiver-secrets
+              mountPath: /etc/alertmanager-secrets
+              readOnly: true
           resources:
             requests:
               cpu: 25m
@@ -69,3 +72,10 @@ spec:
         - name: config
           configMap:
             name: alertmanager-config
+        # Receiver credentials (alertmanager-config.yaml). Deliberately NOT
+        # optional: without it alerts would go nowhere, and a pod stuck in
+        # ContainerCreating is easier to notice than silence.
+        - name: receiver-secrets
+          secret:
+            secretName: alertmanager-receiver
+            defaultMode: 0440

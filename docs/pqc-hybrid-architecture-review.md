@@ -718,11 +718,63 @@ the address. Restricting `from` to the ingress-nginx namespace is the follow-up.
 `django-ipware` is now unused, but it stays pinned, so the requirements files are
 untouched.
 
+**Backups and alerting, fixed 2026-10-12** (branch `fix/pqc-review-f12-f13-f14-backups`):
+- **Durable:** `/backups` is the `db-backups` PVC (`k8s/backup-pvc.yaml`), not an
+  `emptyDir`. A same-cluster PVC does not survive losing the cluster or its storage
+  backend; off-site copies (VolumeSnapshots, or copying the already-encrypted files
+  from outside) are documented there but not automated.
+- **Encrypted to a public key:** `db_backup` encrypts to the age X25519 recipient in
+  `app-config` `BACKUP_AGE_RECIPIENT` and refuses to run without one. The output is
+  a standard age v1 file (`logging_manager/age_stream.py`, built on the pinned
+  `cryptography`). It was checked locally against the reference implementation
+  (`pyrage`) in both directions, at sizes around the 64 KiB chunk boundary, plus
+  truncated and unfinished files. The private key is never in the cluster.
+- **Streamed:** `dumpdata --format=jsonl` → gzip → age, written through with no
+  in-memory buffer. JSON Lines also lets `loaddata` restore line by line.
+- **Freshness metric:** written to `*.partial`, fsynced, renamed, and only then
+  stamped in `logging_manager.BackupStatus`. The backend exports
+  `vault_backup_last_success_timestamp_seconds{backup="db-backup"}` (0 if no backup
+  ever succeeded). A failure does not move it.
+- **Alerts:** `VaultBackupStale` fires after more than 26 h since the last success,
+  and `VaultBackupMetricMissing` fires when the gauge is absent for 1 h.
+- **Delivery:**
+  - The receiver is a webhook whose URL is read from the mounted
+    `alertmanager-receiver` Secret (`url_file`, present in the pinned Alertmanager
+    v0.27.0). Slack and PagerDuty variants are commented in the config.
+  - The Secret is required, so a missing receiver shows up as a stuck pod rather
+    than as silence.
+  - Also found: under `default-deny-all`, no policy let Prometheus reach
+    Alertmanager or let Alertmanager reach any receiver. `allow-alertmanager` now
+    does both.
+- **Restore drill:** `k8s/restore-drill-job.yaml` and `manage.py restore_drill`.
+  - The pod has a throwaway `postgres:15-alpine` native sidecar on loopback, no
+    app secrets, and no NetworkPolicy allow rule.
+  - The age identity is provided as a short-lived Secret for the run only.
+  - The command refuses any database that already has tables. It then migrates,
+    streams decrypt → gunzip → `loaddata`, and requires at least one restored user.
+  - It uses `loaddata`, not `pg_restore`: the backend image has no `pg_dump` (and
+    Debian bookworm ships a client older than the server), so the dump stays
+    `dumpdata`. No Docker socket is used.
+- `runAsNonRoot` and `readOnlyRootFilesystem` are kept everywhere.
+- Tests: `logging_manager/tests/test_db_backup.py` (16), all new.
+
+**Not validated (no cluster, no Docker, no promtool/amtool here):**
+- PVC binding and the CronJob writing to it.
+- The native-sidecar drill pod actually starting the alpine PostgreSQL as uid 10070
+  on an `emptyDir`.
+- The Prometheus rule expressions and the Alertmanager config, beyond YAML parsing
+  and checking field names against the v0.27.0 source.
+- End-to-end delivery to a real receiver.
+
+The Django side (backup, encryption, stamping, metric, restore into an empty
+schema) is covered by the tests above, on SQLite.
+
 ### 9.2 Resulting priorities (added to section 6)
 
-- **P0 (ops, not PQC, but most urgent here):** make the k8s backup durable and
+- **P0 (ops, not PQC, but most urgent here):** ~~make the k8s backup durable and
   encrypted, and give Alertmanager a receiver. Today there is neither a retained
-  backup nor a delivered alert.
+  backup nor a delivered alert.~~ **Done 2026-10-12** (section 9.1, after F14);
+  needs an operator to set `BACKUP_AGE_RECIPIENT` and the receiver Secret.
 - **P0.2b / P0.2c:** F13 (recovery cannot decrypt) and F12 (clipboard clear), the
   latter with the Playwright test above.
 - **F14:** confirm the ingress forwarded-header behaviour first. If a

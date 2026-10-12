@@ -2905,6 +2905,10 @@ _DJANGO_MAINTENANCE_COMMANDS = frozenset({
     'shell', 'shell_plus', 'dbshell',
     'createsuperuser', 'changepassword',
     'dumpdata', 'loaddata',
+    # Batch wrappers around dumpdata / migrate+loaddata. restore_drill runs in
+    # k8s/restore-drill-job.yaml without app-secrets (no production DB
+    # credentials or keys), against a throwaway PostgreSQL.
+    'db_backup', 'restore_drill',
     'diffsettings', 'inspectdb',
     'startapp', 'startproject',
     'verify_audit_migration', 'rehash_pending_commitments',

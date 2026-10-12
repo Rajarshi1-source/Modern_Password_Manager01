@@ -104,6 +104,11 @@ spec:
           containers:
           - name: backup
             image: ${BACKEND_IMAGE}:${GITHUB_SHA}
+            # Streams dumpdata (JSON Lines) -> gzip -> age, encrypted to the
+            # PUBLIC key in app-config BACKUP_AGE_RECIPIENT; refuses to run
+            # without one. Writes *.partial, fsyncs, renames, keeps BACKUP_KEEP
+            # files, and only then stamps the last-success time that the
+            # VaultBackupStale alert watches (k8s/monitoring/prometheus-config.yaml).
             command: ["python", "manage.py", "db_backup", "--output", "/backups"]
             envFrom:
             - configMapRef:
@@ -128,8 +133,11 @@ spec:
               capabilities:
                 drop: ["ALL"]
           volumes:
+          # Durable (k8s/backup-pvc.yaml). Was an emptyDir, deleted with the
+          # pod, so no backup survived.
           - name: backup-volume
-            emptyDir: {}
+            persistentVolumeClaim:
+              claimName: db-backups
           - name: tmp
             emptyDir: {}
 

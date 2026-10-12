@@ -1,0 +1,156 @@
+# =============================================================================
+# Restore drill: prove the newest backup in the db-backups PVC decrypts and
+# loads into an EMPTY, throwaway PostgreSQL running inside this pod.
+#
+# Nothing here can touch production data:
+#   * the target DB is a sidecar on 127.0.0.1 with an emptyDir data dir;
+#   * the pod gets no app-config/app-secrets (no production DB credentials);
+#   * label component=restore-drill matches no allow rule in
+#     k8s/network-policy.yaml, so default-deny-all leaves it DNS only;
+#   * restore_drill refuses any database that already has tables;
+#   * the backup PVC is mounted read-only.
+#
+# The age PRIVATE key is not kept in the cluster. Run the drill by hand:
+#
+#   kubectl -n password-manager create secret generic restore-drill-identity \
+#     --from-file=identity=./backup-key.txt          # from age-keygen, kept offline
+#   envsubst < k8s/restore-drill-job.yaml | kubectl apply -f -
+#   kubectl -n password-manager wait --for=condition=complete job/restore-drill --timeout=1h
+#   kubectl -n password-manager logs job/restore-drill -c drill
+#   kubectl -n password-manager delete secret restore-drill-identity
+#   kubectl -n password-manager delete job restore-drill
+#
+# Requires BACKEND_IMAGE and GITHUB_SHA (as for k8s/cronjobs.yaml), and
+# Kubernetes >= 1.29 for the native sidecar (initContainer with
+# restartPolicy: Always). db-backups is ReadWriteOnce: do not run the drill
+# while a db-backup Job is writing.
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: restore-drill
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: restore-drill
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: restore-drill
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        fsGroup: 10001
+      initContainers:
+      # Throwaway PostgreSQL, same image and uid as the production one
+      # (k8s/deployment.yaml). Native sidecar: starts first, stops when the
+      # drill container exits, so the Job can complete.
+      - name: scratch-postgres
+        image: postgres:15-alpine
+        restartPolicy: Always
+        env:
+        - name: POSTGRES_USER
+          value: drill
+        - name: POSTGRES_PASSWORD
+          value: drill   # loopback-only, emptyDir data, deleted with the pod
+        - name: POSTGRES_DB
+          value: drill
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        args: ["-c", "listen_addresses=127.0.0.1", "-c", "fsync=off"]
+        startupProbe:
+          exec:
+            command: ["pg_isready", "-h", "127.0.0.1", "-U", "drill", "-d", "drill"]
+          periodSeconds: 2
+          failureThreshold: 60
+        volumeMounts:
+        - name: pg-data
+          mountPath: /var/lib/postgresql/data
+        - name: pg-run
+          mountPath: /var/run/postgresql
+        - name: pg-tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10070
+          runAsGroup: 10070
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      containers:
+      - name: drill
+        image: ${BACKEND_IMAGE}:${GITHUB_SHA}
+        command:
+        - sh
+        - -c
+        # Throwaway SECRET_KEY: settings require one; nothing is signed.
+        - >-
+          export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(50))')" &&
+          exec python manage.py restore_drill --input /backups --identity-file /drill-key/identity
+        env:
+        - name: DEBUG
+          value: "False"
+        - name: DJANGO_SETTINGS_MODULE
+          value: password_manager.settings
+        - name: DATABASE_URL
+          value: postgresql://drill:drill@127.0.0.1:5432/drill
+        - name: DB_SSLMODE
+          value: disable   # loopback to the sidecar
+        volumeMounts:
+        - name: backups
+          mountPath: /backups
+          readOnly: true
+        - name: drill-key
+          mountPath: /drill-key
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          runAsGroup: 10001
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: backups
+        persistentVolumeClaim:
+          claimName: db-backups
+          readOnly: true
+      - name: drill-key
+        secret:
+          secretName: restore-drill-identity
+          defaultMode: 0440
+      - name: pg-data
+        emptyDir: {}
+      - name: pg-run
+        emptyDir: {}
+      - name: pg-tmp
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
