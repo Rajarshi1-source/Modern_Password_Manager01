@@ -443,10 +443,16 @@ export const VaultProvider = ({ children }) => {
     }
   }, [isUnlocked, handleLockVault, handleStorageEvent, refreshItems]);
 
-  // Setup activity monitoring for auto-lock
+  // Setup activity monitoring for auto-lock.
+  //
+  // Armed by `sessionUnlocked` (a live vault session key), not only by the
+  // legacy `isUnlocked`: nothing ever sets `isUnlocked` to true in the live
+  // login flow (see the PR F note on `sessionUnlocked` above), so gating on it
+  // alone meant the inactivity lock never ran at all.
+  const autoLockArmed = isUnlocked || sessionUnlocked;
   useEffect(() => {
     // Only set up the timer if the vault is unlocked
-    if (!isUnlocked) return;
+    if (!autoLockArmed) return;
 
     // Convert minutes to milliseconds
     const timeoutMs = autoLockTimeout * 60 * 1000;
@@ -487,7 +493,7 @@ export const VaultProvider = ({ children }) => {
         window.removeEventListener(event, updateActivity);
       });
     };
-  }, [isUnlocked, autoLockTimeout, handleLockVault]);
+  }, [autoLockArmed, autoLockTimeout, handleLockVault]);
 
   // Handle Firebase real-time updates
   const handleFirebaseUpdate = useCallback(async (firebaseItems) => {

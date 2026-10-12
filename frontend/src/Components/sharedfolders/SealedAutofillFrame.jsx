@@ -21,6 +21,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { X, Copy, Shield, ExternalLink, Clock } from 'lucide-react';
+import { scheduleClipboardClear } from '../../utils/secureClipboard';
 
 const Wrapper = styled.div`
   border: 1px solid rgba(74, 108, 247, 0.2);
@@ -147,11 +148,9 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
       if (!d || d.nonce !== nonce) return;
       if (d.type === 'fhe_share:iframe_copied') {
         setCopied(true);
-        try {
-          setTimeout(() => navigator.clipboard.writeText(''), 20_000);
-        } catch (_err) {
-          // clipboard clear is best-effort
-        }
+        // The sandboxed iframe copied the password, so its value is unknown
+        // here: clear unconditionally after the user's clipboard timeout.
+        scheduleClipboardClear(null);
       }
     };
     window.addEventListener('message', onMsg);

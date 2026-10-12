@@ -220,7 +220,7 @@ export const VaultDashboardRoute = () => {
 // the same list the dashboard uses. Decryption stays client-side via
 // sessionVaultCrypto (v2) with a v3 fallback for migrated/freshly-written rows.
 export const VaultItemsSection = () => {
-  const { items, loading: realLoading, error: realError } = useVault();
+  const { items, loading: realLoading, error: realError, canEdit } = useVault();
   const [decryptedItems, setDecryptedItems] = useState({});
   // Shared with VaultDashboardRoute -- see useDisplaySafeVault above for why
   // this is one hook and not a per-component check. `loading`/`error` come
@@ -274,6 +274,11 @@ export const VaultItemsSection = () => {
   return (
     <section className="password-list" data-testid="vault-section">
       <h2>Your Passwords</h2>
+      {/* Whether a vault session key is held (manual, inactivity or cross-tab
+          lock all clear it). A status only; no key material. */}
+      <span className="sr-only" data-testid="vault-lock-status">
+        {canEdit ? 'Vault unlocked' : 'Vault locked'}
+      </span>
       <span className="sr-only" data-testid="vault-status">
         {!loading && 'Decrypted Vault Data Visible'}
       </span>

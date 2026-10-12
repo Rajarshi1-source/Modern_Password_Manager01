@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import cosmicRayService from '../../services/cosmicRayService';
 import './CosmicRayEntropyDashboard.css';
+import { copySecret } from '../../utils/secureClipboard';
 
 /**
  * Cosmic Ray Entropy Dashboard
@@ -200,7 +201,7 @@ const CosmicRayEntropyDashboard = () => {
         if (!password) return;
 
         try {
-            await navigator.clipboard.writeText(password);
+            await copySecret(password);
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
         } catch (err) {
