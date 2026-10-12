@@ -10,6 +10,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import './CollectFragments.css';
 import { authHeader } from '../../utils/authHeader';
+import { copySecret } from '../../utils/secureClipboard';
 
 const API_BASE = '/api/mesh';
 
@@ -348,7 +349,7 @@ const CollectFragments = ({ deadDropId, onSuccess, onCancel }) => {
                         </div>
                         <button
                             className="copy-btn"
-                            onClick={() => navigator.clipboard.writeText(result.secret)}
+                            onClick={() => copySecret(result.secret).catch(() => {})}
                         >
                             📋 Copy to Clipboard
                         </button>

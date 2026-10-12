@@ -3,6 +3,13 @@
 Status: review, 2026-10-06. No application code was changed by this document.
 Companion change: PR #526 (CI lock-file fixes, Dependabot guard).
 
+Update, 2026-10-12: **F12, F13, F14 and the section 9 backup/alerting gaps are
+fixed** (branch `fix/pqc-review-f12-f13-f14-backups`). Each finding's entry
+records what changed, what was found on the way (the inactivity auto-lock never
+ran; argon2 made passkey-primary backup creation always fail; ipware trusted
+`Client-IP`/`Forwarded`; Alertmanager was blocked by `default-deny-all`), and what
+could not be validated without a cluster.
+
 Update, 2026-10-07: **F1, F2 and the backend half of F7 are fixed** (branch
 `fix/behavioral-recovery-real-pqc`; P0.1 and P0.2 below). That work and the
 review below found five more problems (F10–F14), two of them high (F13: a recovery
@@ -33,7 +40,7 @@ locally, or the code itself). Section 8 lists what was **not** verified.
 | 1 | Does bumping to liboqs-python `0.16.0.1` (liboqs `0.16.0`) remove `Kyber768`? | **No.** At tag `0.16.0`, `OQS_ENABLE_KEM_KYBER` is `ON` by default and `kyber_512/768/1024` are enabled. The `0.12.0` notice ("last release to include Kyber") has not been carried out as of `0.16.0`. Kyber round 3 remains deprecated and could still be removed later. |
 | 2 | What does the bump remove? | Dilithium (removed in liboqs `0.15.0`) and SPHINCS+ (removed in `0.16.0`). **Neither is used anywhere in this codebase.** |
 | 3 | Is it safe to just bump the pin in `requirements-lock.txt` (the Copilot suggestion)? | **No, for process reasons, not algorithm reasons.** `DEPENDENCY_POLICY.md` requires the C library and the Python wrapper to move together, with refreshed commit SHAs, in one PR, validated against a freshly built image. The Docker image builds both from pinned git SHAs; the lock line only documents that. A lock-only bump recreates the "lock lies about what is installed" problem the Dockerfile already complains about. |
-| 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several.** The most serious one at review time was fixed on 2026-10-07 (F1, F2, F7 backend): `behavioral_recovery/services/quantum_crypto_service.py` **used to** do `from oqs import KEM`, which does not exist in any liboqs-python version, so it ran its non-post-quantum fallback even in the Docker image, with only log warnings. It now does `import oqs`, uses `oqs.KeyEncapsulation("Kyber768")`, and **refuses** the fallback (`ImproperlyConfigured`) unless `QUANTUM_CRYPTO['ALLOW_SIMULATION']` is true. F13 (`auth_module`'s recovery KEM was an unconditional simulation) was fixed on 2026-10-12. **Still open:** F3/F10 (behavioral commitments cannot be verified), F14 and F12. See section 3.3. |
+| 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several.** The most serious one at review time was fixed on 2026-10-07 (F1, F2, F7 backend): `behavioral_recovery/services/quantum_crypto_service.py` **used to** do `from oqs import KEM`, which does not exist in any liboqs-python version, so it ran its non-post-quantum fallback even in the Docker image, with only log warnings. It now does `import oqs`, uses `oqs.KeyEncapsulation("Kyber768")`, and **refuses** the fallback (`ImproperlyConfigured`) unless `QUANTUM_CRYPTO['ALLOW_SIMULATION']` is true. F13 (`auth_module`'s recovery KEM was an unconditional simulation), F14 (client-IP spoofing) and F12 (clipboard clear, plus an inactivity auto-lock that never ran) were fixed on 2026-10-12. **Still open:** F3/F10 (behavioral commitments cannot be verified). See section 3.3. |
 | 5 | Does CI protect against a liboqs regression? | **No.** No test job installs the Python wrapper, so `import oqs` fails and the backend selects a *simulated* KEM. Since 2026-10-07 production serving refuses that simulation, but `TESTING` still allows it (`ALLOW_SIMULATION`), so CI keeps running against it. A broken liboqs bump would pass CI. |
 | 6 | Is the proposed architecture better than what exists? | **Parts of it are; the whole is not.** Its password handling (never send the master password; one Argon2id run split with HKDF) and its use of standardized ML-KEM are better than the current code. Its single `K_master`, session-level hybrid handshake and storage schema are weaker than, or redundant with, what exists. Section 6. |
 | 7 | What is the most valuable post-quantum change? | **Not application-layer.** The master password reaches the server on every login; a recorded TLS session decrypted later reveals it directly. Stop sending it (and do not replace it with a replayable derived value), then enable hybrid post-quantum TLS at the edge. Sections 6-7. |
@@ -313,6 +320,44 @@ other code reads either key. The main copy action
 kind of problem as F1: the UI advertises a protection that the code does not
 provide. Fix it in the frontend with the Playwright test in section 9.1.
 
+**Fixed 2026-10-12** (branch `fix/pqc-review-f12-f13-f14-backups`):
+- `src/utils/secureClipboard.js` `copySecret()` copies, then after
+  `security.clipboardTimeout` seconds (if `security.clearClipboard` is on) clears the
+  clipboard. It clears only if the clipboard still holds the copied value, checked
+  with `readText()` where permitted, and clears best-effort otherwise.
+- It is used for every password and secret copy: `PasswordGenerator`,
+  `CosmicRayEntropyDashboard`, `PasswordItem`, `VaultItemDetail`, the
+  passkey-primary and layered recovery-key screens, and `CollectFragments`.
+  `SealedAutofillFrame`'s fixed 20 s timer now follows the setting.
+- Non-secret copies (alias emails, URLs, certificates, error stacks) are unchanged.
+- `VaultItemDetail` and `PasswordItem` are imported nowhere, so the "main copy
+  action" named above is unreachable. The reachable vault dashboard
+  (`VaultItemCard`) has no copy action.
+
+**Found while writing the 9.1 auto-lock test: the inactivity auto-lock never ran.**
+- The timer in `VaultContext.jsx` was gated on `isUnlocked`, and nothing in the live
+  login flow ever sets that to true (the PR F note in the same file says so).
+- The "auto-lock exists (5 min)" statements in sections 5, 8 and 9.1 were therefore
+  as untrue as F12. It is now armed by the live session-key gate (`sessionUnlocked`).
+- The vault list shows a `vault-lock-status` status (screen-reader only, no key
+  material) for tests to assert on.
+
+**Still unwired (not fixed here):** the Settings → Security "Auto-Lock" toggle and
+timeout write `security.autoLockEnabled` / `security.autoLockTimeout` to
+`preferencesService`, but `VaultContext` reads only `localStorage.autoLockTimeout`
+(minutes, default 5). Settings shows a default of 300, which looks like seconds,
+while `preferencesService` defaults to 5 minutes, so the units need reconciling first.
+
+Tests:
+- `frontend/e2e/vault_hygiene.spec.js` uses `page.clock`, and clipboard
+  permissions granted per test (the clipboard test is Chromium-only).
+  1. Copy a generated password, advance past 30 s, and the clipboard is empty.
+  2. Idle past 5 min, and the vault locks.
+  Both pass, and both fail with the two fixes reverted (the clipboard still holds
+  the password; the vault never locks). Run locally against Django + Vite,
+  Chromium build 1208.
+- `src/utils/__tests__/secureClipboard.test.js` (vitest, 9 tests).
+
 **F13: `auth_module/services/quantum_crypto_service.py` is a simulation everywhere,
 and its decapsulation returns a random secret.** Section 3.1 originally said it used
 `pqcrypto.kem.kyber768`. It does not: `pqcrypto` appears only in docstrings
@@ -462,7 +507,7 @@ These are fixable, but they show the plan is an illustration, not a drop-in desi
 | Transport PQ | None | App-layer hybrid | **Neither**; hybrid TLS at the edge is simpler and covers all traffic from clients that negotiate the hybrid group (sections 6-7). |
 | Downgrade behavior | Silent X25519-only (frontend); simulation behind a log-only warning (backend) | Not addressed | **Neither.** Both need fail-closed in production. |
 | Auth tokens | HttpOnly-cookie flow (opt-in) else script-readable storage | `sessionStorage` | **Existing**, if the cookie flow is enabled by default. |
-| Memory hygiene | Some non-extractable keys, `lock()`, inactivity auto-lock (`VaultContext.jsx`, default 5 min), clipboard-clear *setting* that nothing reads (F12), decoy handling; legacy `extractable: true` key in `cryptoService.js` | Non-extractable key, inactivity timer, clipboard clear after 30 s | Plan's checklist is good practice. Auto-lock exists; clipboard clearing does not (F12). |
+| Memory hygiene | Some non-extractable keys, `lock()`, inactivity auto-lock (`VaultContext.jsx`, default 5 min), clipboard-clear *setting* that nothing reads (F12), decoy handling; legacy `extractable: true` key in `cryptoService.js` | Non-extractable key, inactivity timer, clipboard clear after 30 s | Plan's checklist is good practice. At review time neither worked: clipboard clearing was unwired (F12) and the auto-lock timer never armed; both fixed 2026-10-12 (F12). |
 | Tests of the real PQ path | None in CI (F7) | Not discussed | Gap in both. |
 
 ---
@@ -622,7 +667,9 @@ the password makes the vault key derivable. So:
 - ~~Whether an inactivity auto-lock exists under a name my keyword search missed.~~
   It does: `frontend/src/contexts/VaultContext.jsx` (`DEFAULT_AUTO_LOCK_TIMEOUT = 5`
   minutes, `checkInactivity`), and every lock path goes through `handleLockVault`
-  (2026-10-07).
+  (2026-10-07). **Correction (2026-10-12):** the code existed, but its timer was gated
+  on an `isUnlocked` flag that the live flow never set, so it never ran. Reading the
+  code was not enough; the Playwright test in 9.1 showed it. Fixed under F12.
 - `@noble/curves` export names used in the plan (flagged as such above).
 - The `behavioral_recovery` design intent (F3).
 - Maturity of OPAQUE libraries for this stack (JS client, Python server); whether
@@ -646,7 +693,7 @@ the repository. As with section 4, the snippets are illustrations, not drop-in c
 
 | Proposal | What exists today | Verdict |
 |---|---|---|
-| **Playwright security audits** | `frontend/playwright.config.js` (`testDir: ./e2e`, `@playwright/test ^1.58.1`, 19 specs, `test:e2e:ci`). Auto-lock exists (`VaultContext.jsx`). Clipboard clearing does **not** (F12). | **Adopt, adapted.** Add `frontend/e2e/vault_hygiene.spec.js`: (a) copy a password, then assert the clipboard is cleared after `clipboardTimeout`; this **fails today** and should land with the F12 fix; (b) idle past `autoLockTimeout`, then assert the vault locks. Use `page.clock` (Playwright ≥1.45) instead of the plan's 30 s real `waitForTimeout`s. Do **not** add a `window.VaultMemoryStore` / `executeLockdownTestTrigger` hook: a global that exposes the key in a production bundle is the leak the test claims to check for. Assert on behaviour instead (locked UI, decrypt refused). JavaScript cannot prove memory zeroization; the test can only show that a reference was dropped. Grant clipboard permissions per test (Chromium only), not in the shared config. Do not copy `fullyParallel: false` / `workers: 1` globally: CI already runs one worker. |
+| **Playwright security audits** | `frontend/playwright.config.js` (`testDir: ./e2e`, `@playwright/test ^1.58.1`, 19 specs, `test:e2e:ci`). Auto-lock code exists (`VaultContext.jsx`) but never armed (see F12). Clipboard clearing does **not** (F12). | **Adopt, adapted** (done 2026-10-12, see F12). Add `frontend/e2e/vault_hygiene.spec.js`: (a) copy a password, then assert the clipboard is cleared after `clipboardTimeout`; this **fails today** and should land with the F12 fix; (b) idle past `autoLockTimeout`, then assert the vault locks. Use `page.clock` (Playwright ≥1.45) instead of the plan's 30 s real `waitForTimeout`s. Do **not** add a `window.VaultMemoryStore` / `executeLockdownTestTrigger` hook: a global that exposes the key in a production bundle is the leak the test claims to check for. Assert on behaviour instead (locked UI, decrypt refused). JavaScript cannot prove memory zeroization; the test can only show that a reference was dropped. Grant clipboard permissions per test (Chromium only), not in the shared config. Do not copy `fullyParallel: false` / `workers: 1` globally: CI already runs one worker. |
 | **PQC nginx via OQS OpenSSL fork** | `docker/nginx/nginx.conf`: TLS block commented out; `nginx:1.27-alpine`. k8s edge is **ingress-nginx** (`k8s/ingress.yaml`, TLSv1.3 only, cert-manager). | **Reject the build; keep P1.6.** Errors: `ssl_curves` is not an nginx directive (`ssl_ecdh_curve`); the Dockerfile's `git clone` lines have no `RUN` and truncated URLs; linking `-loqs` into nginx is unnecessary. The standalone OQS OpenSSL fork has been superseded by `oqs-provider` for OpenSSL 3, and OpenSSL **3.5** implements ML-KEM and the `X25519MLKEM768` group natively, so no custom compile is needed. Use an nginx image built on OpenSSL ≥3.5 and check `nginx -V`. In k8s, set `ssl-ecdh-curve: "X25519MLKEM768:X25519"` in the ingress-nginx controller ConfigMap, provided its OpenSSL supports it (not verified). The plan's verification line is also wrong: `s_client`'s "Peer signature type" reports the **signature** algorithm, not the key-exchange group. Its `script-src 'self'` CSP would break the FHE loader (section 4.2). |
 | **Production compose stack** | Two compose files (root and `docker/`). The root one mounts `./nginx/...`, which does not exist at the repo root (`docker/nginx/` does). k8s is the production target. | **Reject.** `CMD-SHEEP`; a `DATABASE_URL` that embeds a secrets-file *path* as a password; `core.settings.production` (the module is `password_manager.settings`); `postgres:16` / `python:3.11` (repo: PostgreSQL 17, Python 3.12); `pip install liboqs-python==0.16.0.1` without the C library, which triggers the import-time auto-install that 0.16.0.1 patched for command injection and breaks `DEPENDENCY_POLICY.md` (section 2.4). Separately, decide which compose file is canonical and fix or delete the root one's nginx mounts. |
 | **Encrypted backups + restore drill** | k8s `db-backup` CronJob (`k8s/cronjobs.yaml`) runs `manage.py db_backup --output /backups`. **`/backups` is an `emptyDir`**, deleted when the pod exits, and `allow-maintenance` (`k8s/network-policy.yaml`) permits egress to Postgres only. **No backup survives.** The dump is an unencrypted gzipped `dumpdata` JSON, built in memory (`StringIO`) under a 512 Mi limit. | **Adopt the goal; the existing gap is the priority.** Write to durable storage (a PVC, or object storage with a matching egress rule), encrypt **to a public key** (`age` or GPG asymmetric) so the cluster never holds the decryption key, stream instead of buffering, and alert on time since the last *success*. Errors in the plan's scripts: `pg_dump -F c \| gzip` double-compresses; the drill restores a custom-format dump with `psql`, which cannot read it (`pg_restore`); the drill runs `docker run` from inside a container, which needs the host Docker socket (root on the host); GnuPG ≥2.1 batch mode with `--passphrase-file` generally needs `--pinentry-mode loopback`; `--cipher-algo` is ignored on decrypt; the drill queries a `users` table (Django: `auth_user`); writing plaintext to host disk and then `dd`-overwriting it does not reliably erase it on SSD/CoW storage, so stream the restore instead. |
@@ -775,11 +822,12 @@ schema) is covered by the tests above, on SQLite.
   encrypted, and give Alertmanager a receiver. Today there is neither a retained
   backup nor a delivered alert.~~ **Done 2026-10-12** (section 9.1, after F14);
   needs an operator to set `BACKUP_AGE_RECIPIENT` and the receiver Secret.
-- **P0.2b / P0.2c:** F13 (recovery cannot decrypt) and F12 (clipboard clear), the
-  latter with the Playwright test above.
-- **F14:** confirm the ingress forwarded-header behaviour first. If a
+- **P0.2b / P0.2c:** ~~F13 (recovery cannot decrypt) and F12 (clipboard clear), the
+  latter with the Playwright test above.~~ **Done 2026-10-12.**
+- **F14:** ~~confirm the ingress forwarded-header behaviour first. If a
   client-supplied `X-Forwarded-For` reaches Django, this is a P0 lockout and
-  allowlist bypass.
+  allowlist bypass.~~ **Done 2026-10-12.** It did reach Django under compose, on the
+  onion listener, and through ipware's extra headers in k8s; see F14.
 - **P1.6** (hybrid TLS) stands, implemented with stock OpenSSL ≥3.5 at the ingress
   rather than a custom nginx build.
 - Everything else in 9.1 is "reject" or "defer" as listed.
