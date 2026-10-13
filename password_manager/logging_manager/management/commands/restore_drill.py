@@ -12,6 +12,7 @@ non-zero on any failure.
 import gzip
 import io
 import sys
+import zlib
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -87,7 +88,7 @@ class Command(BaseCommand):
                 text = io.TextIOWrapper(gzip.GzipFile(fileobj=plain, mode="rb"), encoding="utf-8")
                 with _stdin(text):
                     call_command("loaddata", "-", format="jsonl", verbosity=1, stdout=self.stdout)
-            except (AgeError, OSError, EOFError) as exc:
+            except (AgeError, OSError, EOFError, zlib.error) as exc:
                 raise CommandError(f"Backup {backup.name} could not be read: {exc}") from exc
 
         users = get_user_model().objects.count()

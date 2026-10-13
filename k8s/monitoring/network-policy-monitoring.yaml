@@ -78,3 +78,12 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+    # DNS, to resolve the receiver's hostname. This policy isolates the pod's
+    # egress by itself, so without allow-dns (k8s/network-policy.yaml)
+    # nothing else permits it.
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

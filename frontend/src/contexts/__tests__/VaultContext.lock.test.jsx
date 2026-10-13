@@ -104,3 +104,53 @@ describe('VaultContext lock (PR G)', () => {
     expect(result.current.canEdit).toBe(true);
   });
 });
+
+describe('VaultContext inactivity lock after a suspended tab', () => {
+  // A background tab's timers can fire long after the deadline. The first
+  // event on return must not count as activity that rescues the session.
+  const FIVE_MINUTES = 5 * 60 * 1000;
+
+  async function renderUnlocked() {
+    const { result } = renderHook(() => useVault(), { wrapper });
+    await waitFor(() => expect(result.current.canEdit).toBe(true));
+    return result;
+  }
+
+  test('focus after the deadline locks instead of resetting the timer', async () => {
+    const result = await renderUnlocked();
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start + FIVE_MINUTES + 1000);
+    try {
+      act(() => { window.dispatchEvent(new Event('focus')); });
+      expect(sessionVaultCrypto.clearSessionKey).toHaveBeenCalledTimes(1);
+      expect(result.current.canEdit).toBe(false);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test('becoming visible after the deadline locks', async () => {
+    const result = await renderUnlocked();
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start + FIVE_MINUTES + 1000);
+    try {
+      act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+      expect(result.current.canEdit).toBe(false);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test('activity before the deadline keeps the vault unlocked', async () => {
+    const result = await renderUnlocked();
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start + FIVE_MINUTES - 60000);
+    try {
+      act(() => { window.dispatchEvent(new Event('focus')); });
+      expect(sessionVaultCrypto.clearSessionKey).not.toHaveBeenCalled();
+      expect(result.current.canEdit).toBe(true);
+    } finally {
+      now.mockRestore();
+    }
+  });
+});

@@ -20,6 +20,7 @@ import gzip
 import io
 import os
 import sys
+import time
 from pathlib import Path
 
 from django.core.management import call_command
@@ -30,6 +31,8 @@ from logging_manager.age_stream import AgeEncryptor, AgeError, parse_recipient
 
 SUFFIX = '.jsonl.gz.age'
 JOB_NAME = 'db-backup'
+# Twice the CronJob's activeDeadlineSeconds (1800, k8s/cronjobs.yaml).
+STALE_PARTIAL_SECONDS = 3600
 
 
 class Command(BaseCommand):
@@ -141,9 +144,16 @@ class Command(BaseCommand):
         for old in backups[:-keep]:
             old.unlink(missing_ok=True)
             self.stdout.write(f"Pruned {old.name}")
-        # Leftovers from runs killed before their own cleanup ran.
+        # Leftovers from runs killed before their own cleanup ran. Only stale
+        # ones: a concurrent run (a manual one beside the CronJob) is still
+        # writing its own, and its mtime keeps moving while it does.
+        cutoff = time.time() - STALE_PARTIAL_SECONDS
         for stale in out_dir.glob(f"backup-*{SUFFIX}.partial"):
-            stale.unlink(missing_ok=True)
+            try:
+                if stale.stat().st_mtime < cutoff:
+                    stale.unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass
 
 
 def _fsync_dir(path):

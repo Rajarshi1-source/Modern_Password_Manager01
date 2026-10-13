@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -133,12 +134,18 @@ class DbBackupTests(TestCase):
     def test_prunes_to_keep(self):
         for ts in ('20200101T000000Z', '20200102T000000Z', '20200103T000000Z'):
             (self.dir / f'backup-{ts}{db_backup.SUFFIX}').write_bytes(b'old')
-        (self.dir / f'backup-20200104T000000Z{db_backup.SUFFIX}.partial').write_bytes(b'dead')
+        dead = self.dir / f'backup-20200104T000000Z{db_backup.SUFFIX}.partial'
+        dead.write_bytes(b'dead')
+        old = time.time() - db_backup.STALE_PARTIAL_SECONDS - 60
+        os.utime(dead, (old, old))
+        # Another run, still writing: must survive this run's prune.
+        live = self.dir / f'backup-20990101T000000Z{db_backup.SUFFIX}.partial'
+        live.write_bytes(b'in progress')
         self.run_backup(keep=2)
         names = [p.name for p in self.backups()]
         self.assertEqual(len(names), 2)
         self.assertEqual(names[0], f'backup-20200103T000000Z{db_backup.SUFFIX}')
-        self.assertFalse(list(self.dir.glob('*.partial')))
+        self.assertEqual([p.name for p in self.dir.glob('*.partial')], [live.name])
 
 
 class BackupMetricTests(TestCase):
@@ -188,6 +195,18 @@ class RestoreDrillTests(TransactionTestCase):
                          stdout=out)
         self.assertIn('Restore drill passed', out.getvalue())
         self.assertTrue(User.objects.filter(username='restored-user').exists())
+
+    def test_corrupt_compressed_stream_is_reported_not_raised(self):
+        # Valid age, valid gzip header, garbage deflate body -> zlib.error.
+        body = gzip.compress(b'{"x": 1}\n' * 100)
+        corrupt = body[:10] + bytes(b ^ 0x5A for b in body[10:-8]) + body[-8:]
+        path = self.dir / f'backup-20200101T000000Z{db_backup.SUFFIX}'
+        with open(path, 'wb') as f, age_stream.AgeEncryptor(f, RECIPIENT) as enc:
+            enc.write(corrupt)
+        with patch.object(restore_drill.Command, '_existing_tables', return_value=[]):
+            with self.assertRaisesRegex(CommandError, 'could not be read'):
+                call_command('restore_drill', input=str(self.dir), identity_file=str(self.identity),
+                             stdout=io.StringIO())
 
     def test_wrong_key_fails(self):
         call_command('db_backup', output=str(self.dir), recipient=age_stream.generate_identity()[1],
