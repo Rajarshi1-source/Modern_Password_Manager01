@@ -109,14 +109,16 @@ function buildSrcDoc(password, nonce) {
           if (d.nonce !== '${safeNonce}') return;
           if (used) return;
           if (d.type === 'copy') {
-            used = true;
+            var ok = false;
             try {
               pw.type = 'text';
               pw.select();
-              document.execCommand('copy');
+              ok = document.execCommand('copy') === true;
             } catch(_){}
-            setTimeout(zero, 100);
-            parent.postMessage({ type: 'fhe_share:iframe_copied', nonce: '${safeNonce}' }, '*');
+            pw.type = 'password';
+            // Only a successful copy uses up the frame; a failed one may retry.
+            if (ok) { used = true; setTimeout(zero, 100); }
+            parent.postMessage({ type: 'fhe_share:iframe_copied', nonce: '${safeNonce}', ok: ok }, '*');
           } else if (d.type === 'reveal') {
             pw.type = 'text';
           } else if (d.type === 'hide') {
@@ -148,6 +150,9 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
       const d = ev.data;
       if (!d || d.nonce !== nonce) return;
       if (d.type === 'fhe_share:iframe_copied') {
+        // A failed copy put nothing on the clipboard: scheduling a clear then
+        // would wipe whatever the user had there before.
+        if (d.ok !== true) return;
         setCopied(true);
         // The iframe copied `password`; passing it lets the clear skip
         // anything the user copied afterwards.

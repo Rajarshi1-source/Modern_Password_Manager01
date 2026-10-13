@@ -95,11 +95,6 @@ export const VaultProvider = ({ children }) => {
     };
   }, []);
 
-  const updateActivity = () => {
-    lastActivityRef.current = Date.now();
-  };
-
-
   // Fix #6: Check if component is mounted before updating state
   const checkIfInitialized = useCallback(async () => {
     // Only check if user is authenticated
@@ -475,6 +470,25 @@ export const VaultProvider = ({ children }) => {
     // Start monitoring inactivity
     autoLockTimerRef.current = setTimeout(checkInactivity, timeoutMs);
 
+    // A background tab's timers are throttled or frozen, so `checkInactivity`
+    // can run long after the deadline. The first event on return (focus, a
+    // mousemove) must not count as activity that rescues an already-expired
+    // session: check the deadline before recording it.
+    const updateActivity = () => {
+      if (Date.now() - lastActivityRef.current >= timeoutMs) {
+        handleLockVault(true);
+        return;
+      }
+      lastActivityRef.current = Date.now();
+    };
+    // Becoming visible again is not activity; only check the deadline.
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible'
+          && Date.now() - lastActivityRef.current >= timeoutMs) {
+        handleLockVault(true);
+      }
+    };
+
     // Track user activity events
     const activityEvents = [
       'mousedown', 'mousemove', 'keydown',
@@ -485,6 +499,7 @@ export const VaultProvider = ({ children }) => {
     activityEvents.forEach(event => {
       window.addEventListener(event, updateActivity, { passive: true });
     });
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     // Clean up
     return () => {
@@ -492,6 +507,7 @@ export const VaultProvider = ({ children }) => {
       activityEvents.forEach(event => {
         window.removeEventListener(event, updateActivity);
       });
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [autoLockArmed, autoLockTimeout, handleLockVault]);
 
