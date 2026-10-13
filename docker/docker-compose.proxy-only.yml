@@ -1,0 +1,20 @@
+# =============================================================================
+# Proxy-only override for docker/docker-compose.yml (F14, client IP).
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.proxy-only.yml up -d
+#
+# The base file publishes the backend on :8000, so it must ignore
+# X-Forwarded-For (TRUSTED_PROXY_COUNT=0); behind nginx every client then
+# shares nginx's address, and one throttle / lockout bucket. This override
+# stops publishing :8000, so the backend is reachable only through nginx
+# (docker/nginx/nginx.conf overwrites X-Forwarded-For with $remote_addr), and
+# trusts that one proxy hop. Use the base file alone for direct-access
+# development.
+#
+# `!reset` needs Docker Compose >= 2.24.
+# =============================================================================
+services:
+  backend:
+    ports: !reset []
+    environment:
+      TRUSTED_PROXY_COUNT: "1"

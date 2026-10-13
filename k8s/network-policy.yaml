@@ -71,8 +71,21 @@ spec:
   policyTypes:
   - Ingress
   - Egress
+  # Only the ingress controller and Prometheus may connect. TRUSTED_PROXY_COUNT
+  # (configmap.yaml) trusts the right-most X-Forwarded-For entry, so any other
+  # caller able to reach :8000 could choose the client IP that the recovery
+  # lockout and ALLOWED_IP_RANGES see (F14). If your controller is not in the
+  # `ingress-nginx` namespace, change the selector below or /api goes down.
   ingress:
-  - ports:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    - podSelector:
+        matchLabels:
+          app: password-manager
+          component: prometheus
+    ports:
     - protocol: TCP
       port: 8000
   egress:

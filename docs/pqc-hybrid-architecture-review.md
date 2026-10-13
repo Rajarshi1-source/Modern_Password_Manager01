@@ -751,7 +751,7 @@ hand-rolled copies and the 4 ipware calls. Settings read `TRUSTED_PROXY_COUNT`
 (default **0**, fail closed), force it to 0 when `ONION_LISTENER`, and set
 `REST_FRAMEWORK['NUM_PROXIES']` from it. Deployment changes:
 - `k8s/configmap.yaml` sets 1, and `k8s/tor.yaml` pins backend-onion to 0.
-- Both compose files default to 0, because port 8000 is published.
+- Both compose files default to 0, because port 8000 is published (see round 1 for the proxy-only override).
 - `docker/nginx/nginx.conf` now overwrites the header with `$remote_addr`.
 
 Tests: `shared/tests/test_client_ip.py`. A spoofed leftmost hop no longer changes
@@ -759,9 +759,18 @@ the recovery lockout key and no longer passes `ALLOWED_IP_RANGES`, and DRF agree
 with the helper. 5 of its 11 tests fail on the old call sites; the other 6 test
 the new helper itself.
 
-Not changed: the `allow-backend` NetworkPolicy admits port 8000 from any source.
-With a count of 1, an in-cluster client that bypasses the ingress could still choose
-the address. Restricting `from` to the ingress-nginx namespace is the follow-up.
+Review round 1 (2026-10-13):
+- `allow-backend` admitted port 8000 from any source, so with a count of 1 an
+  in-cluster client that bypassed the ingress could choose the address. Its
+  ingress is now limited to the `ingress-nginx` namespace and the Prometheus pods.
+  A controller in another namespace needs that selector changed, or `/api` is cut
+  off (not validated on a cluster).
+- Optional `TRUSTED_PROXY_CIDRS`: when set, `shared.client_ip.ForwardedForPeerMiddleware`
+  (first in `MIDDLEWARE`) drops `X-Forwarded-For` from any other direct peer, so DRF
+  throttles and `get_client_ip` both ignore it.
+- `docker/docker-compose.proxy-only.yml` unpublishes :8000 and sets the count to 1,
+  for per-client throttling behind nginx.
+
 `django-ipware` is now unused, but it stays pinned, so the requirements files are
 untouched.
 
@@ -769,7 +778,8 @@ untouched.
 - **Durable:** `/backups` is the `db-backups` PVC (`k8s/backup-pvc.yaml`), not an
   `emptyDir`. A same-cluster PVC does not survive losing the cluster or its storage
   backend; off-site copies (VolumeSnapshots, or copying the already-encrypted files
-  from outside) are documented there but not automated.
+  from outside) are documented there but not automated. The production deploy job
+  (`ci.yml`) applies the PVC before the CronJobs.
 - **Encrypted to a public key:** `db_backup` encrypts to the age X25519 recipient in
   `app-config` `BACKUP_AGE_RECIPIENT` and refuses to run without one. The output is
   a standard age v1 file (`logging_manager/age_stream.py`, built on the pinned

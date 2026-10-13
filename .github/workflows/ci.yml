@@ -797,6 +797,8 @@ jobs:
           BACKEND_IMAGE: ${{ needs.setup.outputs.backend_image }}
         run: |
           set -euo pipefail
+          # db-backup mounts this claim; without it its pods stay Pending.
+          kubectl apply -n password-manager -f k8s/backup-pvc.yaml
           envsubst < k8s/cronjobs.yaml | kubectl apply -n password-manager -f -
 
       - name: Deploy to Kubernetes (Production)
