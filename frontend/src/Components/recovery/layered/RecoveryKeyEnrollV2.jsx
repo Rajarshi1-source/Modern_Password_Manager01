@@ -119,7 +119,9 @@ export default function RecoveryKeyEnrollV2({ onSuccess }) {
         <div>
           <button
             type="button"
-            onClick={() => copySecret(recoveryKey).catch(() => {})}
+            onClick={() => copySecret(recoveryKey).catch(
+              () => setError('Could not copy the key. Download it or copy it by hand.'),
+            )}
             data-testid="rk-copy"
           >
             Copy

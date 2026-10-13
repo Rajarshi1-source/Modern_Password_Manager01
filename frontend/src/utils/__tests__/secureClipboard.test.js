@@ -119,3 +119,29 @@ describe('scheduleClipboardClear', () => {
     expect(scheduleClipboardClear('x', { prefs: prefsWith({ clearClipboard: false }) })).toBe(false);
   });
 });
+
+describe('execCommand fallback (no Clipboard API)', () => {
+  it('clears a secret that was copied through the fallback', async () => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    let fallbackClipboard = null;
+    document.execCommand = vi.fn(() => {
+      const data = { setData: (_type, text) => { fallbackClipboard = text; } };
+      const event = new Event('copy', { cancelable: true });
+      event.clipboardData = data;
+      document.dispatchEvent(event);
+      // No listener intervened: behave like copying the current selection.
+      if (!event.defaultPrevented) fallbackClipboard = document.getSelection()?.toString() ?? '';
+      return true;
+    });
+    try {
+      await copySecret('fallback-secret', { prefs: prefsWith({ clipboardTimeout: 5 }) });
+      expect(document.execCommand).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(document.execCommand).toHaveBeenCalledTimes(2);
+      expect(fallbackClipboard).toBe('');
+    } finally {
+      delete document.execCommand;
+    }
+  });
+});

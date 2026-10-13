@@ -29,10 +29,32 @@ export function getClipboardClearSettings(prefs = preferencesService) {
   return { enabled, timeoutMs: timeoutSeconds * 1000 };
 }
 
+// Mirror of copyToClipboard's execCommand fallback (no Clipboard API, or not a
+// secure context): a `copy` event whose data we replace with ''. Browsers may
+// refuse execCommand outside a user gesture, so this is best-effort, and the
+// clipboard cannot be read first to check it still holds the secret.
+function clearViaExecCommand() {
+  if (typeof document === 'undefined' || typeof document.execCommand !== 'function') return false;
+  const onCopy = (event) => {
+    event.clipboardData?.setData('text/plain', '');
+    event.preventDefault();
+  };
+  document.addEventListener('copy', onCopy);
+  try {
+    return document.execCommand('copy') === true;
+  } catch {
+    return false;
+  } finally {
+    document.removeEventListener('copy', onCopy);
+  }
+}
+
 /** Clear the clipboard now if it still holds `value` (or unconditionally if value is null). */
 export async function clearClipboardIfUnchanged(value) {
   const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
-  if (!clipboard?.writeText) return false;
+  if (!clipboard?.writeText || (typeof window !== 'undefined' && window.isSecureContext === false)) {
+    return clearViaExecCommand();
+  }
   if (value != null && typeof clipboard.readText === 'function') {
     try {
       if ((await clipboard.readText()) !== value) return false;

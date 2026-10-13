@@ -203,9 +203,10 @@ const PasswordItem = ({ data, isDecrypted = true }) => {
       alert('Please decrypt the item first');
       return;
     }
-    copySecret(text).catch(() => {});
-    setCopiedField(label);
-    setTimeout(() => setCopiedField(null), 2000);
+    copySecret(text).then(() => {
+      setCopiedField(label);
+      setTimeout(() => setCopiedField(null), 2000);
+    }, () => {});
   };
 
   const togglePasswordVisibility = () => {

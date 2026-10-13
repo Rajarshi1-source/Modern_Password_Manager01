@@ -391,9 +391,10 @@ const VaultItemDetail = ({ item, onEdit, onDelete }) => {
   
   const handleCopy = (text, fieldName) => {
     // Clears after the user's clipboard timeout (Settings > Security).
-    copySecret(text).catch(() => {});
-    setCopiedField(fieldName);
-    setTimeout(() => setCopiedField(null), 2000);
+    copySecret(text).then(() => {
+      setCopiedField(fieldName);
+      setTimeout(() => setCopiedField(null), 2000);
+    }, () => {});
   };
   
   const getTypeIcon = () => {
