@@ -21,7 +21,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { X, Copy, Shield, ExternalLink, Clock } from 'lucide-react';
-import { scheduleClipboardClear } from '../../utils/secureClipboard';
+import { getClipboardClearSettings, scheduleClipboardClear } from '../../utils/secureClipboard';
 
 const Wrapper = styled.div`
   border: 1px solid rgba(74, 108, 247, 0.2);
@@ -140,6 +140,7 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
   }, []);
   const srcDoc = useMemo(() => buildSrcDoc(password || '', nonce), [password, nonce]);
   const [copied, setCopied] = useState(false);
+  const [clearInSeconds, setClearInSeconds] = useState(null);
   const [secondsLeft, setSecondsLeft] = useState(30);
 
   useEffect(() => {
@@ -148,14 +149,16 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
       if (!d || d.nonce !== nonce) return;
       if (d.type === 'fhe_share:iframe_copied') {
         setCopied(true);
-        // The sandboxed iframe copied the password, so its value is unknown
-        // here: clear unconditionally after the user's clipboard timeout.
-        scheduleClipboardClear(null);
+        // The iframe copied `password`; passing it lets the clear skip
+        // anything the user copied afterwards.
+        const { enabled, timeoutMs } = getClipboardClearSettings();
+        setClearInSeconds(enabled ? Math.round(timeoutMs / 1000) : null);
+        scheduleClipboardClear(password || null);
       }
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
-  }, [nonce]);
+  }, [nonce, password]);
 
   useEffect(() => {
     if (secondsLeft <= 0) {
@@ -199,7 +202,7 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
       <Footer>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
           <Clock size={12} /> Auto-closes in {secondsLeft}s
-          {copied && ' · clipboard will be cleared in ~20s'}
+          {copied && clearInSeconds !== null && ` · clipboard will be cleared in ~${clearInSeconds}s`}
           {tokenMetadata?.strength_class && ` · strength: ${tokenMetadata.strength_class}`}
         </span>
         <div style={{ display: 'inline-flex', gap: '0.4rem' }}>

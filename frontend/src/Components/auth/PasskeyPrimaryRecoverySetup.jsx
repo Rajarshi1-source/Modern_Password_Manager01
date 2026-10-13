@@ -214,8 +214,13 @@ const PasskeyPrimaryRecoverySetup = ({ passkeyCredentialId, deviceName, onComple
     }
   };
 
-  const copyToClipboard = () => {
-    copySecret(recoveryKey).catch(() => {});
+  const copyToClipboard = async () => {
+    try {
+      await copySecret(recoveryKey);
+    } catch {
+      toast.error('Could not copy the recovery key. Download it or copy it by hand.');
+      return;
+    }
     setKeyCopied(true);
     toast.success('Recovery key copied to clipboard!');
     setTimeout(() => setKeyCopied(false), 3000);

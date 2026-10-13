@@ -349,7 +349,9 @@ const CollectFragments = ({ deadDropId, onSuccess, onCancel }) => {
                         </div>
                         <button
                             className="copy-btn"
-                            onClick={() => copySecret(result.secret).catch(() => {})}
+                            onClick={() => copySecret(result.secret).catch(
+                                () => setError('Could not copy the secret. Copy it by hand.'),
+                            )}
                         >
                             📋 Copy to Clipboard
                         </button>

@@ -288,9 +288,11 @@ const PasswordGenerator = ({ onSelect }) => {
   };
 
   const handleCopy = () => {
-    copySecret(password).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    // "Copied" only once the copy actually succeeded.
+    copySecret(password).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }, () => {});
   };
 
   const handleUse = () => {
