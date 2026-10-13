@@ -256,6 +256,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # First: drops X-Forwarded-For from peers outside TRUSTED_PROXY_CIDRS
+    # before anything (DRF throttles, IP allowlist) reads it. No-op if unset.
+    'shared.client_ip.ForwardedForPeerMiddleware',
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -1330,6 +1333,18 @@ if TRUSTED_PROXY_COUNT < 0:
 if ONION_LISTENER:
     # Tor connects straight to this process; no proxy of ours wrote the header.
     TRUSTED_PROXY_COUNT = 0
+# Optional: addresses/CIDRs of those proxies (comma-separated). When set,
+# X-Forwarded-For from any other direct peer is dropped before Django, DRF or
+# shared/client_ip.py read it (shared.client_ip.ForwardedForPeerMiddleware).
+# Empty = trust any peer, which relies on the network admitting only the
+# proxies (k8s/network-policy.yaml allow-backend).
+TRUSTED_PROXY_CIDRS = [c.strip() for c in os.environ.get('TRUSTED_PROXY_CIDRS', '').split(',') if c.strip()]
+for _cidr in TRUSTED_PROXY_CIDRS:
+    try:
+        _ipaddress.ip_network(_cidr, strict=False)
+    except ValueError:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(f'TRUSTED_PROXY_CIDRS: invalid entry {_cidr!r}')
 # DRF's throttles read NUM_PROXIES with the same right-hand semantics. Unset,
 # they key anonymous clients on the WHOLE X-Forwarded-For string, which a
 # client can change on every request to get a fresh bucket.
