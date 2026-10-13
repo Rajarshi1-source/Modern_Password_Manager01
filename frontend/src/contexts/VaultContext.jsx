@@ -1229,13 +1229,9 @@ export const VaultProvider = ({ children }) => {
   const updateAutoLockTimeout = (minutes) => {
     setAutoLockTimeout(minutes);
     localStorage.setItem('autoLockTimeout', minutes.toString());
-    // Reset the timer with new timeout
-    if (isUnlocked) {
-      clearTimeout(autoLockTimerRef.current);
-      autoLockTimerRef.current = setTimeout(() => {
-        handleLockVault(true);
-      }, minutes * 60 * 1000);
-    }
+    // The auto-lock effect depends on `autoLockTimeout` and re-arms itself
+    // (activity-aware) on this change; a separate one-shot timer here would
+    // lock regardless of activity.
   };
 
   // Add these new methods for backup/restore

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { FaDice, FaCopy, FaCheck } from 'react-icons/fa';
 import { motion } from 'framer-motion';
+import { toast } from 'react-hot-toast';
 import { copySecret } from '../../utils/secureClipboard';
 import usePreference from '../../hooks/usePreference';
 import PasswordStrengthMeter from './PasswordStrengthMeter';
@@ -292,7 +293,9 @@ const PasswordGenerator = ({ onSelect }) => {
     copySecret(password).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    }, () => {});
+    }, () => {
+      toast.error('Could not copy the password. Copy it by hand.');
+    });
   };
 
   const handleUse = () => {

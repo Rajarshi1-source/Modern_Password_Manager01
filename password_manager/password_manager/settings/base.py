@@ -1326,7 +1326,11 @@ if not DEBUG:
 # header and use REMOTE_ADDR. k8s sets 1 (ingress-nginx replaces the header
 # with $remote_addr). Set it only when Django is unreachable except through
 # those proxies, or a direct client can still choose the value.
-TRUSTED_PROXY_COUNT = int(os.environ.get('TRUSTED_PROXY_COUNT', '0'))
+try:
+    TRUSTED_PROXY_COUNT = int(os.environ.get('TRUSTED_PROXY_COUNT', '0'))
+except ValueError:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('TRUSTED_PROXY_COUNT must be an integer') from None
 if TRUSTED_PROXY_COUNT < 0:
     from django.core.exceptions import ImproperlyConfigured
     raise ImproperlyConfigured('TRUSTED_PROXY_COUNT must be >= 0')

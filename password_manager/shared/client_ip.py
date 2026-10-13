@@ -49,8 +49,12 @@ def get_client_ip(request, default: Optional[str] = None) -> Optional[str]:
     if count and xff and _peer_is_trusted_proxy(remote_addr):
         addrs = xff.split(',')
         client = addrs[-min(count, len(addrs))].strip()
-        if client:
-            return client
+        # A misconfigured or bypassed proxy can leave junk here; callers store
+        # it in GenericIPAddressFields and parse it with ipaddress.
+        try:
+            return str(ipaddress.ip_address(client))
+        except ValueError:
+            pass
     return remote_addr or default
 
 

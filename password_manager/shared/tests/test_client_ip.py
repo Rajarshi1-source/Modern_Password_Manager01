@@ -39,6 +39,11 @@ class GetClientIpTests(SimpleTestCase):
         )
         self.assertEqual(get_client_ip(request), REAL_CLIENT)
 
+    @override_settings(TRUSTED_PROXY_COUNT=1)
+    def test_non_ip_entry_falls_back_to_remote_addr(self):
+        request = RequestFactory().get('/', REMOTE_ADDR=PROXY, HTTP_X_FORWARDED_FOR='1.2.3.4, not-an-ip')
+        self.assertEqual(get_client_ip(request), PROXY)
+
     @override_settings(TRUSTED_PROXY_COUNT=0)
     def test_no_trusted_proxy_ignores_the_header(self):
         self.assertEqual(get_client_ip(request_via_proxy('1.2.3.4')), PROXY)
