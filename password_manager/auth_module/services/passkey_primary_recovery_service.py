@@ -182,11 +182,16 @@ class PasskeyPrimaryRecoveryService:
         Returns:
             Dictionary containing decrypted credential data
         """
-        if encryption_metadata.get('version') != self.BLOB_VERSION:
-            raise ValueError(
-                "This recovery backup predates the Kyber fix and was never "
-                "decryptable. Revoke it and create a new backup."
-            )
+        version = encryption_metadata.get('version')
+        if version != self.BLOB_VERSION:
+            # Only missing/older versions are the pre-fix blobs; a newer one
+            # must not be called undecryptable and revoked.
+            if version is None or (isinstance(version, int) and version < self.BLOB_VERSION):
+                raise ValueError(
+                    "This recovery backup predates the Kyber fix and was never "
+                    "decryptable. Revoke it and create a new backup."
+                )
+            raise ValueError(f"Unsupported recovery backup version: {version!r}")
 
         try:
             # Extract metadata

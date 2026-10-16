@@ -69,6 +69,15 @@ class AgeStreamTests(SimpleTestCase):
         with self.assertRaises(age_stream.AgeError):
             b''.join(age_stream.decrypt_stream(io.BytesIO(out.getvalue()), IDENTITY))
 
+    def test_low_order_share_is_an_age_error(self):
+        ct = self._encrypt(b'secret')
+        prefix = b'age-encryption.org/v1\n-> X25519 '
+        share_b64 = ct[len(prefix):len(prefix) + 43]
+        # The all-zero point is low-order: X25519 with it yields an all-zero secret.
+        forged = ct.replace(share_b64, b'A' * 43, 1)
+        with self.assertRaisesRegex(age_stream.AgeError, 'low-order'):
+            b''.join(age_stream.decrypt_stream(io.BytesIO(forged), IDENTITY))
+
     def test_header_tampering_is_detected(self):
         ct = bytearray(self._encrypt(b'secret'))
         ct[len(b'age-encryption.org/v1\n-> X25519 ') + 2] ^= 1

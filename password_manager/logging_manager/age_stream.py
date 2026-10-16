@@ -269,7 +269,11 @@ def decrypt_stream(src, identity: str):
         share = _unb64(args[1])
         if len(share) != 32:
             raise AgeError('malformed X25519 share')
-        shared = private.exchange(X25519PublicKey.from_public_bytes(share))
+        try:
+            shared = private.exchange(X25519PublicKey.from_public_bytes(share))
+        except ValueError:
+            # Low-order share: the spec requires rejecting an all-zero secret.
+            raise AgeError('low-order X25519 share') from None
         wrap_key = _hkdf(shared, share + our_public, X25519_LABEL)
         try:
             file_key = ChaCha20Poly1305(wrap_key).decrypt(b'\x00' * 12, _unb64(bytes(body)), None)

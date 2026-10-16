@@ -762,12 +762,21 @@ the new helper itself.
 Review round 1 (2026-10-13):
 - `allow-backend` admitted port 8000 from any source, so with a count of 1 an
   in-cluster client that bypassed the ingress could choose the address. Its
-  ingress is now limited to the `ingress-nginx` namespace and the Prometheus pods.
-  A controller in another namespace needs that selector changed, or `/api` is cut
-  off (not validated on a cluster).
+  ingress is now limited to the ingress-nginx **controller pods** (namespace
+  `ingress-nginx` AND labels `app.kubernetes.io/name: ingress-nginx`,
+  `app.kubernetes.io/component: controller`; the namespace alone also admitted
+  its webhook and default-backend pods) and the Prometheus pods. A controller in
+  another namespace or with other labels needs the selector changed, or `/api` is
+  cut off (not validated on a cluster).
 - Optional `TRUSTED_PROXY_CIDRS`: when set, `shared.client_ip.ForwardedForPeerMiddleware`
   (first in `MIDDLEWARE`) drops `X-Forwarded-For` from any other direct peer, so DRF
   throttles and `get_client_ip` both ignore it.
+- **Residual risk:** Prometheus still reaches :8000 to scrape `/metrics`, and the
+  count of 1 trusts its `X-Forwarded-For` too, so a *compromised* Prometheus pod
+  could choose a client address. A NetworkPolicy cannot filter by path, and
+  serving metrics on a separate port is a larger change. Where the controller's
+  addresses can be pinned (`hostNetwork`, a dedicated node pool or pod CIDR), set
+  `TRUSTED_PROXY_CIDRS` to them, which closes this.
 - `docker/docker-compose.proxy-only.yml` unpublishes :8000 and sets the count to 1,
   for per-client throttling behind nginx.
 

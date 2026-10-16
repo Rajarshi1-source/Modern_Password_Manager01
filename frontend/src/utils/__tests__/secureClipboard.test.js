@@ -8,8 +8,12 @@ vi.mock('../../services/preferencesService', () => ({
   default: { get: (_path, fallback) => fallback },
 }));
 
+vi.mock('react-hot-toast', () => ({ toast: { error: vi.fn() } }));
+
+import { toast } from 'react-hot-toast';
 import {
   cancelScheduledClipboardClear,
+  clipboardAutoClearFailed,
   copySecret,
   getClipboardClearSettings,
   scheduleClipboardClear,
@@ -143,5 +147,38 @@ describe('execCommand fallback (no Clipboard API)', () => {
     } finally {
       delete document.execCommand;
     }
+  });
+});
+
+describe('a clear the browser refuses', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    toast.error.mockClear();
+  });
+
+  it('tells the user and records it', async () => {
+    await copySecret('the-password', { prefs: prefsWith({ clipboardTimeout: 5 }) });
+    navigator.clipboard.writeText.mockRejectedValueOnce(new DOMException('no gesture', 'NotAllowedError'));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(clipboardText).toBe('the-password');
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(clipboardAutoClearFailed()).toBe(true);
+  });
+
+  it('a later successful clear resets the record', async () => {
+    localStorage.setItem('clipboardAutoClearFailed', '1');
+    await copySecret('the-password', { prefs: prefsWith({ clipboardTimeout: 5 }) });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(clipboardText).toBe('');
+    expect(clipboardAutoClearFailed()).toBe(false);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('skipping because the user copied something else is not a failure', async () => {
+    await copySecret('the-password', { prefs: prefsWith({ clipboardTimeout: 5 }) });
+    clipboardText = 'something newer';
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(clipboardAutoClearFailed()).toBe(false);
   });
 });

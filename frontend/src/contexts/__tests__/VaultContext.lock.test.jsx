@@ -154,3 +154,27 @@ describe('VaultContext inactivity lock after a suspended tab', () => {
     }
   });
 });
+
+describe('VaultContext inactivity period starts at unlock', () => {
+  test('activity right after a late unlock does not lock', async () => {
+    sessionVaultCrypto.hasSessionKey.mockReturnValue(false);
+    const { result } = renderHook(() => useVault(), { wrapper });
+    await waitFor(() => expect(axios.get).toHaveBeenCalled());
+    expect(result.current.canEdit).toBe(false);
+
+    // The login page sat open for longer than the 5-minute timeout.
+    const later = Date.now() + 10 * 60 * 1000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(later);
+    try {
+      sessionVaultCrypto.hasSessionKey.mockReturnValue(true);
+      act(() => { window.dispatchEvent(new Event('vault:updated')); });
+      await waitFor(() => expect(result.current.canEdit).toBe(true));
+
+      act(() => { window.dispatchEvent(new Event('mousemove')); });
+      expect(sessionVaultCrypto.clearSessionKey).not.toHaveBeenCalled();
+      expect(result.current.canEdit).toBe(true);
+    } finally {
+      now.mockRestore();
+    }
+  });
+});
