@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import styled from 'styled-components';
 import preferencesService from '../../services/preferencesService';
+import { clipboardAutoClearFailed } from '../../utils/secureClipboard';
 import { FaShieldAlt, FaLock, FaClock, FaFingerprint, FaKey, FaClipboard, FaRandom, FaEye, FaExclamationTriangle, FaCheckCircle, FaInfoCircle, FaGlobe } from 'react-icons/fa';
 import {
   Section,
@@ -300,6 +301,12 @@ const SecuritySettings = () => {
           <SettingInfo>
             <h3>Clear Clipboard Automatically</h3>
             <p>Remove copied passwords from clipboard after a short time</p>
+            {clipboardAutoClearFailed() && (
+              <p role="status">
+                Your browser blocked the last automatic clear, so a copied
+                password may stay on the clipboard until you copy something else.
+              </p>
+            )}
           </SettingInfo>
           <SettingControl>
             <ToggleSwitch

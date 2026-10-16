@@ -9,16 +9,45 @@
  * The clear only happens if the clipboard still holds the copied value,
  * checked with readText() where the browser permits it, so something the
  * user copied afterwards is left alone. Where reading is not permitted the
- * clear is best-effort. Browsers can also refuse the write (for example
- * Chromium when the page is not focused); that is logged, not thrown.
+ * clear is best-effort. Browsers can also refuse the write (Firefox and
+ * Safari need a fresh user gesture; Chromium a focused page). A refused clear
+ * is told to the user, and remembered so Settings can say so too.
  */
 
 import preferencesService from '../services/preferencesService';
+import { toast } from 'react-hot-toast';
 import { copyToClipboard } from './clipboard';
 
 export const DEFAULT_CLIPBOARD_TIMEOUT_SECONDS = 30;
 
 let pendingTimer = null;
+
+const CLEAR_FAILED_KEY = 'clipboardAutoClearFailed';
+
+/** True if the browser refused the most recent automatic clear. */
+export function clipboardAutoClearFailed() {
+  try {
+    return localStorage.getItem(CLEAR_FAILED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function recordClearOutcome(cleared) {
+  try {
+    if (cleared) localStorage.removeItem(CLEAR_FAILED_KEY);
+    else localStorage.setItem(CLEAR_FAILED_KEY, '1');
+  } catch {
+    // Storage unavailable: the toast below still tells the user.
+  }
+  if (!cleared) {
+    toast.error(
+      'Your browser blocked clearing the clipboard. The copied password may '
+      + 'still be there: copy something else to replace it.',
+      { id: 'clipboard-clear-failed', duration: 10000 },
+    );
+  }
+}
 
 /** The user's clipboard-clear settings, with the defaults applied. */
 export function getClipboardClearSettings(prefs = preferencesService) {
@@ -53,7 +82,9 @@ function clearViaExecCommand() {
 export async function clearClipboardIfUnchanged(value) {
   const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
   if (!clipboard?.writeText || (typeof window !== 'undefined' && window.isSecureContext === false)) {
-    return clearViaExecCommand();
+    const cleared = clearViaExecCommand();
+    recordClearOutcome(cleared);
+    return cleared;
   }
   if (value != null && typeof clipboard.readText === 'function') {
     try {
@@ -64,9 +95,11 @@ export async function clearClipboardIfUnchanged(value) {
   }
   try {
     await clipboard.writeText('');
+    recordClearOutcome(true);
     return true;
   } catch (err) {
     console.warn('Could not clear the clipboard:', err?.message || err);
+    recordClearOutcome(false);
     return false;
   }
 }

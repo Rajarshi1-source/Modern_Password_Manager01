@@ -188,6 +188,18 @@ class PasskeyPrimaryRecoveryKyberCustodyTests(SimpleTestCase):
         with self.assertRaisesRegex(ValueError, 'never decryptable'):
             self.service.decrypt_passkey_credential(encrypted, self.recovery_key, metadata)
 
+    def test_missing_version_is_a_pre_fix_backup(self):
+        encrypted, metadata = self.service.encrypt_passkey_credential(CREDENTIAL, self.recovery_key)
+        del metadata['version']
+        with self.assertRaisesRegex(ValueError, 'never decryptable'):
+            self.service.decrypt_passkey_credential(encrypted, self.recovery_key, metadata)
+
+    def test_newer_version_is_unsupported_not_never_decryptable(self):
+        encrypted, metadata = self.service.encrypt_passkey_credential(CREDENTIAL, self.recovery_key)
+        metadata['version'] = self.service.BLOB_VERSION + 1
+        with self.assertRaisesRegex(ValueError, 'Unsupported recovery backup version'):
+            self.service.decrypt_passkey_credential(encrypted, self.recovery_key, metadata)
+
     def test_simulation_refusal_is_not_reported_as_bad_input(self):
         with simulated_kem():
             with self.assertRaises(ImproperlyConfigured):

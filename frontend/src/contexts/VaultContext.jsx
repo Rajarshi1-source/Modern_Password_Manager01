@@ -449,6 +449,11 @@ export const VaultProvider = ({ children }) => {
     // Only set up the timer if the vault is unlocked
     if (!autoLockArmed) return;
 
+    // The idle period starts now. Activity is only tracked while armed, so
+    // the timestamp may date from mount or from an earlier lock; left as is,
+    // the first event after a slow unlock would lock the vault at once.
+    lastActivityRef.current = Date.now();
+
     // Convert minutes to milliseconds
     const timeoutMs = autoLockTimeout * 60 * 1000;
 
