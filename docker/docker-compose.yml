@@ -207,10 +207,10 @@ services:
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
-      # Client IP (F14). 0 = use REMOTE_ADDR and ignore X-Forwarded-For,
-      # required while :8000 is published. For per-client throttling behind
-      # nginx, add docker-compose.proxy-only.yml (unpublishes :8000, sets 1).
-      - TRUSTED_PROXY_COUNT=${TRUSTED_PROXY_COUNT:-0}
+      # Client IP (F14). 0 = use REMOTE_ADDR and ignore X-Forwarded-For. Pinned,
+      # not read from .env, because :8000 is published. For per-client throttling
+      # behind nginx, add docker-compose.proxy-only.yml (unpublishes :8000, sets 1).
+      - TRUSTED_PROXY_COUNT=0
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       - DATABASE_HOST=pgbouncer
       - DATABASE_PORT=6432

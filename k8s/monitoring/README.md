@@ -80,6 +80,11 @@ curl -XPOST localhost:9093/api/v2/alerts -H 'Content-Type: application/json' \
   -d '[{"labels":{"alertname":"DeliveryTest","severity":"info"}}]'
 ```
 
+A `200` only means Alertmanager accepted the alert, not that it was delivered.
+Wait for `group_wait` (30 s), then confirm `DeliveryTest` arrived at the
+receiver itself. If it did not, check `kubectl -n password-manager logs
+deploy/alertmanager` for `Notify ... failed`.
+
 For delivery that is itself monitored, add an always-firing "watchdog" rule
 routed to an external dead-man's-switch service. Nothing in-cluster can tell
 you that Alertmanager itself is down.

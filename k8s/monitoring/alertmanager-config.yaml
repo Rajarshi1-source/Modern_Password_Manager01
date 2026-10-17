@@ -44,5 +44,5 @@ data:
         #       send_resolved: true
         #   pagerduty_configs:
         #     - routing_key_file: /etc/alertmanager-secrets/pagerduty-routing-key
-        # (the *_file fields above all exist in Alertmanager v0.27.0, the
+        # (the *_file fields above all exist in Alertmanager v0.28.1, the
         # pinned image).
