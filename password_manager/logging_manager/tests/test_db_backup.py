@@ -84,6 +84,15 @@ class AgeStreamTests(SimpleTestCase):
         with self.assertRaises(age_stream.AgeError):
             b''.join(age_stream.decrypt_stream(io.BytesIO(bytes(ct)), IDENTITY))
 
+    def test_non_base64_header_is_an_age_error(self):
+        ct = self._encrypt(b'secret')
+        prefix = b'age-encryption.org/v1\n-> X25519 '
+        mac_at = ct.index(b'\n--- ') + len(b'\n--- ')
+        for at in (len(prefix), mac_at):  # the X25519 share, the header MAC
+            forged = ct[:at] + b'*' + ct[at + 1:]
+            with self.assertRaisesRegex(age_stream.AgeError, 'invalid base64'):
+                b''.join(age_stream.decrypt_stream(io.BytesIO(forged), IDENTITY))
+
     def test_bad_recipient_rejected(self):
         with self.assertRaises(age_stream.AgeError):
             age_stream.parse_recipient(RECIPIENT[:-1] + ('q' if RECIPIENT[-1] != 'q' else 'p'))

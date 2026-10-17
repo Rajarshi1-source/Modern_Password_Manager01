@@ -130,7 +130,10 @@ def _b64(data):
 def _unb64(data):
     if data.endswith(b'=') or b'\n' in data:
         raise AgeError('non-canonical base64')
-    out = base64.b64decode(data + b'=' * (-len(data) % 4), validate=True)
+    try:
+        out = base64.b64decode(data + b'=' * (-len(data) % 4), validate=True)
+    except ValueError:  # binascii.Error: a byte outside the base64 alphabet
+        raise AgeError('invalid base64') from None
     if _b64(out) != data:
         raise AgeError('non-canonical base64')
     return out
