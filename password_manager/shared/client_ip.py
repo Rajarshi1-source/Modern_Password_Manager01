@@ -46,9 +46,8 @@ def get_client_ip(request, default: Optional[str] = None) -> Optional[str]:
     remote_addr = request.META.get('REMOTE_ADDR') or None
     count = trusted_proxy_count()
     xff = request.META.get('HTTP_X_FORWARDED_FOR')
-    if count and xff and _peer_is_trusted_proxy(remote_addr):
-        addrs = xff.split(',')
-        client = addrs[-min(count, len(addrs))].strip()
+    if count and xff and _peer_is_trusted_proxy(remote_addr) and not _short_chain(xff, count):
+        client = xff.split(',')[-count].strip()
         # A misconfigured or bypassed proxy can leave junk here; callers store
         # it in GenericIPAddressFields and parse it with ipaddress.
         try:
@@ -58,11 +57,19 @@ def get_client_ip(request, default: Optional[str] = None) -> Optional[str]:
     return remote_addr or default
 
 
+def _short_chain(xff: str, count: int) -> bool:
+    """Fewer entries than trusted proxies: no trusted-hop boundary exists, so
+    no entry can be attributed to our proxies. Treat it as absent."""
+    return len(xff.split(',')) < count
+
+
 class ForwardedForPeerMiddleware:
-    """Drop X-Forwarded-For unless the direct peer is in TRUSTED_PROXY_CIDRS.
+    """Drop X-Forwarded-For unless the direct peer is in TRUSTED_PROXY_CIDRS
+    (any peer when that is empty), or when the chain is shorter than
+    TRUSTED_PROXY_COUNT.
 
     Runs first, so DRF's throttles (which read the header via NUM_PROXIES)
-    and get_client_ip() see the same thing. A no-op when the setting is empty.
+    and get_client_ip() see the same thing.
     """
 
     async_capable = True
@@ -75,9 +82,13 @@ class ForwardedForPeerMiddleware:
 
     @staticmethod
     def _strip(request):
-        if 'HTTP_X_FORWARDED_FOR' in request.META and not _peer_is_trusted_proxy(
-            request.META.get('REMOTE_ADDR')
-        ):
+        xff = request.META.get('HTTP_X_FORWARDED_FOR')
+        if xff is None:
+            return
+        # DRF's NUM_PROXIES path would otherwise pick addrs[0] from a short
+        # chain while get_client_ip falls back to REMOTE_ADDR.
+        if (not _peer_is_trusted_proxy(request.META.get('REMOTE_ADDR'))
+                or _short_chain(xff, trusted_proxy_count())):
             del request.META['HTTP_X_FORWARDED_FOR']
 
     def __call__(self, request):

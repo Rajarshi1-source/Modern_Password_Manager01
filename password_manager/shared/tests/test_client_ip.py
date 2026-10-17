@@ -135,3 +135,29 @@ class TrustedProxyCidrTests(SimpleTestCase):
         with override_settings(IP_WHITELISTING_ENABLED=True, ALLOWED_IP_RANGES={ALLOWLISTED}):
             middleware = SecurityMiddleware(lambda r: HttpResponse('ok'))
             self.assertEqual(middleware(self.direct_request()).status_code, 403)
+
+
+@override_settings(TRUSTED_PROXY_COUNT=2)
+class ShortChainTests(SimpleTestCase):
+    """Fewer X-Forwarded-For entries than trusted proxies: no entry can be
+    attributed to our proxies, so the header is not used at all."""
+
+    def short_request(self):
+        return RequestFactory().get('/', REMOTE_ADDR=PROXY, HTTP_X_FORWARDED_FOR=ALLOWLISTED)
+
+    def test_helper_falls_back_to_remote_addr(self):
+        self.assertEqual(get_client_ip(self.short_request()), PROXY)
+
+    def test_middleware_strips_it_so_drf_agrees(self):
+        request = self.short_request()
+        ForwardedForPeerMiddleware(lambda r: None)(request)
+        self.assertNotIn('HTTP_X_FORWARDED_FOR', request.META)
+        with override_settings(REST_FRAMEWORK={'NUM_PROXIES': 2}):
+            self.assertEqual(SimpleRateThrottle.get_ident(None, request), PROXY)
+
+    def test_a_full_chain_is_still_used(self):
+        request = RequestFactory().get(
+            '/', REMOTE_ADDR=PROXY, HTTP_X_FORWARDED_FOR=f'{REAL_CLIENT}, 10.0.0.9',
+        )
+        ForwardedForPeerMiddleware(lambda r: None)(request)
+        self.assertEqual(get_client_ip(request), REAL_CLIENT)

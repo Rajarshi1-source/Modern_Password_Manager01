@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 
 /**
@@ -171,6 +171,61 @@ describe('VaultContext inactivity period starts at unlock', () => {
       await waitFor(() => expect(result.current.canEdit).toBe(true));
 
       act(() => { window.dispatchEvent(new Event('mousemove')); });
+      expect(sessionVaultCrypto.clearSessionKey).not.toHaveBeenCalled();
+      expect(result.current.canEdit).toBe(true);
+    } finally {
+      now.mockRestore();
+    }
+  });
+});
+
+describe('VaultContext auto-lock follows Settings > Security', () => {
+  // Settings writes security.autoLockTimeout (seconds) and
+  // security.autoLockEnabled through preferencesService; the timer used to
+  // read a localStorage key nothing wrote.
+  let preferencesService;
+  let autoLockTimeoutSeconds;
+  beforeEach(async () => {
+    ({ default: preferencesService, autoLockTimeoutSeconds } = await import('../../services/preferencesService'));
+  });
+  afterEach(() => {
+    preferencesService.set('security.autoLockTimeout', 300);
+    preferencesService.set('security.autoLockEnabled', true);
+  });
+
+  test('units: seconds as stored, legacy minute values, junk', () => {
+    expect(autoLockTimeoutSeconds(300)).toBe(300);
+    expect(autoLockTimeoutSeconds(3600)).toBe(3600);
+    expect(autoLockTimeoutSeconds(5)).toBe(300); // old default meant 5 minutes
+    expect(autoLockTimeoutSeconds('nope')).toBe(300);
+    expect(autoLockTimeoutSeconds(0)).toBe(300);
+  });
+
+  test('a 1-minute setting locks after a minute idle', async () => {
+    preferencesService.set('security.autoLockTimeout', 60);
+    const { result } = renderHook(() => useVault(), { wrapper });
+    await waitFor(() => expect(result.current.canEdit).toBe(true));
+    expect(result.current.autoLockTimeout).toBe(1);
+
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start + 61 * 1000);
+    try {
+      act(() => { window.dispatchEvent(new Event('focus')); });
+      expect(result.current.canEdit).toBe(false);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test('turning auto-lock off disarms it', async () => {
+    preferencesService.set('security.autoLockEnabled', false);
+    const { result } = renderHook(() => useVault(), { wrapper });
+    await waitFor(() => expect(result.current.canEdit).toBe(true));
+
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start + 60 * 60 * 1000);
+    try {
+      act(() => { window.dispatchEvent(new Event('focus')); });
       expect(sessionVaultCrypto.clearSessionKey).not.toHaveBeenCalled();
       expect(result.current.canEdit).toBe(true);
     } finally {

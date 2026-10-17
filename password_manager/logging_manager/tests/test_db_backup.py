@@ -117,6 +117,13 @@ class DbBackupTests(TestCase):
         self.assertEqual(status.last_file, path.name)
         self.assertEqual(status.last_size_bytes, len(raw))
 
+    def test_runs_in_the_same_second_do_not_share_a_file(self):
+        frozen = timezone.now()
+        with patch.object(db_backup.timezone, 'now', return_value=frozen):
+            self.run_backup(keep=0)
+            self.run_backup(keep=0)
+        self.assertEqual(len(self.backups()), 2)
+
     def test_refuses_to_run_without_a_recipient(self):
         with self.assertRaisesRegex(CommandError, 'recipient'):
             call_command('db_backup', output=str(self.dir), recipient='', stdout=io.StringIO())
