@@ -144,3 +144,14 @@ export async function copySecret(text, options = {}) {
   await copyToClipboard(text);
   scheduleClipboardClear(text, options);
 }
+
+/**
+ * Copy a non-secret value (username, URL, email): no clear of its own. A
+ * successful copy has replaced any secret still waiting to be cleared, so
+ * that pending clear is cancelled; where readText() is refused it would
+ * otherwise erase this value instead.
+ */
+export async function copyPlain(text) {
+  await copyToClipboard(text);
+  cancelScheduledClipboardClear();
+}
