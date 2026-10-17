@@ -67,6 +67,13 @@ Scans are required:
 - **Status:** Accepted risk (no upstream fix exists — the GHSA range is `introduced: 0` → `last_affected: 3.10.3`, i.e. every published release including the one CI resolves, and pip-audit reports `fix_versions: []`; pinning cannot help). Suppressed in `password_manager/pip-audit-ignores.txt` with a dated expiry, re-evaluated on each renewal.
 - **Note:** The PYSEC record for this CVE lists `fixed: 3.10.3` while the GHSA alias does not; pip-audit follows the wider GHSA range. Reading only the PYSEC half would suggest the finding is already resolved and lead to removing a suppression CI still needs.
 
+### 6️⃣ `Twisted` – IMAP LIST Wildcard ReDoS (CVE-2026-106454)
+- **Source:** Indirect dependency (daphne's ASGI server, scrapy); `Twisted>=26.4.0` in `requirements.txt` is a floor for an older, fixed advisory.
+- **Severity (upstream):** Medium — GitHub advisory GHSA-8pqf-f4m5-798g.
+- **Issue:** `twisted.mail.imap4.wildcardToRegexp()` compiles an authenticated IMAP client's LIST/LSUB pattern as a regex, so a backtracking pattern can stall the reactor.
+- **Mitigation:** Unreachable in this codebase — no `twisted.mail`, `imap4` or IMAP service anywhere in `password_manager/`.
+- **Status:** Accepted risk (no upstream fix: affected `<= 26.4.0`, which is the newest release, `fix_versions: []`). Suppressed in `password_manager/pip-audit-ignores.txt` with a short expiry; remove it and raise the `Twisted>=` floor once a fixed release ships.
+
 ---
 
 ## 🚨 Reporting a Vulnerability

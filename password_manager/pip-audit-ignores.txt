@@ -274,3 +274,19 @@ PYSEC-2026-3740 exp:2026-10-25
 # own signing/verification goes through cryptography (Ed25519/EC via
 # hazmat.primitives.asymmetric) and liboqs, never ecdsa directly.
 PYSEC-2026-1325 exp:2026-10-30
+
+# Twisted ReDoS in twisted.mail.imap4.wildcardToRegexp (CVE-2026-106454,
+# alias GHSA-8pqf-f4m5-798g, medium), surfaced on PR #555's scan 2026-10-16.
+# NO upstream fix yet: GitHub's advisory lists the range `<= 26.4.0` with no
+# first_patched_version, PyPI's feed for twisted/26.4.0 lists fixed_in [],
+# and 26.4.0 is the newest Twisted release, so no pin can help (verified
+# 2026-10-17 against the GitHub advisory API and pypi.org JSON).
+#
+# Unreachable here, verified by grep rather than assumed: no `twisted.mail`,
+# `imap4` or IMAP server anywhere in password_manager/ (excluding the venv).
+# Twisted is only transitive (daphne's ASGI server, scrapy); the vulnerable
+# function compiles a LIST/LSUB pattern sent by an authenticated IMAP client,
+# and this app runs no IMAP service. Short expiry: drop this entry as soon as
+# a fixed Twisted ships, and raise the `Twisted>=` floor in every
+# requirements file to it.
+CVE-2026-106454 exp:2026-11-16
