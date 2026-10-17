@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { FaDice, FaCopy, FaCheck } from 'react-icons/fa';
 import { motion } from 'framer-motion';
-import { copyToClipboard } from '../../utils/clipboard';
+import { toast } from 'react-hot-toast';
+import { copySecret } from '../../utils/secureClipboard';
 import usePreference from '../../hooks/usePreference';
 import PasswordStrengthMeter from './PasswordStrengthMeter';
 import SynestheticSignature from './SynestheticSignature';
@@ -288,9 +289,13 @@ const PasswordGenerator = ({ onSelect }) => {
   };
 
   const handleCopy = () => {
-    copyToClipboard(password);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    // "Copied" only once the copy actually succeeded.
+    copySecret(password).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }, () => {
+      toast.error('Could not copy the password. Copy it by hand.');
+    });
   };
 
   const handleUse = () => {
@@ -324,7 +329,7 @@ const PasswordGenerator = ({ onSelect }) => {
       </ModeToggle>
 
       <PasswordDisplay>
-        <PasswordText>{password}</PasswordText>
+        <PasswordText data-testid="generated-password">{password}</PasswordText>
         {quantumCertificate && (
           <QuantumBadge onClick={() => setShowCertModal(true)}>
             ⚛️ Quantum Certified
@@ -376,7 +381,7 @@ const PasswordGenerator = ({ onSelect }) => {
             showEvolution={true}
           />
         )}
-        <ActionButton onClick={handleCopy}>
+        <ActionButton onClick={handleCopy} data-testid="copy-password">
           <FaCopy /> Copy
         </ActionButton>
         {onSelect && (

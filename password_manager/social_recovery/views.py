@@ -32,6 +32,7 @@ from .services import (
     submit_attestation,
 )
 from .services.recovery_completion_service import cancel_request
+from shared.client_ip import get_client_ip
 
 
 User = get_user_model()
@@ -39,11 +40,7 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
-def _client_ip(request):
-    xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
+_client_ip = get_client_ip
 
 
 # ---------------------------------------------------------------------------

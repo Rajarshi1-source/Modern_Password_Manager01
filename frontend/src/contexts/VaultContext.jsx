@@ -10,11 +10,17 @@ import { decryptEnvelope, encryptEnvelope, hasVaultSessionKey } from '../service
 import onionSyncService from '../services/onionSyncService';
 import decoyVaultStore from '../services/hiddenVault/decoyVaultStore';
 import { vaultUserId } from '../services/hiddenVault/vaultIdentity';
+import preferencesService, { autoLockTimeoutSeconds } from '../services/preferencesService';
 
 const VaultContext = createContext();
 
-// Default auto-lock timeout in minutes
-const DEFAULT_AUTO_LOCK_TIMEOUT = 5;
+// The user's auto-lock settings (Settings > Security). Read from the same
+// preferencesService path SecuritySettings writes; this used to read a
+// localStorage key nothing wrote, so the setting changed nothing.
+const readAutoLockPreference = () => ({
+  enabled: preferencesService.get('security.autoLockEnabled', true) !== false,
+  seconds: autoLockTimeoutSeconds(preferencesService.get('security.autoLockTimeout')),
+});
 // Maximum number of pending changes to prevent memory issues
 const MAX_PENDING_CHANGES = 500;
 
@@ -24,9 +30,18 @@ export const VaultProvider = ({ children }) => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [autoLockTimeout, setAutoLockTimeout] = useState(
-    parseInt(localStorage.getItem('autoLockTimeout')) || DEFAULT_AUTO_LOCK_TIMEOUT
-  );
+  const [autoLockPreference, setAutoLockPreference] = useState(readAutoLockPreference);
+  useEffect(() => {
+    const refresh = () => setAutoLockPreference(readAutoLockPreference());
+    const unsubscribe = [
+      preferencesService.onChange('security.autoLockTimeout', refresh),
+      preferencesService.onChange('security.autoLockEnabled', refresh),
+    ];
+    refresh();
+    return () => unsubscribe.forEach((off) => off());
+  }, []);
+  // Minutes, as this context has always exposed it.
+  const autoLockTimeout = autoLockPreference.seconds / 60;
   const [syncStatus, setSyncStatus] = useState('idle');
   // Which transport the last sync actually used, and whether that was a
   // downgrade from what the user asked for. Consumers render privacy state
@@ -94,11 +109,6 @@ export const VaultProvider = ({ children }) => {
       isMountedRef.current = false;
     };
   }, []);
-
-  const updateActivity = () => {
-    lastActivityRef.current = Date.now();
-  };
-
 
   // Fix #6: Check if component is mounted before updating state
   const checkIfInitialized = useCallback(async () => {
@@ -443,13 +453,23 @@ export const VaultProvider = ({ children }) => {
     }
   }, [isUnlocked, handleLockVault, handleStorageEvent, refreshItems]);
 
-  // Setup activity monitoring for auto-lock
+  // Setup activity monitoring for auto-lock.
+  //
+  // Armed by `sessionUnlocked` (a live vault session key), not only by the
+  // legacy `isUnlocked`: nothing ever sets `isUnlocked` to true in the live
+  // login flow (see the PR F note on `sessionUnlocked` above), so gating on it
+  // alone meant the inactivity lock never ran at all.
+  const autoLockArmed = isUnlocked || sessionUnlocked;
   useEffect(() => {
-    // Only set up the timer if the vault is unlocked
-    if (!isUnlocked) return;
+    // Only set up the timer if the vault is unlocked and the user wants it
+    if (!autoLockArmed || !autoLockPreference.enabled) return;
 
-    // Convert minutes to milliseconds
-    const timeoutMs = autoLockTimeout * 60 * 1000;
+    // The idle period starts now. Activity is only tracked while armed, so
+    // the timestamp may date from mount or from an earlier lock; left as is,
+    // the first event after a slow unlock would lock the vault at once.
+    lastActivityRef.current = Date.now();
+
+    const timeoutMs = autoLockPreference.seconds * 1000;
 
     // Create the auto-lock timer that checks elapsed time since last activity
     const checkInactivity = () => {
@@ -469,6 +489,25 @@ export const VaultProvider = ({ children }) => {
     // Start monitoring inactivity
     autoLockTimerRef.current = setTimeout(checkInactivity, timeoutMs);
 
+    // A background tab's timers are throttled or frozen, so `checkInactivity`
+    // can run long after the deadline. The first event on return (focus, a
+    // mousemove) must not count as activity that rescues an already-expired
+    // session: check the deadline before recording it.
+    const updateActivity = () => {
+      if (Date.now() - lastActivityRef.current >= timeoutMs) {
+        handleLockVault(true);
+        return;
+      }
+      lastActivityRef.current = Date.now();
+    };
+    // Becoming visible again is not activity; only check the deadline.
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible'
+          && Date.now() - lastActivityRef.current >= timeoutMs) {
+        handleLockVault(true);
+      }
+    };
+
     // Track user activity events
     const activityEvents = [
       'mousedown', 'mousemove', 'keydown',
@@ -479,6 +518,7 @@ export const VaultProvider = ({ children }) => {
     activityEvents.forEach(event => {
       window.addEventListener(event, updateActivity, { passive: true });
     });
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     // Clean up
     return () => {
@@ -486,8 +526,9 @@ export const VaultProvider = ({ children }) => {
       activityEvents.forEach(event => {
         window.removeEventListener(event, updateActivity);
       });
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [isUnlocked, autoLockTimeout, handleLockVault]);
+  }, [autoLockArmed, autoLockPreference.enabled, autoLockPreference.seconds, handleLockVault]);
 
   // Handle Firebase real-time updates
   const handleFirebaseUpdate = useCallback(async (firebaseItems) => {
@@ -1205,15 +1246,9 @@ export const VaultProvider = ({ children }) => {
   }, [items, vaultService, mutateDecoyRows]);
 
   const updateAutoLockTimeout = (minutes) => {
-    setAutoLockTimeout(minutes);
-    localStorage.setItem('autoLockTimeout', minutes.toString());
-    // Reset the timer with new timeout
-    if (isUnlocked) {
-      clearTimeout(autoLockTimerRef.current);
-      autoLockTimerRef.current = setTimeout(() => {
-        handleLockVault(true);
-      }, minutes * 60 * 1000);
-    }
+    // Through the shared preference (seconds), so Settings and this timer
+    // agree; the auto-lock effect re-arms itself on the change.
+    preferencesService.set('security.autoLockTimeout', minutes * 60);
   };
 
   // Add these new methods for backup/restore

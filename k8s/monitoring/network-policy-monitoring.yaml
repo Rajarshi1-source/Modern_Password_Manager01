@@ -43,3 +43,47 @@ spec:
       ports:
         - protocol: UDP
           port: 53
+---
+# Alertmanager. Under default-deny-all (k8s/network-policy.yaml) it could
+# neither receive alerts from Prometheus nor reach any receiver, so even a
+# configured receiver would deliver nothing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-alertmanager
+  namespace: password-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: alertmanager
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: password-manager
+              component: prometheus
+      ports:
+        - protocol: TCP
+          port: 9093
+  egress:
+    # The receiver (webhook / Slack / PagerDuty) over HTTPS. Narrow the CIDR
+    # to your provider's ranges if they publish them.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    # DNS, to resolve the receiver's hostname. This policy isolates the pod's
+    # egress by itself, so without allow-dns (k8s/network-policy.yaml)
+    # nothing else permits it.
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

@@ -7,7 +7,7 @@ trusted authorities, and duress events.
 
 import logging
 from django.core.cache import caches
-from ipware import get_client_ip
+from shared.client_ip import get_client_ip
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
@@ -938,7 +938,7 @@ def duress_signal_report(request):
         and _within_report_budget(request.user.id)
     ):
         try:
-            ip_address, _ = get_client_ip(request)
+            ip_address = get_client_ip(request)
             service = get_duress_code_service()
             service.consume_unlock_signal(
                 user=request.user,

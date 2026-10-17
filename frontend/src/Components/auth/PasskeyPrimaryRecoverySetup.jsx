@@ -5,6 +5,7 @@ import { FaKey, FaShieldAlt, FaCheckCircle, FaCopy, FaExclamationTriangle, FaDow
 import { QRCodeSVG } from 'qrcode.react';
 import ApiService from '../../services/api';
 import toast from 'react-hot-toast';
+import { copySecret } from '../../utils/secureClipboard';
 
 const Container = styled.div`
   min-height: 100vh;
@@ -213,8 +214,13 @@ const PasskeyPrimaryRecoverySetup = ({ passkeyCredentialId, deviceName, onComple
     }
   };
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(recoveryKey);
+  const copyToClipboard = async () => {
+    try {
+      await copySecret(recoveryKey);
+    } catch {
+      toast.error('Could not copy the recovery key. Download it or copy it by hand.');
+      return;
+    }
     setKeyCopied(true);
     toast.success('Recovery key copied to clipboard!');
     setTimeout(() => setKeyCopied(false), 3000);

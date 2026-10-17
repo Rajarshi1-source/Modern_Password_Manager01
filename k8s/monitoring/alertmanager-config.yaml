@@ -1,3 +1,16 @@
+# Alertmanager routing. The receiver's endpoint is read from a Secret at send
+# time (`url_file`), so no credential lives in this ConfigMap or in git.
+#
+# Before this, the only receiver had no integrations: every alert, including
+# backup failures, was delivered nowhere (docs/pqc-hybrid-architecture-review.md,
+# section 9).
+#
+# Configure (see k8s/monitoring/README.md, "Alert delivery"):
+#   kubectl create secret generic alertmanager-receiver \
+#     --namespace=password-manager \
+#     --from-literal=webhook-url='https://hooks.example.com/your/endpoint'
+# The Alertmanager pod does not start until that Secret exists, so a missing
+# receiver shows up as a stuck pod rather than as silence.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -12,9 +25,24 @@ data:
       resolve_timeout: 5m
     route:
       receiver: default
+      group_by: ['alertname']
       group_wait: 30s
       group_interval: 5m
       repeat_interval: 4h
     receivers:
       - name: default
-        # Add slack_configs, pagerduty_configs, email_configs, or webhook_configs here.
+        # Generic webhook (Alertmanager's JSON payload). The URL is a secret:
+        # it is read from the mounted alertmanager-receiver Secret.
+        webhook_configs:
+          - url_file: /etc/alertmanager-secrets/webhook-url
+            send_resolved: true
+        # To use another integration instead, replace webhook_configs and put
+        # the matching key in the same Secret, for example:
+        #   slack_configs:
+        #     - api_url_file: /etc/alertmanager-secrets/slack-api-url
+        #       channel: '#alerts'
+        #       send_resolved: true
+        #   pagerduty_configs:
+        #     - routing_key_file: /etc/alertmanager-secrets/pagerduty-routing-key
+        # (the *_file fields above all exist in Alertmanager v0.28.1, the
+        # pinned image).

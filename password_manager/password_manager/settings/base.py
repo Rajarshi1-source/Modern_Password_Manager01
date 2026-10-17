@@ -256,6 +256,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # First: drops X-Forwarded-For from peers outside TRUSTED_PROXY_CIDRS
+    # before anything (DRF throttles, IP allowlist) reads it. No-op if unset.
+    'shared.client_ip.ForwardedForPeerMiddleware',
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -1315,6 +1318,41 @@ if not DEBUG:
         SECURE_PROXY_SSL_HEADER = None
     else:
         SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Client IP (F14, docs/pqc-hybrid-architecture-review.md). Number of reverse
+# proxies we run in front of Django that write X-Forwarded-For. The client IP
+# is taken that many entries from the RIGHT of the header (shared/client_ip.py);
+# the leftmost entry is client-supplied and never trusted. 0 = ignore the
+# header and use REMOTE_ADDR. k8s sets 1 (ingress-nginx replaces the header
+# with $remote_addr). Set it only when Django is unreachable except through
+# those proxies, or a direct client can still choose the value.
+try:
+    TRUSTED_PROXY_COUNT = int(os.environ.get('TRUSTED_PROXY_COUNT', '0'))
+except ValueError:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('TRUSTED_PROXY_COUNT must be an integer') from None
+if TRUSTED_PROXY_COUNT < 0:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('TRUSTED_PROXY_COUNT must be >= 0')
+if ONION_LISTENER:
+    # Tor connects straight to this process; no proxy of ours wrote the header.
+    TRUSTED_PROXY_COUNT = 0
+# Optional: addresses/CIDRs of those proxies (comma-separated). When set,
+# X-Forwarded-For from any other direct peer is dropped before Django, DRF or
+# shared/client_ip.py read it (shared.client_ip.ForwardedForPeerMiddleware).
+# Empty = trust any peer, which relies on the network admitting only the
+# proxies (k8s/network-policy.yaml allow-backend).
+TRUSTED_PROXY_CIDRS = [c.strip() for c in os.environ.get('TRUSTED_PROXY_CIDRS', '').split(',') if c.strip()]
+for _cidr in TRUSTED_PROXY_CIDRS:
+    try:
+        _ipaddress.ip_network(_cidr, strict=False)
+    except ValueError:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(f'TRUSTED_PROXY_CIDRS: invalid entry {_cidr!r}')
+# DRF's throttles read NUM_PROXIES with the same right-hand semantics. Unset,
+# they key anonymous clients on the WHOLE X-Forwarded-For string, which a
+# client can change on every request to get a fresh bucket.
+REST_FRAMEWORK['NUM_PROXIES'] = TRUSTED_PROXY_COUNT
 
 # ==============================================================================
 # ENHANCED CORS SETTINGS FOR JWT-BASED SPA
@@ -2886,6 +2924,10 @@ _DJANGO_MAINTENANCE_COMMANDS = frozenset({
     'shell', 'shell_plus', 'dbshell',
     'createsuperuser', 'changepassword',
     'dumpdata', 'loaddata',
+    # Batch wrappers around dumpdata / migrate+loaddata. restore_drill runs in
+    # k8s/restore-drill-job.yaml without app-secrets (no production DB
+    # credentials or keys), against a throwaway PostgreSQL.
+    'db_backup', 'restore_drill',
     'diffsettings', 'inspectdb',
     'startapp', 'startproject',
     'verify_audit_migration', 'rehash_pending_commitments',

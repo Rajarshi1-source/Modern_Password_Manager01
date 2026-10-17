@@ -21,6 +21,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { X, Copy, Shield, ExternalLink, Clock } from 'lucide-react';
+import { getClipboardClearSettings, scheduleClipboardClear } from '../../utils/secureClipboard';
 
 const Wrapper = styled.div`
   border: 1px solid rgba(74, 108, 247, 0.2);
@@ -108,14 +109,16 @@ function buildSrcDoc(password, nonce) {
           if (d.nonce !== '${safeNonce}') return;
           if (used) return;
           if (d.type === 'copy') {
-            used = true;
+            var ok = false;
             try {
               pw.type = 'text';
               pw.select();
-              document.execCommand('copy');
+              ok = document.execCommand('copy') === true;
             } catch(_){}
-            setTimeout(zero, 100);
-            parent.postMessage({ type: 'fhe_share:iframe_copied', nonce: '${safeNonce}' }, '*');
+            pw.type = 'password';
+            // Only a successful copy uses up the frame; a failed one may retry.
+            if (ok) { used = true; setTimeout(zero, 100); }
+            parent.postMessage({ type: 'fhe_share:iframe_copied', nonce: '${safeNonce}', ok: ok }, '*');
           } else if (d.type === 'reveal') {
             pw.type = 'text';
           } else if (d.type === 'hide') {
@@ -139,6 +142,7 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
   }, []);
   const srcDoc = useMemo(() => buildSrcDoc(password || '', nonce), [password, nonce]);
   const [copied, setCopied] = useState(false);
+  const [clearInSeconds, setClearInSeconds] = useState(null);
   const [secondsLeft, setSecondsLeft] = useState(30);
 
   useEffect(() => {
@@ -146,17 +150,20 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
       const d = ev.data;
       if (!d || d.nonce !== nonce) return;
       if (d.type === 'fhe_share:iframe_copied') {
+        // A failed copy put nothing on the clipboard: scheduling a clear then
+        // would wipe whatever the user had there before.
+        if (d.ok !== true) return;
         setCopied(true);
-        try {
-          setTimeout(() => navigator.clipboard.writeText(''), 20_000);
-        } catch (_err) {
-          // clipboard clear is best-effort
-        }
+        // The iframe copied `password`; passing it lets the clear skip
+        // anything the user copied afterwards.
+        const { enabled, timeoutMs } = getClipboardClearSettings();
+        setClearInSeconds(enabled ? Math.round(timeoutMs / 1000) : null);
+        scheduleClipboardClear(password || null);
       }
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
-  }, [nonce]);
+  }, [nonce, password]);
 
   useEffect(() => {
     if (secondsLeft <= 0) {
@@ -200,7 +207,7 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
       <Footer>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
           <Clock size={12} /> Auto-closes in {secondsLeft}s
-          {copied && ' · clipboard will be cleared in ~20s'}
+          {copied && clearInSeconds !== null && ` · clipboard will be cleared in ~${clearInSeconds}s`}
           {tokenMetadata?.strength_class && ` · strength: ${tokenMetadata.strength_class}`}
         </span>
         <div style={{ display: 'inline-flex', gap: '0.4rem' }}>

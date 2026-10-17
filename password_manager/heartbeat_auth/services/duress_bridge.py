@@ -17,6 +17,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from django.conf import settings
+from shared.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,7 @@ logger = logging.getLogger(__name__)
 def _request_context(request) -> Dict[str, Any]:
     if request is None:
         return {}
-    ip = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() \
-        or request.META.get('REMOTE_ADDR')
+    ip = get_client_ip(request)
     return {
         'ip_address': ip or None,
         'user_agent': request.META.get('HTTP_USER_AGENT', '')[:255],

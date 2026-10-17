@@ -28,6 +28,7 @@ from auth_module.recovery_throttling import (
 )
 from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
 from auth_module.quantum_recovery_models import RecoveryAuditLog
+from shared.client_ip import get_client_ip
 
 
 # Wrapped-DEK envelope versioning. The client (sessionVaultCryptoV3.js)
@@ -48,11 +49,7 @@ def _valid_envelope(blob):
     return all(k in blob for k in _REQUIRED_FIELDS)
 
 
-def _client_ip(request):
-    xff = request.META.get('HTTP_X_FORWARDED_FOR')
-    if xff:
-        return xff.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR')
+_client_ip = get_client_ip
 
 
 class VaultWrappedDEKView(APIView):

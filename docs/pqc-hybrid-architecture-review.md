@@ -3,6 +3,15 @@
 Status: review, 2026-10-06. No application code was changed by this document.
 Companion change: PR #526 (CI lock-file fixes, Dependabot guard).
 
+Update, 2026-10-12: **F12, F14 and the section 9 backup/alerting gaps are
+fixed, and F13 is fixed except guardian-shard recovery**, which stays unusable
+because it discards the guardian private key (see F13) (branch
+`fix/pqc-review-f12-f13-f14-backups`). Each finding's entry
+records what changed, what was found on the way (the inactivity auto-lock never
+ran; argon2 made passkey-primary backup creation always fail; ipware trusted
+`Client-IP`/`Forwarded`; Alertmanager was blocked by `default-deny-all`), and what
+could not be validated without a cluster.
+
 Update, 2026-10-07: **F1, F2 and the backend half of F7 are fixed** (branch
 `fix/behavioral-recovery-real-pqc`; P0.1 and P0.2 below). That work and the
 review below found five more problems (F10–F14), two of them high (F13: a recovery
@@ -33,7 +42,7 @@ locally, or the code itself). Section 8 lists what was **not** verified.
 | 1 | Does bumping to liboqs-python `0.16.0.1` (liboqs `0.16.0`) remove `Kyber768`? | **No.** At tag `0.16.0`, `OQS_ENABLE_KEM_KYBER` is `ON` by default and `kyber_512/768/1024` are enabled. The `0.12.0` notice ("last release to include Kyber") has not been carried out as of `0.16.0`. Kyber round 3 remains deprecated and could still be removed later. |
 | 2 | What does the bump remove? | Dilithium (removed in liboqs `0.15.0`) and SPHINCS+ (removed in `0.16.0`). **Neither is used anywhere in this codebase.** |
 | 3 | Is it safe to just bump the pin in `requirements-lock.txt` (the Copilot suggestion)? | **No, for process reasons, not algorithm reasons.** `DEPENDENCY_POLICY.md` requires the C library and the Python wrapper to move together, with refreshed commit SHAs, in one PR, validated against a freshly built image. The Docker image builds both from pinned git SHAs; the lock line only documents that. A lock-only bump recreates the "lock lies about what is installed" problem the Dockerfile already complains about. |
-| 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several.** The most serious one at review time was fixed on 2026-10-07 (F1, F2, F7 backend): `behavioral_recovery/services/quantum_crypto_service.py` **used to** do `from oqs import KEM`, which does not exist in any liboqs-python version, so it ran its non-post-quantum fallback even in the Docker image, with only log warnings. It now does `import oqs`, uses `oqs.KeyEncapsulation("Kyber768")`, and **refuses** the fallback (`ImproperlyConfigured`) unless `QUANTUM_CRYPTO['ALLOW_SIMULATION']` is true. **Still open:** F13 (`auth_module`'s recovery KEM is an unconditional simulation), F3/F10 (behavioral commitments cannot be verified), F14 and F12. See section 3.3. |
+| 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several.** The most serious one at review time was fixed on 2026-10-07 (F1, F2, F7 backend): `behavioral_recovery/services/quantum_crypto_service.py` **used to** do `from oqs import KEM`, which does not exist in any liboqs-python version, so it ran its non-post-quantum fallback even in the Docker image, with only log warnings. It now does `import oqs`, uses `oqs.KeyEncapsulation("Kyber768")`, and **refuses** the fallback (`ImproperlyConfigured`) unless `QUANTUM_CRYPTO['ALLOW_SIMULATION']` is true. F13 (`auth_module`'s recovery KEM was an unconditional simulation), F14 (client-IP spoofing) and F12 (clipboard clear, plus an inactivity auto-lock that never ran) were fixed on 2026-10-12. **Still open:** F3/F10 (behavioral commitments cannot be verified). See section 3.3. |
 | 5 | Does CI protect against a liboqs regression? | **No.** No test job installs the Python wrapper, so `import oqs` fails and the backend selects a *simulated* KEM. Since 2026-10-07 production serving refuses that simulation, but `TESTING` still allows it (`ALLOW_SIMULATION`), so CI keeps running against it. A broken liboqs bump would pass CI. |
 | 6 | Is the proposed architecture better than what exists? | **Parts of it are; the whole is not.** Its password handling (never send the master password; one Argon2id run split with HKDF) and its use of standardized ML-KEM are better than the current code. Its single `K_master`, session-level hybrid handshake and storage schema are weaker than, or redundant with, what exists. Section 6. |
 | 7 | What is the most valuable post-quantum change? | **Not application-layer.** The master password reaches the server on every login; a recorded TLS session decrypted later reveals it directly. Stop sending it (and do not replace it with a replayable derived value), then enable hybrid post-quantum TLS at the edge. Sections 6-7. |
@@ -142,7 +151,7 @@ told to leave it alone.
 |---|---|---|
 | `ProductionKyber` + `HybridEncryption` | `auth_module/services/kyber_crypto.py` | Kyber768 KEM (liboqs, else `pqcrypto`, else **simulated**) + HKDF-SHA256 (`info=b'kyber-hybrid-encryption-v1'`) + AES-256-GCM, 96-bit random nonce, optional AAD hash. A KEM-DEM construction; **no X25519**. |
 | Kyber API | `auth_module/kyber_views.py`, `models.py` (`algorithm` default `'Kyber768'`, optional `x25519_*` columns) | Endpoints for keygen/encrypt/decrypt; the algorithm is stored per key, which is what makes a versioned migration possible. |
-| Other Kyber users | `auth_module/services/quantum_crypto_service.py` (**unconditional simulation**: `pqcrypto` appears only in docstrings; corrected 2026-10-07, see F13), `security/services/lattice_crypto_engine.py` (liboqs, `Kyber512/768/1024`) | Three independent Kyber consumers, three different code paths. |
+| Other Kyber users | `auth_module/services/quantum_crypto_service.py` (was an **unconditional simulation**; since 2026-10-12 it delegates to `ProductionKyber`, see F13), `security/services/lattice_crypto_engine.py` (liboqs, `Kyber512/768/1024`) | Three independent Kyber consumers, three different code paths. |
 | Behavioral recovery | `behavioral_recovery/services/quantum_crypto_service.py` | See F1–F3. |
 | Account auth | `PASSWORD_HASHERS = [Argon2PasswordHasher]`; JWT (`rest_framework_simplejwt`) | Server-side Argon2 hashing of whatever password it receives. |
 | Vault storage | `vault/models/vault_models.py` `EncryptedVaultItem`: `encrypted_data` (text blob), `crypto_version`, `crypto_metadata` | Versioned opaque blob. |
@@ -313,6 +322,47 @@ other code reads either key. The main copy action
 kind of problem as F1: the UI advertises a protection that the code does not
 provide. Fix it in the frontend with the Playwright test in section 9.1.
 
+**Fixed 2026-10-12** (branch `fix/pqc-review-f12-f13-f14-backups`):
+- `src/utils/secureClipboard.js` `copySecret()` copies, then after
+  `security.clipboardTimeout` seconds (if `security.clearClipboard` is on) clears the
+  clipboard. It clears only if the clipboard still holds the copied value, checked
+  with `readText()` where permitted, and clears best-effort otherwise.
+- It is used for every password and secret copy: `PasswordGenerator`,
+  `CosmicRayEntropyDashboard`, `PasswordItem`, `VaultItemDetail`, the
+  passkey-primary and layered recovery-key screens, and `CollectFragments`.
+  `SealedAutofillFrame`'s fixed 20 s timer now follows the setting.
+- Non-secret copies (alias emails, URLs, certificates, error stacks) are unchanged.
+- `VaultItemDetail` and `PasswordItem` are imported nowhere, so the "main copy
+  action" named above is unreachable. The reachable vault dashboard
+  (`VaultItemCard`) has no copy action.
+
+**Found while writing the 9.1 auto-lock test: the inactivity auto-lock never ran.**
+- The timer in `VaultContext.jsx` was gated on `isUnlocked`, and nothing in the live
+  login flow ever sets that to true (the PR F note in the same file says so).
+- The "auto-lock exists (5 min)" statements in sections 5, 8 and 9.1 were therefore
+  as untrue as F12. It is now armed by the live session-key gate (`sessionUnlocked`).
+- The vault list shows a `vault-lock-status` status (screen-reader only, no key
+  material) for tests to assert on.
+
+**Also wired (review round 5):** the Settings → Security "Auto-Lock" toggle and
+timeout wrote `security.autoLockEnabled` / `security.autoLockTimeout` to
+`preferencesService`, but `VaultContext` read only `localStorage.autoLockTimeout`,
+which nothing wrote. The units disagreed too: Settings stores seconds, while the
+`preferencesService` default was `5` (minutes), shown in Settings as "5s".
+`VaultContext` now reads both preferences and follows changes; the default is 300
+seconds, and `autoLockTimeoutSeconds()` treats a stored value under 60 as legacy
+minutes, so an existing `5` still means 5 minutes.
+
+Tests:
+- `frontend/e2e/vault_hygiene.spec.js` uses `page.clock`, and clipboard
+  permissions granted per test (the clipboard test is Chromium-only).
+  1. Copy a generated password, advance past 30 s, and the clipboard is empty.
+  2. Idle past 5 min, and the vault locks.
+  Both pass, and both fail with the two fixes reverted (the clipboard still holds
+  the password; the vault never locks). Run locally against Django + Vite,
+  Chromium build 1208.
+- `src/utils/__tests__/secureClipboard.test.js` (vitest, 9 tests).
+
 **F13: `auth_module/services/quantum_crypto_service.py` is a simulation everywhere,
 and its decapsulation returns a random secret.** Section 3.1 originally said it used
 `pqcrypto.kem.kyber768`. It does not: `pqcrypto` appears only in docstrings
@@ -328,11 +378,49 @@ fails with `InvalidTag`. Consumers:
   a real KEM would not match. That decrypt cannot succeed as written.
 
 Severity: **high, functional as well as security**. A recovery path that cannot
-recover is worse than none, because users rely on it. Not fixed here; it needs its
-own PR (route through `kyber_crypto.ProductionKyber`, which has the F7 guard, and
-redesign where the recovery-side Kyber private key comes from). Existing stored
-shards and recovery blobs cannot be migrated: their secrets were never
-reconstructible.
+recover is worse than none, because users rely on it.
+
+**Fixed 2026-10-12** (branch `fix/pqc-review-f12-f13-f14-backups`):
+- `QuantumCryptoService.generate_kyber_keypair` / `kyber_encapsulate` /
+  `kyber_decapsulate` (and the `Kyber` wrapper) now delegate to
+  `kyber_crypto.ProductionKyber`: liboqs `KeyEncapsulation("Kyber768")`, with the
+  simulated KEM refused unless `QUANTUM_CRYPTO['ALLOW_SIMULATION']` is true (F7).
+  liboqs pins are unchanged.
+- Passkey-primary recovery: Kyber keygen cannot be derived from the recovery key.
+  The pinned liboqs-python 0.10.0 has no `generate_keypair_seed`, and liboqs 0.11.0's
+  `kem_kyber_768.c` has no derandomized keypair entry point (both checked at their
+  tags). So `encrypt_passkey_credential` now generates a keypair per backup and
+  stores its **private key AES-256-GCM-wrapped** under an HKDF subkey of the
+  recovery key's Argon2id output, with AAD bound to the public key. Decryption
+  unwraps that key and decapsulates with it. The blob is `version: 2`, and a
+  `version: 1` blob is refused with a message saying it was never decryptable. The
+  `user_kyber_public_key` parameter is gone, because a caller-supplied public key
+  without its private key is exactly the bug.
+- A second defect on the same path: `_derive_master_key_from_recovery_key` called
+  `argon2.PasswordHasher.hash(..., salt=)`, which the pinned argon2-cffi 21.3.0 does
+  not accept (`TypeError`). **Every backup creation failed**, before Kyber was
+  reached. It now uses `argon2.low_level.hash_secret_raw` (Argon2id, same cost
+  parameters, raw 32-byte output; the old code took the last 32 characters of the
+  encoded hash string) and has no silent PBKDF2 fallback.
+- `ProductionKyber`'s simulated KEM (DEBUG/tests only) now round-trips. Its private
+  key embeds the public key, as a real Kyber-768 secret key does, and
+  decapsulation recomputes the secret from it. Before, its decapsulation hashed
+  `ct[:32] + sk[:32]` and never matched.
+- Tests: `auth_module/tests/test_recovery_kyber_real_kem.py` runs against a fake
+  `oqs` whose decapsulation depends on the secret key. It covers the shard round
+  trip, a wrong key, the `Kyber768` algorithm, the matching private key being used,
+  wrong recovery key, swapped public key, a v1 blob, and the simulation gate.
+  13 of its 14 tests fail on the previous code.
+
+**Nothing to migrate:** existing shards and recovery blobs were never decryptable,
+and on the pinned argon2-cffi no passkey-primary backup could even be created.
+
+**Still open (not fixed here):** `quantum_recovery_views.py` setup encrypts each
+guardian shard to a freshly generated guardian keypair and **discards the private
+key** (`guardian_public_key, _ = …`), and wraps the user's Kyber private key
+under a random throwaway password (`master_key_derived = secrets.token_bytes(32)`,
+marked "Placeholder"). With a real KEM these shards still cannot be opened. That
+flow needs guardians to supply their own public keys, which is a product decision.
 
 **F8: the raw master password is sent to the server on every login.** Both login
 flows post `password: credentials.password`; signup posts the password and an
@@ -424,7 +512,7 @@ These are fixable, but they show the plan is an illustration, not a drop-in desi
 | Transport PQ | None | App-layer hybrid | **Neither**; hybrid TLS at the edge is simpler and covers all traffic from clients that negotiate the hybrid group (sections 6-7). |
 | Downgrade behavior | Silent X25519-only (frontend); simulation behind a log-only warning (backend) | Not addressed | **Neither.** Both need fail-closed in production. |
 | Auth tokens | HttpOnly-cookie flow (opt-in) else script-readable storage | `sessionStorage` | **Existing**, if the cookie flow is enabled by default. |
-| Memory hygiene | Some non-extractable keys, `lock()`, inactivity auto-lock (`VaultContext.jsx`, default 5 min), clipboard-clear *setting* that nothing reads (F12), decoy handling; legacy `extractable: true` key in `cryptoService.js` | Non-extractable key, inactivity timer, clipboard clear after 30 s | Plan's checklist is good practice. Auto-lock exists; clipboard clearing does not (F12). |
+| Memory hygiene | Some non-extractable keys, `lock()`, inactivity auto-lock (`VaultContext.jsx`, default 5 min), clipboard-clear *setting* that nothing reads (F12), decoy handling; legacy `extractable: true` key in `cryptoService.js` | Non-extractable key, inactivity timer, clipboard clear after 30 s | Plan's checklist is good practice. At review time neither worked: clipboard clearing was unwired (F12) and the auto-lock timer never armed; both fixed 2026-10-12 (F12). |
 | Tests of the real PQ path | None in CI (F7) | Not discussed | Gap in both. |
 
 ---
@@ -451,13 +539,12 @@ email-derived salt, or the `BYTEA`-only item format.
    closed the base64 downgrade that would have absorbed the refusal (F11).
    This does **not** cover `auth_module/services/quantum_crypto_service.py`. It is
    not a `pqcrypto` path but an unconditional simulation (F13), with no
-   `ALLOW_SIMULATION` check at all. It was left unchanged and is still unresolved;
-   see item 2b.
+   `ALLOW_SIMULATION` check at all. It was left unchanged then; see item 2b.
 2a. Decide F3's key custody (where the behavioral-commitment private key lives), then
    fix or delete the broken fallback (F10) and the DEBUG mislabelling (F11).
 2b. Replace the unconditional simulation in `auth_module/services/quantum_crypto_service.py`
    (F13) with `ProductionKyber`, and redesign passkey-primary recovery's Kyber key
-   custody. Highest functional priority in this list: recovery cannot work today.
+   custody. **Done 2026-10-12** (F13), except the guardian-shard flow noted there.
 2c. Wire the clipboard-clear setting (F12).
 3. Frontend: when the Kyber module does not load, surface it (and block, or require
    explicit user consent) instead of silently continuing X25519-only. Verify the
@@ -585,7 +672,9 @@ the password makes the vault key derivable. So:
 - ~~Whether an inactivity auto-lock exists under a name my keyword search missed.~~
   It does: `frontend/src/contexts/VaultContext.jsx` (`DEFAULT_AUTO_LOCK_TIMEOUT = 5`
   minutes, `checkInactivity`), and every lock path goes through `handleLockVault`
-  (2026-10-07).
+  (2026-10-07). **Correction (2026-10-12):** the code existed, but its timer was gated
+  on an `isUnlocked` flag that the live flow never set, so it never ran. Reading the
+  code was not enough; the Playwright test in 9.1 showed it. Fixed under F12.
 - `@noble/curves` export names used in the plan (flagged as such above).
 - The `behavioral_recovery` design intent (F3).
 - Maturity of OPAQUE libraries for this stack (JS client, Python server); whether
@@ -609,7 +698,7 @@ the repository. As with section 4, the snippets are illustrations, not drop-in c
 
 | Proposal | What exists today | Verdict |
 |---|---|---|
-| **Playwright security audits** | `frontend/playwright.config.js` (`testDir: ./e2e`, `@playwright/test ^1.58.1`, 19 specs, `test:e2e:ci`). Auto-lock exists (`VaultContext.jsx`). Clipboard clearing does **not** (F12). | **Adopt, adapted.** Add `frontend/e2e/vault_hygiene.spec.js`: (a) copy a password, then assert the clipboard is cleared after `clipboardTimeout`; this **fails today** and should land with the F12 fix; (b) idle past `autoLockTimeout`, then assert the vault locks. Use `page.clock` (Playwright ≥1.45) instead of the plan's 30 s real `waitForTimeout`s. Do **not** add a `window.VaultMemoryStore` / `executeLockdownTestTrigger` hook: a global that exposes the key in a production bundle is the leak the test claims to check for. Assert on behaviour instead (locked UI, decrypt refused). JavaScript cannot prove memory zeroization; the test can only show that a reference was dropped. Grant clipboard permissions per test (Chromium only), not in the shared config. Do not copy `fullyParallel: false` / `workers: 1` globally: CI already runs one worker. |
+| **Playwright security audits** | `frontend/playwright.config.js` (`testDir: ./e2e`, `@playwright/test ^1.58.1`, 19 specs, `test:e2e:ci`). At review time the auto-lock never armed and clipboard clearing did not exist; both are now implemented (F12): `utils/secureClipboard.js`, and `VaultContext.jsx` armed by the session key and driven by the Settings preference. | **Adopted** (done, see F12). `frontend/e2e/vault_hygiene.spec.js` (a) copies a password and asserts the clipboard is cleared after `clipboardTimeout`, and (b) idles past `autoLockTimeout` and asserts the vault locks. Both pass, and both fail with the F12 fixes reverted. Use `page.clock` (Playwright ≥1.45) instead of the plan's 30 s real `waitForTimeout`s. Do **not** add a `window.VaultMemoryStore` / `executeLockdownTestTrigger` hook: a global that exposes the key in a production bundle is the leak the test claims to check for. Assert on behaviour instead (locked UI, decrypt refused). JavaScript cannot prove memory zeroization; the test can only show that a reference was dropped. Grant clipboard permissions per test (Chromium only), not in the shared config. Do not copy `fullyParallel: false` / `workers: 1` globally: CI already runs one worker. |
 | **PQC nginx via OQS OpenSSL fork** | `docker/nginx/nginx.conf`: TLS block commented out; `nginx:1.27-alpine`. k8s edge is **ingress-nginx** (`k8s/ingress.yaml`, TLSv1.3 only, cert-manager). | **Reject the build; keep P1.6.** Errors: `ssl_curves` is not an nginx directive (`ssl_ecdh_curve`); the Dockerfile's `git clone` lines have no `RUN` and truncated URLs; linking `-loqs` into nginx is unnecessary. The standalone OQS OpenSSL fork has been superseded by `oqs-provider` for OpenSSL 3, and OpenSSL **3.5** implements ML-KEM and the `X25519MLKEM768` group natively, so no custom compile is needed. Use an nginx image built on OpenSSL ≥3.5 and check `nginx -V`. In k8s, set `ssl-ecdh-curve: "X25519MLKEM768:X25519"` in the ingress-nginx controller ConfigMap, provided its OpenSSL supports it (not verified). The plan's verification line is also wrong: `s_client`'s "Peer signature type" reports the **signature** algorithm, not the key-exchange group. Its `script-src 'self'` CSP would break the FHE loader (section 4.2). |
 | **Production compose stack** | Two compose files (root and `docker/`). The root one mounts `./nginx/...`, which does not exist at the repo root (`docker/nginx/` does). k8s is the production target. | **Reject.** `CMD-SHEEP`; a `DATABASE_URL` that embeds a secrets-file *path* as a password; `core.settings.production` (the module is `password_manager.settings`); `postgres:16` / `python:3.11` (repo: PostgreSQL 17, Python 3.12); `pip install liboqs-python==0.16.0.1` without the C library, which triggers the import-time auto-install that 0.16.0.1 patched for command injection and breaks `DEPENDENCY_POLICY.md` (section 2.4). Separately, decide which compose file is canonical and fix or delete the root one's nginx mounts. |
 | **Encrypted backups + restore drill** | k8s `db-backup` CronJob (`k8s/cronjobs.yaml`) runs `manage.py db_backup --output /backups`. **`/backups` is an `emptyDir`**, deleted when the pod exits, and `allow-maintenance` (`k8s/network-policy.yaml`) permits egress to Postgres only. **No backup survives.** The dump is an unencrypted gzipped `dumpdata` JSON, built in memory (`StringIO`) under a 512 Mi limit. | **Adopt the goal; the existing gap is the priority.** Write to durable storage (a PVC, or object storage with a matching egress rule), encrypt **to a public key** (`age` or GPG asymmetric) so the cluster never holds the decryption key, stream instead of buffering, and alert on time since the last *success*. Errors in the plan's scripts: `pg_dump -F c \| gzip` double-compresses; the drill restores a custom-format dump with `psql`, which cannot read it (`pg_restore`); the drill runs `docker run` from inside a container, which needs the host Docker socket (root on the host); GnuPG ≥2.1 batch mode with `--passphrase-file` generally needs `--pinentry-mode loopback`; `--cipher-algo` is ignored on decrypt; the drill queries a `users` table (Django: `auth_user`); writing plaintext to host disk and then `dd`-overwriting it does not reliably erase it on SSD/CoW storage, so stream the restore instead. |
@@ -636,16 +725,140 @@ ingress-nginx forwarded-header settings, which were not verified.**
 that takes the hop a configured number of trusted proxies back from the right (or
 `REMOTE_ADDR` behind a single trusted proxy), used everywhere. Not PQC; its own PR.
 
+**Fixed 2026-10-12** (branch `fix/pqc-review-f12-f13-f14-backups`).
+
+*Does a client-supplied `X-Forwarded-For` reach Django?* Checked against the
+ingress-nginx source at `controller-v1.15.1`, the final upstream release: the
+project was archived on 2026-03-24 and gets no further upstream security fixes.
+The repo does not install or pin a controller (the NetworkPolicy only selects
+its pods by label), so the deployed image, any vendor backport policy and the
+migration path (for example to a Gateway API implementation) belong to the
+cluster operator; re-check these defaults on whatever replaces it.
+The defaults are `use-forwarded-headers: false`,
+`compute-full-forwarded-for: false` and `enable-real-ip: false`
+(`internal/ingress/controller/config/config.go`), and in that case
+`nginx.tmpl` sets `proxy_set_header X-Forwarded-For $remote_addr`, **replacing**
+the client's header. So:
+- **k8s (ingress-nginx, default ConfigMap): no.** Nothing in the repo changes
+  those defaults. `$remote_addr` is the client, or the cloud LB/node address
+  when the LB does SNAT. But the code also used **django-ipware 4.0.2** in four
+  places (`security_service`, `account_protection`, duress-code and geofence
+  views). By default ipware takes the leftmost `X-Forwarded-For` **and** falls
+  back to `Client-IP`, `X-Real-IP`, `X-Cluster-Client-IP`, `Forwarded` and `Via`.
+  ingress-nginx strips none of those, so those four sites were spoofable in k8s too.
+- **docker compose (`docker/nginx/nginx.conf`): yes.** Every location used
+  `$proxy_add_x_forwarded_for`, which **appends** to the client's header, so the
+  leftmost entry was client-chosen. Backend port 8000 is also published directly.
+- **Onion listener: yes.** Tor connects straight to Django.
+- **DRF throttles:** with `NUM_PROXIES` unset, DRF keys anonymous clients on the
+  **whole** `X-Forwarded-For` string, so changing it per request gave a fresh
+  bucket wherever the header passes through.
+
+*Fix:* `shared/client_ip.get_client_ip` is now the only parser. It takes the entry
+`TRUSTED_PROXY_COUNT` places from the right (same arithmetic as DRF), or
+`REMOTE_ADDR` when the count is 0 or the header is absent. It replaces 22
+hand-rolled copies and the 4 ipware calls. Settings read `TRUSTED_PROXY_COUNT`
+(default **0**, fail closed), force it to 0 when `ONION_LISTENER`, and set
+`REST_FRAMEWORK['NUM_PROXIES']` from it. Deployment changes:
+- `k8s/configmap.yaml` sets 1, and `k8s/tor.yaml` pins backend-onion to 0.
+- Both compose files default to 0, because port 8000 is published (see round 1 for the proxy-only override).
+- `docker/nginx/nginx.conf` now overwrites the header with `$remote_addr`.
+
+Tests: `shared/tests/test_client_ip.py`. A spoofed leftmost hop no longer changes
+the recovery lockout key and no longer passes `ALLOWED_IP_RANGES`, and DRF agrees
+with the helper. 5 of its 11 tests fail on the old call sites; the other 6 test
+the new helper itself.
+
+Review round 1 (2026-10-13):
+- `allow-backend` admitted port 8000 from any source, so with a count of 1 an
+  in-cluster client that bypassed the ingress could choose the address. Its
+  ingress is now limited to the ingress-nginx **controller pods** (namespace
+  `ingress-nginx` AND labels `app.kubernetes.io/name: ingress-nginx`,
+  `app.kubernetes.io/component: controller`; the namespace alone also admitted
+  its webhook and default-backend pods) and the Prometheus pods. A controller in
+  another namespace or with other labels needs the selector changed, or `/api` is
+  cut off (not validated on a cluster).
+- Optional `TRUSTED_PROXY_CIDRS`: when set, `shared.client_ip.ForwardedForPeerMiddleware`
+  (first in `MIDDLEWARE`) drops `X-Forwarded-For` from any other direct peer, so DRF
+  throttles and `get_client_ip` both ignore it.
+- **Residual risk:** Prometheus still reaches :8000 to scrape `/metrics`, and the
+  count of 1 trusts its `X-Forwarded-For` too, so a *compromised* Prometheus pod
+  could choose a client address. A NetworkPolicy cannot filter by path, and
+  serving metrics on a separate port is a larger change. Where the controller's
+  addresses can be pinned (`hostNetwork`, a dedicated node pool or pod CIDR), set
+  `TRUSTED_PROXY_CIDRS` to them, which closes this.
+- `docker/docker-compose.proxy-only.yml` unpublishes :8000 and sets the count to 1,
+  for per-client throttling behind nginx.
+
+`django-ipware` is now unused, but it stays pinned, so the requirements files are
+untouched.
+
+**Backups and alerting, fixed 2026-10-12** (branch `fix/pqc-review-f12-f13-f14-backups`):
+- **Durable:** `/backups` is the `db-backups` PVC (`k8s/backup-pvc.yaml`), not an
+  `emptyDir`. A same-cluster PVC does not survive losing the cluster or its storage
+  backend; off-site copies (VolumeSnapshots, or copying the already-encrypted files
+  from outside) are documented there but not automated. The production deploy job
+  (`ci.yml`) applies the PVC before the CronJobs.
+- **Encrypted to a public key:** `db_backup` encrypts to the age X25519 recipient in
+  `app-config` `BACKUP_AGE_RECIPIENT` and refuses to run without one. The output is
+  a standard age v1 file (`logging_manager/age_stream.py`, built on the pinned
+  `cryptography`). It was checked locally against the reference implementation
+  (`pyrage`) in both directions, at sizes around the 64 KiB chunk boundary, plus
+  truncated and unfinished files. The private key is never in the cluster.
+- **Streamed:** `dumpdata --format=jsonl` → gzip → age, written through with no
+  in-memory buffer. JSON Lines also lets `loaddata` restore line by line.
+- **Freshness metric:** written to `*.partial`, fsynced, renamed, and only then
+  stamped in `logging_manager.BackupStatus`. The backend exports
+  `vault_backup_last_success_timestamp_seconds{backup="db-backup"}` (0 if no backup
+  ever succeeded). A failure does not move it.
+- **Alerts:** `VaultBackupStale` fires after more than 26 h since the last success,
+  and `VaultBackupMetricMissing` fires when the gauge is absent for 1 h.
+- **Delivery:**
+  - The receiver is a webhook whose URL is read from the mounted
+    `alertmanager-receiver` Secret (`url_file`). Alertmanager is pinned to v0.28.1:
+    v0.27.0 panics on a non-2xx reply to a `url_file` webhook (its error path
+    calls `conf.URL.String()` on the nil `url`). Slack and PagerDuty variants
+    are commented in the config.
+  - The Secret is required, so a missing receiver shows up as a stuck pod rather
+    than as silence.
+  - Also found: under `default-deny-all`, no policy let Prometheus reach
+    Alertmanager or let Alertmanager reach any receiver. `allow-alertmanager` now
+    does both.
+- **Restore drill:** `k8s/restore-drill-job.yaml` and `manage.py restore_drill`.
+  - The pod has a throwaway `postgres:15-alpine` native sidecar on loopback, no
+    app secrets, and no NetworkPolicy allow rule.
+  - The age identity is provided as a short-lived Secret for the run only.
+  - The command refuses any database that already has tables. It then migrates,
+    streams decrypt → gunzip → `loaddata`, and requires at least one restored user.
+  - It uses `loaddata`, not `pg_restore`: the backend image has no `pg_dump` (and
+    Debian bookworm ships a client older than the server), so the dump stays
+    `dumpdata`. No Docker socket is used.
+- `runAsNonRoot` and `readOnlyRootFilesystem` are kept everywhere.
+- Tests: `logging_manager/tests/test_db_backup.py` (19), all new.
+
+**Not validated (no cluster, no Docker, no promtool/amtool here):**
+- PVC binding and the CronJob writing to it.
+- The native-sidecar drill pod actually starting the alpine PostgreSQL as uid 10070
+  on an `emptyDir`.
+- The Prometheus rule expressions and the Alertmanager config, beyond YAML parsing
+  and checking field names against the v0.28.1 source.
+- End-to-end delivery to a real receiver.
+
+The Django side (backup, encryption, stamping, metric, restore into an empty
+schema) is covered by the tests above, on SQLite.
+
 ### 9.2 Resulting priorities (added to section 6)
 
-- **P0 (ops, not PQC, but most urgent here):** make the k8s backup durable and
+- **P0 (ops, not PQC, but most urgent here):** ~~make the k8s backup durable and
   encrypted, and give Alertmanager a receiver. Today there is neither a retained
-  backup nor a delivered alert.
-- **P0.2b / P0.2c:** F13 (recovery cannot decrypt) and F12 (clipboard clear), the
-  latter with the Playwright test above.
-- **F14:** confirm the ingress forwarded-header behaviour first. If a
+  backup nor a delivered alert.~~ **Done 2026-10-12** (section 9.1, after F14);
+  needs an operator to set `BACKUP_AGE_RECIPIENT` and the receiver Secret.
+- **P0.2b / P0.2c:** ~~F13 (recovery cannot decrypt) and F12 (clipboard clear), the
+  latter with the Playwright test above.~~ **Done 2026-10-12.**
+- **F14:** ~~confirm the ingress forwarded-header behaviour first. If a
   client-supplied `X-Forwarded-For` reaches Django, this is a P0 lockout and
-  allowlist bypass.
+  allowlist bypass.~~ **Done 2026-10-12.** It did reach Django under compose, on the
+  onion listener, and through ipware's extra headers in k8s; see F14.
 - **P1.6** (hybrid TLS) stands, implemented with stock OpenSSL ≥3.5 at the ingress
   rather than a custom nginx build.
 - Everything else in 9.1 is "reject" or "defer" as listed.

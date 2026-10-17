@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { FaEye, FaEyeSlash, FaCopy, FaExternalLinkAlt, FaCheckCircle, FaUser, FaLock, FaGlobe, FaStickyNote } from 'react-icons/fa';
-import { copyToClipboard } from '../../utils/clipboard';
+import { copyPlain, copySecret } from '../../utils/secureClipboard';
 
 // Animations
 const fadeIn = keyframes`
@@ -203,9 +203,11 @@ const PasswordItem = ({ data, isDecrypted = true }) => {
       alert('Please decrypt the item first');
       return;
     }
-    copyToClipboard(text);
-    setCopiedField(label);
-    setTimeout(() => setCopiedField(null), 2000);
+    const copy = label === 'password' ? copySecret : copyPlain;
+    copy(text).then(() => {
+      setCopiedField(label);
+      setTimeout(() => setCopiedField(null), 2000);
+    }, () => {});
   };
 
   const togglePasswordVisibility = () => {

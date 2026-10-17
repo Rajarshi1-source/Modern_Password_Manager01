@@ -17,6 +17,7 @@
 import React, { useMemo, useState } from 'react';
 import sessionVaultCryptoV3 from '../../../services/sessionVaultCryptoV3';
 import { generateRecoveryKey } from './generateRecoveryKey';
+import { copySecret } from '../../../utils/secureClipboard';
 
 const CONFIRM_PHRASE = 'I have saved this key';
 
@@ -118,7 +119,9 @@ export default function RecoveryKeyEnrollV2({ onSuccess }) {
         <div>
           <button
             type="button"
-            onClick={() => navigator.clipboard?.writeText(recoveryKey)}
+            onClick={() => copySecret(recoveryKey).catch(
+              () => setError('Could not copy the key. Download it or copy it by hand.'),
+            )}
             data-testid="rk-copy"
           >
             Copy

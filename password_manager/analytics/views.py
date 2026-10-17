@@ -59,6 +59,7 @@ from .models import (
     FunnelCompletion,
     CohortDefinition
 )
+from shared.client_ip import get_client_ip
 
 
 @api_view(['POST'])
@@ -102,8 +103,7 @@ def track_events(request):
         user_id = request.user.id if request.user.is_authenticated else None
         
         # Get and anonymize client IP
-        client_ip = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0] or \
-                    request.META.get('REMOTE_ADDR')
+        client_ip = get_client_ip(request)
         anonymized_ip = _anonymize_ip(client_ip)
         
         # Augment data with user agent for session tracking

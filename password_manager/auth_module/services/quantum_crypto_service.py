@@ -1,8 +1,9 @@
 """
 Post-Quantum Cryptography Service
 
-Implements CRYSTALS-Kyber (lattice-based) encryption for quantum-resistant security.
-Falls back to hybrid encryption (Kyber + AES-GCM) for maximum security.
+Hybrid CRYSTALS-Kyber-768 + AES-256-GCM encryption for recovery shards, plus
+Shamir splitting and password-based helpers. The KEM itself is delegated to
+``auth_module.services.kyber_crypto.ProductionKyber``.
 """
 
 import os
@@ -15,83 +16,73 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
 import json
 
+from auth_module.services.kyber_crypto import ProductionKyber
+
 
 class QuantumCryptoService:
     """
     Service for quantum-resistant encryption using hybrid approach:
-    1. CRYSTALS-Kyber for key encapsulation (post-quantum)
+    1. CRYSTALS-Kyber-768 for key encapsulation (post-quantum)
     2. AES-256-GCM for data encryption (classical but proven)
-    
-    Note: This is a placeholder implementation. For production, use actual
-    CRYSTALS-Kyber library (e.g., liboqs-python or pqcrypto)
+
+    The KEM is ``kyber_crypto.ProductionKyber`` (liboqs ``Kyber768``). Its
+    simulated fallback is refused unless QUANTUM_CRYPTO['ALLOW_SIMULATION']
+    is True. Until F13 (docs/pqc-hybrid-architecture-review.md) this class
+    returned fresh ``os.urandom`` bytes from all three KEM methods in every
+    environment, so nothing it encrypted could ever be decrypted.
     """
-    
+
     # Key sizes for CRYSTALS-Kyber-768 (NIST Level 3)
-    PUBLIC_KEY_SIZE = 1184
-    PRIVATE_KEY_SIZE = 2400
-    CIPHERTEXT_SIZE = 1088
-    SHARED_SECRET_SIZE = 32
-    
+    PUBLIC_KEY_SIZE = ProductionKyber.PUBLIC_KEY_SIZE
+    PRIVATE_KEY_SIZE = ProductionKyber.PRIVATE_KEY_SIZE
+    CIPHERTEXT_SIZE = ProductionKyber.CIPHERTEXT_SIZE
+    SHARED_SECRET_SIZE = ProductionKyber.SHARED_SECRET_SIZE
+
     def __init__(self):
         self.backend = default_backend()
-    
+
+    @staticmethod
+    def _kem() -> ProductionKyber:
+        # Built per call rather than once: ProductionKyber picks its
+        # implementation when constructed, and the module-level instance
+        # below is created at import time.
+        return ProductionKyber()
+
     def generate_kyber_keypair(self) -> Tuple[bytes, bytes]:
         """
         Generate CRYSTALS-Kyber-768 keypair
-        
+
         Returns:
             (public_key, private_key): Post-quantum key pair
-        
-        Note: This is a simulation for demonstration. In production, use:
-        from pqcrypto.kem.kyber768 import generate_keypair
-        public_key, private_key = generate_keypair()
         """
-        # Simulated keypair generation (replace with actual Kyber implementation)
-        public_key = os.urandom(self.PUBLIC_KEY_SIZE)
-        private_key = os.urandom(self.PRIVATE_KEY_SIZE)
-        
-        return public_key, private_key
-    
+        return self._kem().generate_keypair()
+
     def kyber_encapsulate(self, public_key: bytes) -> Tuple[bytes, bytes]:
         """
         Encapsulate a shared secret using recipient's public key
-        
+
         Args:
             public_key: Recipient's Kyber public key
-        
+
         Returns:
             (ciphertext, shared_secret): Encapsulated shared secret and the secret itself
-        
-        Note: In production, use:
-        from pqcrypto.kem.kyber768 import encrypt
-        ciphertext, shared_secret = encrypt(public_key)
         """
-        # Simulated encapsulation (replace with actual Kyber)
-        ciphertext = os.urandom(self.CIPHERTEXT_SIZE)
-        shared_secret = os.urandom(self.SHARED_SECRET_SIZE)
-        
-        return ciphertext, shared_secret
-    
+        return self._kem().encapsulate(public_key)
+
     def kyber_decapsulate(self, ciphertext: bytes, private_key: bytes) -> bytes:
         """
         Decapsulate shared secret using private key
-        
+
         Args:
             ciphertext: Kyber ciphertext
-            private_key: Recipient's Kyber private key
-        
+            private_key: Recipient's Kyber private key (the one matching the
+                public key the ciphertext was encapsulated to)
+
         Returns:
             shared_secret: Decapsulated shared secret
-        
-        Note: In production, use:
-        from pqcrypto.kem.kyber768 import decrypt
-        shared_secret = decrypt(ciphertext, private_key)
         """
-        # Simulated decapsulation (replace with actual Kyber)
-        shared_secret = os.urandom(self.SHARED_SECRET_SIZE)
-        
-        return shared_secret
-    
+        return self._kem().decapsulate(ciphertext, private_key)
+
     def encrypt_shard_hybrid(
         self,
         shard_data: bytes,

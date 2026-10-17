@@ -14,7 +14,9 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
+from django.core.exceptions import ImproperlyConfigured
 
 from ..services.quantum_crypto_service import QuantumCryptoService, Kyber
 
@@ -58,48 +60,63 @@ class PasskeyPrimaryRecoveryService:
         computed_hash = self.hash_recovery_key(recovery_key)
         return computed_hash == stored_hash
     
+    # Bump when the blob layout changes. Version 1 (before F13) never stored
+    # the Kyber private key, and encapsulated with a KEM that returned random
+    # bytes, so no version-1 blob can be decrypted by anyone.
+    BLOB_VERSION = 2
+    _SK_WRAP_INFO = b'passkey-primary-recovery-kyber-sk-wrap-v2'
+
     def encrypt_passkey_credential(
         self,
         credential_data: Dict,
         recovery_key: str,
-        user_kyber_public_key: Optional[bytes] = None
     ) -> Tuple[bytes, Dict]:
         """
         Encrypt passkey credential data using hybrid Kyber + AES-GCM encryption.
-        
+
+        A fresh Kyber-768 keypair is generated per backup. Its private key is
+        stored in the metadata, AES-GCM-wrapped under a key derived from the
+        recovery key, so decryption uses exactly the private key that matches
+        the stored public key. (Kyber keygen cannot be derived from the
+        recovery key: the pinned liboqs has no seeded keygen for Kyber768.)
+
         Args:
             credential_data: Dictionary containing passkey credential details
             recovery_key: User's recovery key
-            user_kyber_public_key: Optional Kyber public key (generated if not provided)
-        
+
         Returns:
-            Tuple of (encrypted_data, encryption_metadata)
+            Tuple of (encrypted_data, encryption_metadata). The Kyber public
+            key is in encryption_metadata['kyber_public_key'] (base64).
         """
         try:
-            # Generate Kyber keypair if not provided
-            if user_kyber_public_key is None:
-                user_kyber_public_key, user_kyber_private_key = self.quantum_crypto.generate_kyber_keypair()
-            else:
-                # In practice, the private key would be derived from the recovery key
-                # For this implementation, we'll use a deterministic approach
-                user_kyber_private_key = self._derive_kyber_private_key_from_recovery_key(recovery_key)
-            
+            user_kyber_public_key, user_kyber_private_key = (
+                self.quantum_crypto.generate_kyber_keypair()
+            )
+
             # Serialize credential data
             credential_json = json.dumps(credential_data).encode('utf-8')
-            
+
             # Generate salt for key derivation
             salt = secrets.token_bytes(32)
-            
+
             # Derive master encryption key from recovery key
             master_key = self._derive_master_key_from_recovery_key(recovery_key, salt)
             master_key_hash = hashlib.sha256(master_key).digest()
-            
+
+            # Keep the Kyber private key, wrapped under the recovery key
+            sk_iv = secrets.token_bytes(12)
+            wrapped_private_key = AESGCM(self._derive_sk_wrap_key(master_key)).encrypt(
+                sk_iv,
+                user_kyber_private_key,
+                self._sk_wrap_aad(user_kyber_public_key),
+            )
+
             # Use Kyber to establish a shared secret
             kyber_ciphertext, kyber_shared_secret = Kyber.encapsulate(user_kyber_public_key)
-            
+
             # Combine master key with Kyber shared secret for additional security
             combined_key_material = master_key + kyber_shared_secret
-            
+
             # Derive AES key using HKDF
             hkdf_salt = secrets.token_bytes(16)
             hkdf = HKDF(
@@ -110,22 +127,22 @@ class PasskeyPrimaryRecoveryService:
                 backend=default_backend()
             )
             aes_key = hkdf.derive(combined_key_material)
-            
+
             # Encrypt with AES-256-GCM
             iv = secrets.token_bytes(12)  # 96-bit IV for GCM
             cipher = Cipher(algorithms.AES(aes_key), modes.GCM(iv), backend=default_backend())
             encryptor = cipher.encryptor()
-            
+
             # Add additional authenticated data
             aad = master_key_hash + user_kyber_public_key[:32]  # Bind to both keys
             encryptor.authenticate_additional_data(aad)
-            
+
             ciphertext = encryptor.update(credential_json) + encryptor.finalize()
             tag = encryptor.tag
-            
+
             # Prepare encryption metadata
             encryption_metadata = {
-                'version': 1,
+                'version': self.BLOB_VERSION,
                 'algorithm': 'kyber768-aes256-gcm',
                 'salt': base64.b64encode(salt).decode('utf-8'),
                 'hkdf_salt': base64.b64encode(hkdf_salt).decode('utf-8'),
@@ -133,16 +150,21 @@ class PasskeyPrimaryRecoveryService:
                 'tag': base64.b64encode(tag).decode('utf-8'),
                 'kyber_ciphertext': base64.b64encode(kyber_ciphertext).decode('utf-8'),
                 'kyber_public_key': base64.b64encode(user_kyber_public_key).decode('utf-8'),
+                'kyber_private_key_wrapped': base64.b64encode(wrapped_private_key).decode('utf-8'),
+                'kyber_private_key_iv': base64.b64encode(sk_iv).decode('utf-8'),
                 'timestamp': int(secrets.randbits(64))  # Random timestamp for uniqueness
             }
-            
+
             logger.info("Successfully encrypted passkey credential with Kyber + AES-GCM")
             return ciphertext, encryption_metadata
-            
+
+        except ImproperlyConfigured:
+            # Simulated KEM refused (F7): a deployment error, not bad input.
+            raise
         except Exception as e:
             logger.error(f"Error encrypting passkey credential: {e}", exc_info=True)
             raise ValueError(f"Encryption failed: {str(e)}")
-    
+
     def decrypt_passkey_credential(
         self,
         encrypted_data: bytes,
@@ -151,15 +173,26 @@ class PasskeyPrimaryRecoveryService:
     ) -> Dict:
         """
         Decrypt passkey credential data using the recovery key.
-        
+
         Args:
             encrypted_data: Encrypted credential data
             recovery_key: User's recovery key
             encryption_metadata: Metadata needed for decryption
-        
+
         Returns:
             Dictionary containing decrypted credential data
         """
+        version = encryption_metadata.get('version')
+        if version != self.BLOB_VERSION:
+            # Only missing/older versions are the pre-fix blobs; a newer one
+            # must not be called undecryptable and revoked.
+            if version is None or (isinstance(version, int) and version < self.BLOB_VERSION):
+                raise ValueError(
+                    "This recovery backup predates the Kyber fix and was never "
+                    "decryptable. Revoke it and create a new backup."
+                )
+            raise ValueError(f"Unsupported recovery backup version: {version!r}")
+
         try:
             # Extract metadata
             salt = base64.b64decode(encryption_metadata['salt'])
@@ -168,20 +201,26 @@ class PasskeyPrimaryRecoveryService:
             tag = base64.b64decode(encryption_metadata['tag'])
             kyber_ciphertext = base64.b64decode(encryption_metadata['kyber_ciphertext'])
             kyber_public_key = base64.b64decode(encryption_metadata['kyber_public_key'])
-            
+            wrapped_private_key = base64.b64decode(encryption_metadata['kyber_private_key_wrapped'])
+            sk_iv = base64.b64decode(encryption_metadata['kyber_private_key_iv'])
+
             # Derive master key from recovery key
             master_key = self._derive_master_key_from_recovery_key(recovery_key, salt)
             master_key_hash = hashlib.sha256(master_key).digest()
-            
-            # Derive Kyber private key from recovery key
-            kyber_private_key = self._derive_kyber_private_key_from_recovery_key(recovery_key)
-            
+
+            # Unwrap the Kyber private key that matches the stored public key
+            kyber_private_key = AESGCM(self._derive_sk_wrap_key(master_key)).decrypt(
+                sk_iv,
+                wrapped_private_key,
+                self._sk_wrap_aad(kyber_public_key),
+            )
+
             # Decapsulate Kyber shared secret
             kyber_shared_secret = Kyber.decapsulate(kyber_private_key, kyber_ciphertext)
-            
+
             # Combine keys
             combined_key_material = master_key + kyber_shared_secret
-            
+
             # Derive AES key using HKDF
             hkdf = HKDF(
                 algorithm=hashes.SHA256(),
@@ -191,92 +230,73 @@ class PasskeyPrimaryRecoveryService:
                 backend=default_backend()
             )
             aes_key = hkdf.derive(combined_key_material)
-            
+
             # Decrypt with AES-256-GCM
             cipher = Cipher(algorithms.AES(aes_key), modes.GCM(iv, tag), backend=default_backend())
             decryptor = cipher.decryptor()
-            
+
             # Verify AAD
             aad = master_key_hash + kyber_public_key[:32]
             decryptor.authenticate_additional_data(aad)
-            
+
             plaintext = decryptor.update(encrypted_data) + decryptor.finalize()
-            
+
             # Deserialize credential data
             credential_data = json.loads(plaintext.decode('utf-8'))
-            
+
             logger.info("Successfully decrypted passkey credential")
             return credential_data
-            
+
         except InvalidTag:
             logger.error("Decryption failed: Invalid authentication tag (wrong key or tampered data)")
             raise ValueError("Invalid recovery key or tampered data")
+        except ImproperlyConfigured:
+            raise
         except Exception as e:
             logger.error(f"Error decrypting passkey credential: {e}", exc_info=True)
             raise ValueError(f"Decryption failed: {str(e)}")
-    
-    def _derive_master_key_from_recovery_key(self, recovery_key: str, salt: bytes) -> bytes:
-        """Derive a master encryption key from the recovery key using Argon2id."""
-        try:
-            import argon2
-            
-            # Remove hyphens and normalize
-            clean_key = recovery_key.replace('-', '').upper()
-            
-            # Use Argon2id for key derivation (resistant to side-channel attacks)
-            hasher = argon2.PasswordHasher(
-                time_cost=3,        # Iterations
-                memory_cost=65536,  # 64 MB
-                parallelism=4,      # Threads
-                hash_len=32,        # 256-bit key
-                salt_len=32
-            )
-            
-            # Derive key
-            derived = hasher.hash(clean_key, salt=salt)
-            # Extract raw hash (32 bytes)
-            key = derived.encode('utf-8')[-32:]
-            
-            return key
-            
-        except ImportError:
-            # Fallback to PBKDF2 if argon2 not available
-            logger.warning("Argon2 not available, falling back to PBKDF2")
-            from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-            
-            clean_key = recovery_key.replace('-', '').upper().encode('utf-8')
-            
-            kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=salt,
-                iterations=100000,
-                backend=default_backend()
-            )
-            return kdf.derive(clean_key)
-    
-    def _derive_kyber_private_key_from_recovery_key(self, recovery_key: str) -> bytes:
-        """
-        Derive a deterministic Kyber private key from the recovery key.
-        This is a simplified approach for the demo.
-        In production, this would use proper key derivation.
-        """
-        clean_key = recovery_key.replace('-', '').upper().encode('utf-8')
-        # Use HKDF to derive a 32-byte seed for Kyber key generation
-        hkdf = HKDF(
+
+    @classmethod
+    def _derive_sk_wrap_key(cls, master_key: bytes) -> bytes:
+        """Key that wraps the Kyber private key; separate from the data key."""
+        return HKDF(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=b'kyber-private-key-derivation',
-            info=b'passkey-recovery-v1',
+            salt=None,
+            info=cls._SK_WRAP_INFO,
             backend=default_backend()
+        ).derive(master_key)
+
+    @staticmethod
+    def _sk_wrap_aad(kyber_public_key: bytes) -> bytes:
+        # Bind the wrapped private key to its public key, so a swapped
+        # public key in the metadata fails here instead of at decapsulation.
+        return b'kyber768-sk|' + hashlib.sha256(kyber_public_key).digest()
+
+    def _derive_master_key_from_recovery_key(self, recovery_key: str, salt: bytes) -> bytes:
+        """
+        Derive a 32-byte master key from the recovery key with Argon2id.
+
+        Uses the raw-hash API. The previous code called
+        ``PasswordHasher.hash(..., salt=)``, which argon2-cffi 21.3.0 (the
+        pinned version) does not accept, so every backup failed to encrypt;
+        it also took the last 32 characters of the encoded hash string rather
+        than the raw hash. No PBKDF2 fallback: a different KDF in another
+        environment would silently derive a key that cannot open the backup.
+        """
+        from argon2.low_level import Type, hash_secret_raw
+
+        clean_key = recovery_key.replace('-', '').upper().encode('utf-8')
+        return hash_secret_raw(
+            secret=clean_key,
+            salt=salt,
+            time_cost=3,         # Iterations
+            memory_cost=65536,   # 64 MiB
+            parallelism=4,
+            hash_len=32,         # 256-bit key
+            type=Type.ID,
         )
-        seed = hkdf.derive(clean_key)
-        
-        # For the simulation, return the seed as the "private key"
-        # In a real Kyber implementation, this seed would be used to deterministically
-        # generate the actual Kyber private key
-        return seed
-    
+
     def verify_backup_integrity(
         self,
         encrypted_data: bytes,

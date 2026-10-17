@@ -71,8 +71,31 @@ spec:
   policyTypes:
   - Ingress
   - Egress
+  # Only the ingress controller and Prometheus may connect. TRUSTED_PROXY_COUNT
+  # (configmap.yaml) trusts the right-most X-Forwarded-For entry, so any other
+  # caller able to reach :8000 could choose the client IP that the recovery
+  # lockout and ALLOWED_IP_RANGES see (F14). If your controller is not in the
+  # `ingress-nginx` namespace, change the selector below or /api goes down.
+  # Namespace AND pod labels in ONE entry: only the controller pods (labels of
+  # the upstream chart/manifests), not the namespace's webhook or
+  # default-backend pods. Prometheus is in-namespace monitoring; a compromised
+  # Prometheus pod could still forge X-Forwarded-For -- set
+  # TRUSTED_PROXY_CIDRS (configmap.yaml) where the controller's addresses can
+  # be pinned to close that too.
   ingress:
-  - ports:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+          app.kubernetes.io/component: controller
+    - podSelector:
+        matchLabels:
+          app: password-manager
+          component: prometheus
+    ports:
     - protocol: TCP
       port: 8000
   egress:
