@@ -182,3 +182,25 @@ describe('a clear the browser refuses', () => {
     expect(clipboardAutoClearFailed()).toBe(false);
   });
 });
+
+describe('an older clear that is already running', () => {
+  it('does not erase a newer copy of the same secret', async () => {
+    const prefs = prefsWith({ clipboardTimeout: 5 });
+    // The first clear's readText() stays pending until we release it.
+    let releaseRead;
+    navigator.clipboard.readText.mockImplementationOnce(
+      () => new Promise((resolve) => { releaseRead = () => resolve(clipboardText); }),
+    );
+    await copySecret('the-password', { prefs });
+    await vi.advanceTimersByTimeAsync(5000); // first clear starts and awaits the read
+
+    await copySecret('the-password', { prefs }); // user copies it again
+    releaseRead();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clipboardText).toBe('the-password');
+
+    // The newer copy still gets its own clear, on its own timer.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(clipboardText).toBe('');
+  });
+});
