@@ -21,7 +21,7 @@ pyasn1-modules==0.4.2
 # is installed without the [apns] extra).
 h2==4.3.0
 hyperframe==6.1.0
-hpack==4.1.0
+hpack==4.2.0
 
 # Other transitive/security pins recommended by pip-audit / pip-check steps
 filelock==3.20.3
