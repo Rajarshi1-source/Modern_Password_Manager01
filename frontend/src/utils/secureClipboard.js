@@ -21,6 +21,10 @@ import { copyToClipboard } from './clipboard';
 export const DEFAULT_CLIPBOARD_TIMEOUT_SECONDS = 30;
 
 let pendingTimer = null;
+// Advanced whenever a clear is scheduled or cancelled. A clear captures it
+// and re-checks it after awaiting readText(), so an older clear that was
+// already running cannot erase a newer copy (even of the same secret).
+let scheduleGeneration = 0;
 
 const CLEAR_FAILED_KEY = 'clipboardAutoClearFailed';
 
@@ -78,8 +82,12 @@ function clearViaExecCommand() {
   }
 }
 
-/** Clear the clipboard now if it still holds `value` (or unconditionally if value is null). */
-export async function clearClipboardIfUnchanged(value) {
+/**
+ * Clear the clipboard now if it still holds `value` (or unconditionally if
+ * value is null). `generation`, when given, must still be current after the
+ * clipboard read, or the clear is abandoned as superseded.
+ */
+export async function clearClipboardIfUnchanged(value, generation) {
   const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
   if (!clipboard?.writeText || (typeof window !== 'undefined' && window.isSecureContext === false)) {
     const cleared = clearViaExecCommand();
@@ -92,6 +100,7 @@ export async function clearClipboardIfUnchanged(value) {
     } catch {
       // Reading not permitted: fall through and clear anyway (best-effort).
     }
+    if (generation !== undefined && generation !== scheduleGeneration) return false;
   }
   try {
     await clipboard.writeText('');
@@ -114,14 +123,16 @@ export function scheduleClipboardClear(value, { prefs } = {}) {
   cancelScheduledClipboardClear();
   const { enabled, timeoutMs } = getClipboardClearSettings(prefs);
   if (!enabled) return false;
+  const generation = scheduleGeneration;
   pendingTimer = setTimeout(() => {
     pendingTimer = null;
-    clearClipboardIfUnchanged(value);
+    clearClipboardIfUnchanged(value, generation);
   }, timeoutMs);
   return true;
 }
 
 export function cancelScheduledClipboardClear() {
+  scheduleGeneration += 1;
   if (pendingTimer !== null) {
     clearTimeout(pendingTimer);
     pendingTimer = null;

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import styled from 'styled-components';
-import preferencesService from '../../services/preferencesService';
+import preferencesService, { autoLockTimeoutSeconds } from '../../services/preferencesService';
 import { clipboardAutoClearFailed } from '../../utils/secureClipboard';
 import { FaShieldAlt, FaLock, FaClock, FaFingerprint, FaKey, FaClipboard, FaRandom, FaEye, FaExclamationTriangle, FaCheckCircle, FaInfoCircle, FaGlobe } from 'react-icons/fa';
 import {
@@ -199,7 +199,7 @@ const SecuritySettings = () => {
               {security.autoLockEnabled !== false && (
                 <TimeoutBadge>
                   <FaClock size={10} />
-                  {formatTimeout(security.autoLockTimeout || 300)}
+                  {formatTimeout(autoLockTimeoutSeconds(security.autoLockTimeout))}
                 </TimeoutBadge>
               )}
             </h3>
@@ -222,7 +222,7 @@ const SecuritySettings = () => {
             <SettingControl>
               <Select
                 aria-label="Auto-Lock Timeout"
-                value={security.autoLockTimeout || 300}
+                value={autoLockTimeoutSeconds(security.autoLockTimeout)}
                 onChange={(e) => updateSecurity('autoLockTimeout', parseInt(e.target.value))}
               >
                 <option value="60">1 minute</option>

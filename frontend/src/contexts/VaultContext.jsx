@@ -10,11 +10,17 @@ import { decryptEnvelope, encryptEnvelope, hasVaultSessionKey } from '../service
 import onionSyncService from '../services/onionSyncService';
 import decoyVaultStore from '../services/hiddenVault/decoyVaultStore';
 import { vaultUserId } from '../services/hiddenVault/vaultIdentity';
+import preferencesService, { autoLockTimeoutSeconds } from '../services/preferencesService';
 
 const VaultContext = createContext();
 
-// Default auto-lock timeout in minutes
-const DEFAULT_AUTO_LOCK_TIMEOUT = 5;
+// The user's auto-lock settings (Settings > Security). Read from the same
+// preferencesService path SecuritySettings writes; this used to read a
+// localStorage key nothing wrote, so the setting changed nothing.
+const readAutoLockPreference = () => ({
+  enabled: preferencesService.get('security.autoLockEnabled', true) !== false,
+  seconds: autoLockTimeoutSeconds(preferencesService.get('security.autoLockTimeout')),
+});
 // Maximum number of pending changes to prevent memory issues
 const MAX_PENDING_CHANGES = 500;
 
@@ -24,9 +30,18 @@ export const VaultProvider = ({ children }) => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [autoLockTimeout, setAutoLockTimeout] = useState(
-    parseInt(localStorage.getItem('autoLockTimeout')) || DEFAULT_AUTO_LOCK_TIMEOUT
-  );
+  const [autoLockPreference, setAutoLockPreference] = useState(readAutoLockPreference);
+  useEffect(() => {
+    const refresh = () => setAutoLockPreference(readAutoLockPreference());
+    const unsubscribe = [
+      preferencesService.onChange('security.autoLockTimeout', refresh),
+      preferencesService.onChange('security.autoLockEnabled', refresh),
+    ];
+    refresh();
+    return () => unsubscribe.forEach((off) => off());
+  }, []);
+  // Minutes, as this context has always exposed it.
+  const autoLockTimeout = autoLockPreference.seconds / 60;
   const [syncStatus, setSyncStatus] = useState('idle');
   // Which transport the last sync actually used, and whether that was a
   // downgrade from what the user asked for. Consumers render privacy state
@@ -446,16 +461,15 @@ export const VaultProvider = ({ children }) => {
   // alone meant the inactivity lock never ran at all.
   const autoLockArmed = isUnlocked || sessionUnlocked;
   useEffect(() => {
-    // Only set up the timer if the vault is unlocked
-    if (!autoLockArmed) return;
+    // Only set up the timer if the vault is unlocked and the user wants it
+    if (!autoLockArmed || !autoLockPreference.enabled) return;
 
     // The idle period starts now. Activity is only tracked while armed, so
     // the timestamp may date from mount or from an earlier lock; left as is,
     // the first event after a slow unlock would lock the vault at once.
     lastActivityRef.current = Date.now();
 
-    // Convert minutes to milliseconds
-    const timeoutMs = autoLockTimeout * 60 * 1000;
+    const timeoutMs = autoLockPreference.seconds * 1000;
 
     // Create the auto-lock timer that checks elapsed time since last activity
     const checkInactivity = () => {
@@ -514,7 +528,7 @@ export const VaultProvider = ({ children }) => {
       });
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [autoLockArmed, autoLockTimeout, handleLockVault]);
+  }, [autoLockArmed, autoLockPreference.enabled, autoLockPreference.seconds, handleLockVault]);
 
   // Handle Firebase real-time updates
   const handleFirebaseUpdate = useCallback(async (firebaseItems) => {
@@ -1232,11 +1246,9 @@ export const VaultProvider = ({ children }) => {
   }, [items, vaultService, mutateDecoyRows]);
 
   const updateAutoLockTimeout = (minutes) => {
-    setAutoLockTimeout(minutes);
-    localStorage.setItem('autoLockTimeout', minutes.toString());
-    // The auto-lock effect depends on `autoLockTimeout` and re-arms itself
-    // (activity-aware) on this change; a separate one-shot timer here would
-    // lock regardless of activity.
+    // Through the shared preference (seconds), so Settings and this timer
+    // agree; the auto-lock effect re-arms itself on the change.
+    preferencesService.set('security.autoLockTimeout', minutes * 60);
   };
 
   // Add these new methods for backup/restore

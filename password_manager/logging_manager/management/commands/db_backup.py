@@ -21,6 +21,7 @@ import io
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from django.core.management import call_command
@@ -85,7 +86,8 @@ class Command(BaseCommand):
         out_dir = Path(options["output"])
         out_dir.mkdir(parents=True, exist_ok=True)
         ts = timezone.now().strftime("%Y%m%dT%H%M%SZ")
-        final = out_dir / f"backup-{ts}{SUFFIX}"
+        # uuid: two runs in the same second must not share a .partial or final path.
+        final = out_dir / f"backup-{ts}-{uuid.uuid4().hex[:12]}{SUFFIX}"
         partial = final.with_name(final.name + ".partial")
 
         try:

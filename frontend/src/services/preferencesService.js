@@ -87,7 +87,7 @@ const DEFAULT_PREFERENCES = {
   // Security preferences
   security: {
     autoLockEnabled: true,
-    autoLockTimeout: 5, // minutes
+    autoLockTimeout: 300, // seconds (Settings offers 60-3600)
     biometricAuth: false,
     twoFactorAuth: false,
     
@@ -826,6 +826,17 @@ class PreferencesService {
 const preferencesService = new PreferencesService();
 
 // Export both the class and the singleton
+/**
+ * `security.autoLockTimeout` in seconds. Settings has always written seconds
+ * (60-3600), but this file's default used to be 5, meaning minutes, so a
+ * stored value under 60 is that legacy minute count.
+ */
+export function autoLockTimeoutSeconds(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_PREFERENCES.security.autoLockTimeout;
+  return n < 60 ? n * 60 : n;
+}
+
 export { PreferencesService, preferencesService, DEFAULT_PREFERENCES };
 export default preferencesService;
 

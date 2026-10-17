@@ -17,7 +17,7 @@ import { signupAndLogin } from './helpers/auth';
 const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:5173';
 
 // Defaults: preferencesService security.clipboardTimeout = 30 s,
-// VaultContext DEFAULT_AUTO_LOCK_TIMEOUT = 5 min.
+// preferencesService security.autoLockTimeout = 300 s (5 min).
 const CLIPBOARD_TIMEOUT_MS = 30_000;
 const AUTO_LOCK_MS = 5 * 60_000;
 
