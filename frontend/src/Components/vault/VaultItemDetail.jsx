@@ -4,7 +4,9 @@ import { FaEye, FaEyeSlash, FaCopy, FaPen, FaTrash, FaExclamationTriangle, FaLoc
 import { useVault } from '../../contexts/VaultContext';
 import { formatDate } from '../../utils/dateUtils';
 import { passwordStrength } from '../../utils/passwordUtils';
-import { copySecret } from '../../utils/secureClipboard';
+import { copyPlain, copySecret } from '../../utils/secureClipboard';
+
+const SECRET_FIELDS = new Set(['password', 'card']);
 
 // Animations
 const fadeIn = keyframes`
@@ -390,8 +392,9 @@ const VaultItemDetail = ({ item, onEdit, onDelete }) => {
   };
   
   const handleCopy = (text, fieldName) => {
-    // Clears after the user's clipboard timeout (Settings > Security).
-    copySecret(text).then(() => {
+    // Secrets clear after the user's clipboard timeout (Settings > Security).
+    const copy = SECRET_FIELDS.has(fieldName) ? copySecret : copyPlain;
+    copy(text).then(() => {
       setCopiedField(fieldName);
       setTimeout(() => setCopiedField(null), 2000);
     }, () => {});

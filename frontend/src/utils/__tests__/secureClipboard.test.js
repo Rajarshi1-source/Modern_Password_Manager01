@@ -14,6 +14,7 @@ import { toast } from 'react-hot-toast';
 import {
   cancelScheduledClipboardClear,
   clipboardAutoClearFailed,
+  copyPlain,
   copySecret,
   getClipboardClearSettings,
   scheduleClipboardClear,
@@ -106,6 +107,24 @@ describe('copySecret', () => {
     await vi.advanceTimersByTimeAsync(8000);
     expect(clipboardText).toBe('second');
     await vi.advanceTimersByTimeAsync(2000);
+    expect(clipboardText).toBe('');
+  });
+});
+
+describe('copyPlain', () => {
+  it('is never cleared, even after a secret where reading is refused', async () => {
+    readAllowed = false;
+    await copySecret('the-password', { prefs: prefsWith({ clipboardTimeout: 5 }) });
+    await copyPlain('alice@example.com');
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(clipboardText).toBe('alice@example.com');
+  });
+
+  it('a failed plain copy keeps the secret\'s clear', async () => {
+    await copySecret('the-password', { prefs: prefsWith({ clipboardTimeout: 5 }) });
+    navigator.clipboard.writeText.mockRejectedValueOnce(new Error('denied'));
+    await expect(copyPlain('alice')).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(5000);
     expect(clipboardText).toBe('');
   });
 });
