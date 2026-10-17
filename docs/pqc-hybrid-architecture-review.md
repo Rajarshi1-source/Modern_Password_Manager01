@@ -3,8 +3,10 @@
 Status: review, 2026-10-06. No application code was changed by this document.
 Companion change: PR #526 (CI lock-file fixes, Dependabot guard).
 
-Update, 2026-10-12: **F12, F13, F14 and the section 9 backup/alerting gaps are
-fixed** (branch `fix/pqc-review-f12-f13-f14-backups`). Each finding's entry
+Update, 2026-10-12: **F12, F14 and the section 9 backup/alerting gaps are
+fixed, and F13 is fixed except guardian-shard recovery**, which stays unusable
+because it discards the guardian private key (see F13) (branch
+`fix/pqc-review-f12-f13-f14-backups`). Each finding's entry
 records what changed, what was found on the way (the inactivity auto-lock never
 ran; argon2 made passkey-primary backup creation always fail; ipware trusted
 `Client-IP`/`Forwarded`; Alertmanager was blocked by `default-deny-all`), and what
@@ -726,8 +728,13 @@ that takes the hop a configured number of trusted proxies back from the right (o
 **Fixed 2026-10-12** (branch `fix/pqc-review-f12-f13-f14-backups`).
 
 *Does a client-supplied `X-Forwarded-For` reach Django?* Checked against the
-ingress-nginx source at `controller-v1.15.1` (latest release; the repo does not pin
-a controller version). The defaults are `use-forwarded-headers: false`,
+ingress-nginx source at `controller-v1.15.1`, the final upstream release: the
+project was archived on 2026-03-24 and gets no further upstream security fixes.
+The repo does not install or pin a controller (the NetworkPolicy only selects
+its pods by label), so the deployed image, any vendor backport policy and the
+migration path (for example to a Gateway API implementation) belong to the
+cluster operator; re-check these defaults on whatever replaces it.
+The defaults are `use-forwarded-headers: false`,
 `compute-full-forwarded-for: false` and `enable-real-ip: false`
 (`internal/ingress/controller/config/config.go`), and in that case
 `nginx.tmpl` sets `proxy_set_header X-Forwarded-For $remote_addr`, **replacing**
@@ -808,8 +815,10 @@ untouched.
   and `VaultBackupMetricMissing` fires when the gauge is absent for 1 h.
 - **Delivery:**
   - The receiver is a webhook whose URL is read from the mounted
-    `alertmanager-receiver` Secret (`url_file`, present in the pinned Alertmanager
-    v0.27.0). Slack and PagerDuty variants are commented in the config.
+    `alertmanager-receiver` Secret (`url_file`). Alertmanager is pinned to v0.28.1:
+    v0.27.0 panics on a non-2xx reply to a `url_file` webhook (its error path
+    calls `conf.URL.String()` on the nil `url`). Slack and PagerDuty variants
+    are commented in the config.
   - The Secret is required, so a missing receiver shows up as a stuck pod rather
     than as silence.
   - Also found: under `default-deny-all`, no policy let Prometheus reach
@@ -825,14 +834,14 @@ untouched.
     Debian bookworm ships a client older than the server), so the dump stays
     `dumpdata`. No Docker socket is used.
 - `runAsNonRoot` and `readOnlyRootFilesystem` are kept everywhere.
-- Tests: `logging_manager/tests/test_db_backup.py` (16), all new.
+- Tests: `logging_manager/tests/test_db_backup.py` (19), all new.
 
 **Not validated (no cluster, no Docker, no promtool/amtool here):**
 - PVC binding and the CronJob writing to it.
 - The native-sidecar drill pod actually starting the alpine PostgreSQL as uid 10070
   on an `emptyDir`.
 - The Prometheus rule expressions and the Alertmanager config, beyond YAML parsing
-  and checking field names against the v0.27.0 source.
+  and checking field names against the v0.28.1 source.
 - End-to-end delivery to a real receiver.
 
 The Django side (backup, encryption, stamping, metric, restore into an empty

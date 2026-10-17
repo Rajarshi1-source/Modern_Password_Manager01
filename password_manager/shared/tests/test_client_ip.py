@@ -161,3 +161,29 @@ class ShortChainTests(SimpleTestCase):
         )
         ForwardedForPeerMiddleware(lambda r: None)(request)
         self.assertEqual(get_client_ip(request), REAL_CLIENT)
+
+
+@override_settings(TRUSTED_PROXY_COUNT=1)
+class InvalidEntryTests(SimpleTestCase):
+    """The selected entry is empty or not an IP: get_client_ip falls back to
+    REMOTE_ADDR, so the middleware must strip the header for DRF too."""
+
+    def test_middleware_strips_it_so_drf_agrees(self):
+        for xff in ('1.2.3.4, ', 'not-an-ip', '1.2.3.4, bogus'):
+            request = RequestFactory().get('/', REMOTE_ADDR=PROXY, HTTP_X_FORWARDED_FOR=xff)
+            ForwardedForPeerMiddleware(lambda r: None)(request)
+            self.assertNotIn('HTTP_X_FORWARDED_FOR', request.META, xff)
+            with override_settings(REST_FRAMEWORK={'NUM_PROXIES': 1}):
+                self.assertEqual(SimpleRateThrottle.get_ident(None, request), PROXY, xff)
+            self.assertEqual(get_client_ip(request), PROXY, xff)
+
+    def test_a_valid_entry_is_kept(self):
+        request = request_via_proxy('junk-is-fine-on-the-left')
+        ForwardedForPeerMiddleware(lambda r: None)(request)
+        self.assertEqual(get_client_ip(request), REAL_CLIENT)
+
+    @override_settings(TRUSTED_PROXY_COUNT=0)
+    def test_left_alone_when_the_header_is_not_trusted_at_all(self):
+        request = RequestFactory().get('/', REMOTE_ADDR=PROXY, HTTP_X_FORWARDED_FOR='not-an-ip')
+        ForwardedForPeerMiddleware(lambda r: None)(request)
+        self.assertIn('HTTP_X_FORWARDED_FOR', request.META)
