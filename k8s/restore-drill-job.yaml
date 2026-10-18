@@ -66,6 +66,9 @@ spec:
           value: drill
         - name: PGDATA
           value: /var/lib/postgresql/data/pgdata
+        # The image's docker-entrypoint.sh prepends `postgres` when the first
+        # argument starts with '-', so this still initialises PGDATA and starts
+        # the server; it also runs initdb under nss_wrapper for this uid.
         args: ["-c", "listen_addresses=127.0.0.1", "-c", "fsync=off"]
         startupProbe:
           exec:
