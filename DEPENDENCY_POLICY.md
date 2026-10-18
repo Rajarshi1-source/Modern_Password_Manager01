@@ -99,37 +99,52 @@ silently truncated buffer in production, not a CI failure.
 
 | Component | Pinned version | Commit SHA | Pinned in |
 |---|---|---|---|
-| liboqs (C library) | `0.11.0` | `6f30d7ef49ca590979d7a085cd662f00bb6855fe` | `docker/backend/Dockerfile` (`--branch 0.11.0`, asserted via `LIBOQS_COMMIT` ARG) |
-| liboqs-python | `0.10.0` | `02198f9c3366cfafdea38a7830b82b9bd78bcb32` | `docker/backend/Dockerfile` (`--branch 0.10.0`, asserted via `LIBOQSPY_COMMIT` ARG) + `requirements-lock.txt` |
+| liboqs (C library) | `0.16.0` | `5a1a854b0dc9f2141bdc771c555ee60c37950183` | `docker/backend/Dockerfile` (`--branch 0.16.0`, asserted via `LIBOQS_COMMIT` ARG) |
+| liboqs-python | `0.16.0.1` | `62385cd99ababa2a4875257232c68dccda256e3b` | `docker/backend/Dockerfile` (`--branch 0.16.0.1`, asserted via `LIBOQSPY_COMMIT` ARG) + `requirements-lock.txt` |
 
-The `liboqs-python==0.10.0` line in `requirements-lock.txt` documents the image; it is **not
-installable from PyPI**, which only publishes the `0.16.x` line. Do not "fix" a failing
-lock-file resolve by bumping that one line: it would make the lock disagree with the image
-and break this pairing rule. The `Dependency Compatibility` workflow drops the line before
-resolving (and logs that it did), and `dependabot.yml` ignores the package. A real upgrade
-is a migration, see `docs/pqc-hybrid-architecture-review.md`.
+Upgraded from liboqs `0.11.0` / liboqs-python `0.10.0` on 2026-10-19, together with the
+backend's move from round-3 Kyber768 to FIPS 203 ML-KEM-768 (see "Algorithms and stored
+data" below). `0.16.0` was the latest liboqs release on that date (no `0.17.0` yet).
+
+The `liboqs-python==0.16.0.1` line in `requirements-lock.txt` documents the image. It is
+installable from PyPI, so the `Dependency Compatibility` workflow resolves it as written,
+but the image does **not** install it from there: it is built from the pinned tag above.
+Do not bump that one line on its own; it would make the lock disagree with the image and
+break this pairing rule. `dependabot.yml` ignores the package for that reason.
 
 The Dockerfile clones by tag (fast, `--depth 1`) AND asserts the
 resulting commit SHA matches the value above. If upstream ever
 retargets a release tag, the build aborts loudly rather than silently
 shipping a different commit.
 
-When bumping either: bump both in the same PR, refresh BOTH the tag
-**and** the SHA columns above (verify via `git ls-remote --tags`), run
-the full
-`security/services/lattice_crypto_engine.py` test suite against a freshly
-built image, and confirm `oqs.oqs_version()` and `oqs.oqs_python_version()`
-agree at container start.
+When bumping either: bump both in the same PR (the four `ARG`s at the top of the
+Dockerfile), refresh BOTH the tag **and** the SHA columns above (verify via
+`git ls-remote --tags`), check `gh api repos/open-quantum-safe/liboqs/security-advisories`
+against the algorithms actually compiled in, and update `EXPECTED_KEMS` in
+`docker/backend/oqs_smoke.py` if the algorithm list changes.
+
+`docker/backend/oqs_smoke.py` runs at image build time, in the shipped venv: it fails the
+build unless `oqs.oqs_version()` and `oqs.oqs_python_version()` equal the pinned tags, the
+enabled KEMs are exactly the minimal-build list, each one round-trips, and Kyber768 and
+ML-KEM-768 do not interoperate. CI builds the image but never runs it, so this step is
+where a broken pairing has to fail. liboqs-python 0.16 reads its version from its own
+package metadata, so the Dockerfile installs it with `--target` and copies the
+`.dist-info` into the venv along with the package.
 
 ### Minimal build
 
 `OQS_MINIMAL_BUILD` is restricted to the algorithms that production code
-actually instantiates — currently `KEM_kyber_512`, `KEM_kyber_768`, and
-`KEM_kyber_1024`. Adding a new algorithm (e.g. Dilithium for signatures)
-requires:
+actually instantiates — currently `KEM_ml_kem_512`, `KEM_ml_kem_768`,
+`KEM_ml_kem_1024` (all new data), and `KEM_kyber_512`, `KEM_kyber_768`,
+`KEM_kyber_1024` (legacy: decrypting data written before the ML-KEM migration,
+and `LatticeCryptoEngine` configurations that name `kyber-*`). No signature
+scheme is compiled in, which is why the LMS/XMSS advisories against `0.16.0`
+(CVE-2026-104254, CVE-2026-104255; fixed in `0.17.0`) do not affect this
+image. Adding a new algorithm (e.g. ML-DSA for signatures) requires:
 
 1. Extending the semicolon-separated `OQS_MINIMAL_BUILD` list in
-   `docker/backend/Dockerfile`.
+   `docker/backend/Dockerfile`, and `EXPECTED_KEMS` in
+   `docker/backend/oqs_smoke.py`.
 2. Confirming the algorithm appears on liboqs's constant-time list. Any
    algorithm whose reference implementation is NOT constant-time MUST NOT
    be added without a documented threat model.
@@ -149,15 +164,37 @@ Production hosts SHOULD expose AVX2 (x86_64) or NEON (arm64). The
 fallback is correct but slower; if a deploy target lacks both extensions,
 document the choice as an accepted performance risk.
 
+### Algorithms and stored data
+
+FIPS 203 ML-KEM-768 and round-3 Kyber768 have identical key, ciphertext and
+secret sizes but are **not interoperable** (FIPS 203 changed key derivation and
+implicit rejection), and decapsulating with the wrong one returns a wrong secret
+rather than raising. So the backend never infers the KEM from sizes: every
+stored artefact records it, and decryption dispatches on that record.
+
+| Artefact | New data | Pre-migration data |
+|---|---|---|
+| Passkey-primary recovery blob | `version: 3`, `kem: "ML-KEM-768"` (KEM bound into the private-key wrap AAD) | `version: 2`, which implies Kyber768 |
+| Recovery shard (`encrypt_shard_hybrid`) | `algorithm: "ML-KEM-768-AES-256-GCM"` | `"Kyber-768-AES-256-GCM"` |
+| `/api/kyber/*` blob, `KyberEncryptedPassword.algorithm` | `"ML-KEM-768-AES256-GCM"` | `"Kyber768-AES256-GCM"` (or no label) |
+| `KyberKeyPair.algorithm` | `"ML-KEM-768"` | `"Kyber768"`; encryption to that key keeps using Kyber768 |
+| Behavioral embedding, `BehavioralCommitment.encryption_algorithm` | `"ml-kem-768-aes256gcm"` | `"kyber768-aes256gcm"` |
+| Cached public key (`kyber:kem-pubkey:<user>`) | `"<KEM>\|<base64>"` | old `kyber:pubkey:` entries are never read |
+
+Kyber768 is decrypt-only: `ProductionKyber` refuses to generate new Kyber768
+keys. liboqs has said since `0.12.0` that Kyber may be removed; if a future
+release does remove it, the remaining Kyber768 artefacts above must be re-created
+(or re-wrapped) before that upgrade.
+
 ### Hybrid KEX (status)
 
 The recommended posture for a password manager is hybrid lattice + classical
-key exchange (e.g. Kyber768 ⊕ X25519), so a flaw in either primitive does
-not compromise the session key. **This codebase currently uses Kyber768
-alone** in `auth_module/services/kyber_crypto.py`,
-`behavioral_recovery/services/quantum_crypto_service.py`, and
-`security/services/lattice_crypto_engine.py` — no X25519 mixing layer is
-present. A follow-up ticket is required to introduce the hybrid wrapper;
+key exchange (e.g. ML-KEM-768 ⊕ X25519), so a flaw in either primitive does
+not compromise the session key. **This codebase currently uses ML-KEM-768
+alone** in `auth_module/services/kyber_crypto.py` and
+`behavioral_recovery/services/quantum_crypto_service.py` (ML-KEM-1024 in
+`security/services/lattice_crypto_engine.py`) — no X25519 mixing layer is
+present.A follow-up ticket is required to introduce the hybrid wrapper;
 that work is out of scope for the dependency-pinning effort because it
 requires browser/mobile changes and a key-derivation design review.
 
