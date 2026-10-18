@@ -53,6 +53,11 @@ locally, or the code itself). Section 8 lists what was **not** verified.
 
 ### 2.1 What the project pins today
 
+> **Superseded 2026-10-19** (branch `chore/liboqs-0.16-ml-kem`): the image now builds
+> liboqs `0.16.0` + liboqs-python `0.16.0.1` with ML-KEM-512/768/1024 and Kyber512/768/1024,
+> and the backend writes ML-KEM-768. See the note under F13 and `DEPENDENCY_POLICY.md`.
+> The table below is the state this review was written against.
+
 | Component | Pin | Where |
 |---|---|---|
 | liboqs (C) | `0.11.0`, commit `6f30d7ef…` | `docker/backend/Dockerfile` (`LIBOQS_REF`, `LIBOQS_COMMIT`) |
@@ -425,6 +430,27 @@ recover is worse than none, because users rely on it.
 
 **Nothing to migrate:** existing shards and recovery blobs were never decryptable,
 and on the pinned argon2-cffi no passkey-primary backup could even be created.
+
+**ML-KEM migration (2026-10-19, branch `chore/liboqs-0.16-ml-kem`).** liboqs 0.11.0 /
+liboqs-python 0.10.0 → 0.16.0 / 0.16.0.1, and the backend KEM from round-3 Kyber768 to
+FIPS 203 ML-KEM-768. The two have the same sizes but do not interoperate, and a wrong-KEM
+decapsulation returns a wrong secret instead of raising, so a rename alone would have made
+every Kyber768 artefact silently unopenable. liboqs 0.16.0 still ships Kyber (checked in
+`.CMake/alg_support.cmake` and `src/kem/kyber/` at the tag), so the path taken is to build
+both and record the KEM per artefact:
+- passkey-primary blobs: `version: 3` writes `kem: "ML-KEM-768"` and binds the KEM name into
+  the private-key wrap AAD; `version: 2` (written since F13) is read as Kyber768;
+- recovery shards, `/api/kyber/*` blobs and behavioral embeddings: decrypt by their stored
+  `algorithm` label; unknown labels are refused, never guessed;
+- `KyberKeyPair.algorithm` is authoritative: encrypting to a stored Kyber768 key still uses
+  Kyber768, and the public-key cache now stores the KEM with the key (new cache key prefix);
+- Kyber768 is decrypt-only: no new Kyber768 keypairs.
+Verified with real liboqs in Docker: Kyber768 artefacts written by the old code on liboqs
+0.11.0 (a v2 passkey blob, a hybrid blob, a shard, a behavioral embedding) decrypt with the
+new code on 0.16.0, and a Kyber768 blob relabelled as ML-KEM-768 fails its tag. The image
+now runs `docker/backend/oqs_smoke.py` at build time. The frontend's WASM Kyber is
+unchanged: it never exchanges KEM material with the backend (`setup-commitments/` drops the
+`kyber_public_key` it sends, and nothing calls `/api/kyber/*`).
 
 **Still open (not fixed here):** `quantum_recovery_views.py` setup encrypts each
 guardian shard to a freshly generated guardian keypair and **discards the private
