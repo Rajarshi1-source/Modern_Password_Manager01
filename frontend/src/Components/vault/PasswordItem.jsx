@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { FaEye, FaEyeSlash, FaCopy, FaExternalLinkAlt, FaCheckCircle, FaUser, FaLock, FaGlobe, FaStickyNote } from 'react-icons/fa';
+import { toast } from 'react-hot-toast';
 import { copyPlain, copySecret } from '../../utils/secureClipboard';
 
 // Animations
@@ -207,7 +208,9 @@ const PasswordItem = ({ data, isDecrypted = true }) => {
     copy(text).then(() => {
       setCopiedField(label);
       setTimeout(() => setCopiedField(null), 2000);
-    }, () => {});
+    }, () => {
+      toast.error('Could not copy to the clipboard. Copy it by hand.');
+    });
   };
 
   const togglePasswordVisibility = () => {

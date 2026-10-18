@@ -258,6 +258,84 @@ describe('leaving the page before the timeout', () => {
   });
 });
 
+describe('a clear refused while the user is away', () => {
+  const prefs = prefsWith({ clipboardTimeout: 5 });
+  let focused;
+  const refuseWhileUnfocused = async (text) => {
+    if (!focused) throw new DOMException('Document is not focused.', 'NotAllowedError');
+    clipboardText = text;
+  };
+  const comeBack = () => {
+    focused = true;
+    window.dispatchEvent(new Event('focus'));
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    toast.error.mockClear();
+    focused = false;
+    document.hasFocus = () => focused;
+  });
+  afterEach(() => { delete document.hasFocus; });
+
+  it('is retried when the page has focus again, still checking the value', async () => {
+    await copySecret('the-password', { prefs });
+    navigator.clipboard.writeText.mockImplementation(refuseWhileUnfocused);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(clipboardText).toBe('the-password');
+    expect(clipboardAutoClearFailed()).toBe(true);
+
+    comeBack();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clipboardText).toBe('');
+    expect(clipboardAutoClearFailed()).toBe(false);
+  });
+
+  it('visible but not yet focused waits for focus', async () => {
+    await copySecret('the-password', { prefs });
+    navigator.clipboard.writeText.mockImplementation(refuseWhileUnfocused);
+    await vi.advanceTimersByTimeAsync(5000);
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clipboardText).toBe('the-password');
+    comeBack();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clipboardText).toBe('');
+  });
+
+  it('leaves alone something copied elsewhere in the meantime', async () => {
+    await copySecret('the-password', { prefs });
+    navigator.clipboard.writeText.mockImplementation(refuseWhileUnfocused);
+    await vi.advanceTimersByTimeAsync(5000);
+    clipboardText = 'copied in another app';
+    comeBack();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clipboardText).toBe('copied in another app');
+  });
+
+  it('is retried only once', async () => {
+    await copySecret('the-password', { prefs });
+    navigator.clipboard.writeText.mockRejectedValue(new DOMException('no', 'NotAllowedError'));
+    await vi.advanceTimersByTimeAsync(5000);
+    comeBack();
+    await vi.advanceTimersByTimeAsync(0);
+    comeBack();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(3); // copy, clear, one retry
+  });
+
+  it('a newer copy cancels the retry', async () => {
+    await copySecret('the-password', { prefs });
+    navigator.clipboard.writeText.mockImplementation(refuseWhileUnfocused);
+    await vi.advanceTimersByTimeAsync(5000);
+    focused = true;
+    await copyPlain('alice');
+    comeBack();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clipboardText).toBe('alice');
+  });
+});
+
 describe('the first copy of a secret', () => {
   beforeEach(() => {
     localStorage.clear();

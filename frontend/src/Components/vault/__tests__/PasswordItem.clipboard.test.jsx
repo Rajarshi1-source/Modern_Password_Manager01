@@ -49,6 +49,16 @@ describe('PasswordItem copy', () => {
     expect(clipboardText).toBe('');
   });
 
+  it('says so when the copy fails', async () => {
+    const { toast } = await import('react-hot-toast');
+    toast.error.mockClear();
+    navigator.clipboard.writeText.mockRejectedValueOnce(new Error('denied'));
+    const { container } = render(<PasswordItem data={data} />);
+    await copyField(container, 2);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toMatch(/Copied/);
+  });
+
   it('leaves a copied username and URL alone', async () => {
     for (const [index, value] of [[0, 'alice'], [3, 'https://example.com']]) {
       const { container, unmount } = render(<PasswordItem data={data} />);

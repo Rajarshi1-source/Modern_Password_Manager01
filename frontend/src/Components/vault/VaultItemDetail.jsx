@@ -4,6 +4,7 @@ import { FaEye, FaEyeSlash, FaCopy, FaPen, FaTrash, FaExclamationTriangle, FaLoc
 import { useVault } from '../../contexts/VaultContext';
 import { formatDate } from '../../utils/dateUtils';
 import { passwordStrength } from '../../utils/passwordUtils';
+import { toast } from 'react-hot-toast';
 import { copyPlain, copySecret } from '../../utils/secureClipboard';
 
 const SECRET_FIELDS = new Set(['password', 'card']);
@@ -397,7 +398,9 @@ const VaultItemDetail = ({ item, onEdit, onDelete }) => {
     copy(text).then(() => {
       setCopiedField(fieldName);
       setTimeout(() => setCopiedField(null), 2000);
-    }, () => {});
+    }, () => {
+      toast.error('Could not copy to the clipboard. Copy it by hand.');
+    });
   };
   
   const getTypeIcon = () => {

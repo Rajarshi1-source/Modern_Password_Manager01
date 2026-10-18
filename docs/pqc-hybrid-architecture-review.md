@@ -339,6 +339,10 @@ provide. Fix it in the frontend with the Playwright test in section 9.1.
   a clear pending is recorded synchronously and shown in Settings until a later
   clear succeeds. Hiding alone never clears: that is the user switching away to
   paste. Settings and a one-time hint on the first secret copy say so.
+- A clear the browser refuses (Chromium refuses clipboard access from an
+  unfocused page, where the user usually is when the timer fires) is retried
+  once when the page has focus again, still only if the clipboard holds the
+  secret. A newer copy cancels the retry.
 - `VaultItemDetail` and `PasswordItem` are imported nowhere, so the "main copy
   action" named above is unreachable. The reachable vault dashboard
   (`VaultItemCard`) has no copy action.
