@@ -1629,7 +1629,7 @@ BEHAVIORAL_RECOVERY = {
 # Post-Quantum Cryptography Configuration (Phase 2A)
 QUANTUM_CRYPTO = {
     'ENABLED': os.environ.get('QUANTUM_CRYPTO_ENABLED', 'True').lower() == 'true',
-    'ALGORITHM': os.environ.get('QUANTUM_ALGORITHM', 'Kyber768'),
+    'ALGORITHM': os.environ.get('QUANTUM_ALGORITHM', 'ML-KEM-768'),
     'FALLBACK_ENABLED': os.environ.get('QUANTUM_FALLBACK_ENABLED', 'True').lower() == 'true',
     'HYBRID_MODE': True,  # Always use hybrid Kyber + AES-256-GCM
     'ALLOW_SIMULATION': DEBUG,  # Only allow simulation in DEBUG mode
@@ -2019,7 +2019,7 @@ QUANTUM_ENTANGLEMENT = {
     'ENABLED': os.environ.get('ENTANGLEMENT_ENABLED', 'True').lower() == 'true',
     
     # Lattice Cryptography
-    'LATTICE_ALGORITHM': os.environ.get('LATTICE_ALGO', 'kyber-1024'),
+    'LATTICE_ALGORITHM': os.environ.get('LATTICE_ALGO', 'ml-kem-1024'),
     
     # Randomness Pool
     'POOL_SIZE_BYTES': int(os.environ.get('ENTANGLE_POOL_SIZE', '4096')),
@@ -2231,7 +2231,7 @@ DARK_PROTOCOL = {
     'BRIDGE_DISCOVERY_URL': os.environ.get('DARK_PROTOCOL_BRIDGE_DISCOVERY', ''),
     
     # Encryption
-    'ENCRYPTION_ALGORITHM': os.environ.get('DARK_PROTOCOL_ENCRYPTION', 'kyber-1024'),
+    'ENCRYPTION_ALGORITHM': os.environ.get('DARK_PROTOCOL_ENCRYPTION', 'ml-kem-1024'),
     'USE_LATTICE_CRYPTO': os.environ.get('DARK_PROTOCOL_USE_LATTICE', 'True').lower() == 'true',
     
     # Noise and padding

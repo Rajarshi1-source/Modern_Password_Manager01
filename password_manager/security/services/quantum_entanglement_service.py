@@ -79,7 +79,7 @@ def get_entanglement_config() -> Dict[str, Any]:
     """Get entanglement configuration from settings."""
     return getattr(settings, 'QUANTUM_ENTANGLEMENT', {
         'ENABLED': True,
-        'LATTICE_ALGORITHM': 'kyber-1024',
+        'LATTICE_ALGORITHM': 'ml-kem-1024',
         'POOL_SIZE_BYTES': 4096,
         'ENTROPY_THRESHOLD': 7.5,
         'SYNC_INTERVAL_SECONDS': 300,

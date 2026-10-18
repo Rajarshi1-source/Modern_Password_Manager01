@@ -43,7 +43,13 @@ from rest_framework import status
 from .models import KyberKeyPair, KyberEncryptedPassword, KyberSession
 from .services.parallel_kyber import ParallelKyberOperations, get_parallel_kyber
 from .services.kyber_cache import KyberCacheManager, get_kyber_cache
-from .services.kyber_crypto import get_crypto_status, production_kyber
+from .services.kyber_crypto import (
+    DEFAULT_KEM,
+    get_crypto_status,
+    hybrid_algorithm_for_kem,
+    production_kyber,
+    require_supported_kem,
+)
 from .services.optimized_ntt import get_optimized_ntt
 from django.db.models import Max
 
@@ -90,7 +96,7 @@ def get_user_keypair(user, version: int = None, create_if_missing: bool = False)
                 public_key=base64.b64decode(new_keypair['public_key']),
                 private_key=base64.b64decode(new_keypair['private_key']),
                 key_version=max_version + 1,
-                algorithm='Kyber768',
+                algorithm=new_keypair['algorithm'],
                 security_level=3
             )
             
@@ -104,8 +110,8 @@ def get_user_keypair(user, version: int = None, create_if_missing: bool = False)
 
 
 @sync_to_async
-def store_keypair_db(user, public_key: bytes, private_key: bytes):
-    """Store keypair in database."""
+def store_keypair_db(user, public_key: bytes, private_key: bytes, algorithm: str):
+    """Store keypair in database, recording its KEM."""
     try:
         # Get next version
         from django.db.models import Max
@@ -122,6 +128,7 @@ def store_keypair_db(user, public_key: bytes, private_key: bytes):
             public_key=public_key,
             private_key=private_key,
             key_version=max_version + 1,
+            algorithm=algorithm,
             is_active=True
         )
         
@@ -152,7 +159,7 @@ def store_encrypted_password_db(
             kyber_ciphertext=base64.b64decode(encrypted_data['kyber_ciphertext']),
             aes_ciphertext=base64.b64decode(encrypted_data['aes_ciphertext']),
             nonce=base64.b64decode(encrypted_data['nonce']),
-            algorithm=encrypted_data.get('algorithm', 'Kyber768-AES256-GCM'),
+            algorithm=encrypted_data['algorithm'],
             encryption_version=int(encrypted_data.get('version', '1').split('.')[0])
         )
         
@@ -171,11 +178,10 @@ def store_encrypted_password_db(
 @permission_classes([IsAuthenticated])
 async def generate_keypair_view(request):
     """
-    Generate a new Kyber keypair for the authenticated user.
-    
+    Generate a new ML-KEM-768 keypair for the authenticated user.
+
     Request Body (optional):
         {
-            "algorithm": "Kyber768",  // Kyber512, Kyber768, Kyber1024
             "store": true,            // Store in database
             "cache": true             // Cache public key
         }
@@ -186,7 +192,7 @@ async def generate_keypair_view(request):
             "public_key": "base64...",
             "public_key_size": 1184,
             "key_version": 1,
-            "algorithm": "Kyber768",
+            "algorithm": "ML-KEM-768",
             "is_quantum_resistant": true,
             "generation_time_ms": 2.5
         }
@@ -199,17 +205,18 @@ async def generate_keypair_view(request):
         
         store_in_db = data.get('store', True)
         cache_key = data.get('cache', True)
-        algorithm = data.get('algorithm', 'Kyber768')
-        
+
         # Check cache first
         cache_manager = get_kyber_cache()
-        cached_key = cache_manager.get_cached_public_key(user.id)
-        
-        if cached_key and not data.get('force_new', False):
+        cached = cache_manager.get_cached_public_key_entry(user.id)
+
+        if cached and not data.get('force_new', False):
+            cached_key, cached_algorithm = cached
             return Response({
                 'status': 'success',
                 'public_key': base64.b64encode(cached_key).decode('utf-8'),
                 'public_key_size': len(cached_key),
+                'algorithm': cached_algorithm,
                 'cached': True,
                 'message': 'Returned cached public key'
             })
@@ -225,12 +232,16 @@ async def generate_keypair_view(request):
         
         # Store in database
         if store_in_db:
-            db_keypair = await store_keypair_db(user, public_key_bytes, private_key_bytes)
+            db_keypair = await store_keypair_db(
+                user, public_key_bytes, private_key_bytes, keypair['algorithm']
+            )
             key_version = db_keypair.key_version
         
         # Cache public key
         if cache_key:
-            cache_manager.cache_public_key(user.id, public_key_bytes)
+            cache_manager.cache_public_key(
+                user.id, public_key_bytes, algorithm=keypair['algorithm']
+            )
         
         elapsed = time.perf_counter() - start_time
         
@@ -239,7 +250,7 @@ async def generate_keypair_view(request):
             'public_key': keypair['public_key'],
             'public_key_size': keypair['public_key_size'],
             'key_version': key_version,
-            'algorithm': algorithm,
+            'algorithm': keypair['algorithm'],
             'is_quantum_resistant': keypair['is_real_pqc'],
             'generation_time_ms': elapsed * 1000,
             'cached': False
@@ -263,6 +274,7 @@ async def encrypt_view(request):
         {
             "plaintext": "string or base64",
             "public_key": "base64...",  // Optional, uses user's key if not provided
+            "kem": "ML-KEM-768",  // KEM of public_key (default); ignored for the user's key
             "associated_data": "base64...",  // Optional AAD
             "encode_plaintext": true  // If plaintext is string, encode to bytes
         }
@@ -273,7 +285,7 @@ async def encrypt_view(request):
             "kyber_ciphertext": "base64...",
             "aes_ciphertext": "base64...",
             "nonce": "base64...",
-            "algorithm": "Kyber768-AES256-GCM",
+            "algorithm": "ML-KEM-768-AES256-GCM",  // pass back to decrypt
             "encryption_time_ms": 1.2
         }
     """
@@ -297,22 +309,33 @@ async def encrypt_view(request):
         else:
             plaintext_bytes = base64.b64decode(plaintext)
         
-        # Get public key
+        # Get public key, and the KEM it belongs to: encapsulating to it with
+        # any other KEM yields ciphertext its private key cannot open.
         public_key_b64 = data.get('public_key')
-        
+
         if public_key_b64:
             public_key = base64.b64decode(public_key_b64)
+            try:
+                kem = require_supported_kem(data.get('kem', DEFAULT_KEM))
+            except ValueError as e:
+                return Response({
+                    'status': 'error',
+                    'message': str(e)
+                }, status=status.HTTP_400_BAD_REQUEST)
         else:
             # Use user's cached or stored key
             cache_manager = get_kyber_cache()
-            public_key = cache_manager.get_cached_public_key(user.id)
-            
-            if not public_key:
+            cached = cache_manager.get_cached_public_key_entry(user.id)
+
+            if cached:
+                public_key, kem = cached
+            else:
                 # Get from database
                 keypair = await get_user_keypair(user, create_if_missing=True)
                 if keypair:
                     public_key = bytes(keypair.public_key)
-                    cache_manager.cache_public_key(user.id, public_key)
+                    kem = keypair.algorithm
+                    cache_manager.cache_public_key(user.id, public_key, algorithm=kem)
                 else:
                     return Response({
                         'status': 'error',
@@ -326,7 +349,7 @@ async def encrypt_view(request):
         
         # Encrypt
         kyber_ops = get_parallel_kyber()
-        encrypted = kyber_ops.encrypt_data(plaintext_bytes, public_key, aad)
+        encrypted = kyber_ops.encrypt_data(plaintext_bytes, public_key, aad, kem=kem)
         
         elapsed = time.perf_counter() - start_time
         
@@ -355,6 +378,8 @@ async def decrypt_view(request):
             "kyber_ciphertext": "base64...",
             "aes_ciphertext": "base64...",
             "nonce": "base64...",
+            "algorithm": "ML-KEM-768-AES256-GCM",  // As returned by encrypt. Omitted:
+                                                   // the stored keypair's KEM, else Kyber768
             "private_key": "base64...",  // Optional, uses user's key if not provided
             "associated_data": "base64...",  // Optional AAD
             "decode_plaintext": true  // Return plaintext as string
@@ -382,9 +407,11 @@ async def decrypt_view(request):
                     'message': f'{field} is required'
                 }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Get private key
+        # Get private key. Without an explicit label, a stored key's KEM
+        # decides how to decapsulate (see kem_for_hybrid_algorithm).
         private_key_b64 = data.get('private_key')
-        
+        algorithm = data.get('algorithm')
+
         if private_key_b64:
             private_key = base64.b64decode(private_key_b64)
         else:
@@ -392,6 +419,8 @@ async def decrypt_view(request):
             keypair = await get_user_keypair(user)
             if keypair:
                 private_key = bytes(keypair.private_key)
+                if not algorithm:
+                    algorithm = hybrid_algorithm_for_kem(keypair.algorithm)
             else:
                 return Response({
                     'status': 'error',
@@ -408,7 +437,8 @@ async def decrypt_view(request):
             'kyber_ciphertext': data['kyber_ciphertext'],
             'aes_ciphertext': data['aes_ciphertext'],
             'nonce': data['nonce'],
-            'aad_hash': data.get('aad_hash')
+            'aad_hash': data.get('aad_hash'),
+            'algorithm': algorithm,
         }
         
         # Decrypt
@@ -486,13 +516,16 @@ async def batch_encrypt_view(request):
         
         # Get user's public key
         cache_manager = get_kyber_cache()
-        public_key = cache_manager.get_cached_public_key(user.id)
-        
-        if not public_key:
+        cached = cache_manager.get_cached_public_key_entry(user.id)
+
+        if cached:
+            public_key, kem = cached
+        else:
             keypair = await get_user_keypair(user, create_if_missing=True)
             if keypair:
                 public_key = bytes(keypair.public_key)
-                cache_manager.cache_public_key(user.id, public_key)
+                kem = keypair.algorithm
+                cache_manager.cache_public_key(user.id, public_key, algorithm=kem)
             else:
                 return Response({
                     'status': 'error',
@@ -505,7 +538,7 @@ async def batch_encrypt_view(request):
         
         # Batch encrypt
         kyber_ops = get_parallel_kyber()
-        encrypted_results = await kyber_ops.batch_encrypt(public_keys, messages)
+        encrypted_results = await kyber_ops.batch_encrypt(public_keys, messages, kem=kem)
         
         # Store in database if requested
         if store_in_db:
@@ -554,8 +587,7 @@ async def batch_keygen_view(request):
     
     Request Body:
         {
-            "count": 5,
-            "algorithm": "Kyber768"
+            "count": 5
         }
     
     Response:
@@ -580,6 +612,7 @@ async def batch_keygen_view(request):
             {
                 'public_key': kp['public_key'],
                 'public_key_size': kp['public_key_size'],
+                'algorithm': kp['algorithm'],
                 'timestamp': kp['timestamp'],
                 'is_real_pqc': kp['is_real_pqc']
             }
@@ -616,7 +649,7 @@ def get_kyber_status(request):
             "crypto_status": {
                 "liboqs_available": true,
                 "using_real_pqc": true,
-                "algorithm": "Kyber768",
+                "algorithm": "ML-KEM-768",
                 ...
             },
             "user_keypair": {
@@ -735,7 +768,7 @@ def get_user_public_key(request):
             "status": "success",
             "public_key": "base64...",
             "key_version": 1,
-            "algorithm": "Kyber768"
+            "algorithm": "ML-KEM-768"
         }
     """
     try:
@@ -743,19 +776,20 @@ def get_user_public_key(request):
         
         # Check cache first
         cache_manager = get_kyber_cache()
-        cached_key = cache_manager.get_cached_public_key(user.id)
-        
-        if cached_key:
+        cached = cache_manager.get_cached_public_key_entry(user.id)
+
+        if cached:
+            cached_key, cached_algorithm = cached
             keypair = KyberKeyPair.objects.filter(
-                user=user, 
+                user=user,
                 is_active=True
             ).order_by('-key_version').first()
-            
+
             return Response({
                 'status': 'success',
                 'public_key': base64.b64encode(cached_key).decode('utf-8'),
                 'key_version': keypair.key_version if keypair else 0,
-                'algorithm': keypair.algorithm if keypair else 'Kyber768',
+                'algorithm': cached_algorithm,
                 'cached': True
             })
         
@@ -772,8 +806,8 @@ def get_user_public_key(request):
             }, status=status.HTTP_404_NOT_FOUND)
         
         public_key = bytes(keypair.public_key)
-        cache_manager.cache_public_key(user.id, public_key)
-        
+        cache_manager.cache_public_key(user.id, public_key, algorithm=keypair.algorithm)
+
         return Response({
             'status': 'success',
             'public_key': base64.b64encode(public_key).decode('utf-8'),

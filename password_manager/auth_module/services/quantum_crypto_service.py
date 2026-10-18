@@ -1,9 +1,11 @@
 """
 Post-Quantum Cryptography Service
 
-Hybrid CRYSTALS-Kyber-768 + AES-256-GCM encryption for recovery shards, plus
-Shamir splitting and password-based helpers. The KEM itself is delegated to
-``auth_module.services.kyber_crypto.ProductionKyber``.
+Hybrid ML-KEM-768 (FIPS 203) + AES-256-GCM encryption for recovery shards,
+plus Shamir splitting and password-based helpers. The KEM itself is delegated
+to ``auth_module.services.kyber_crypto.ProductionKyber``. Shards written before
+the ML-KEM migration used round-3 Kyber768 and still decrypt: every shard
+records its KEM in 'algorithm', and decapsulation takes the KEM explicitly.
 """
 
 import os
@@ -16,23 +18,37 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
 import json
 
-from auth_module.services.kyber_crypto import ProductionKyber
+from auth_module.services.kyber_crypto import (
+    DEFAULT_KEM,
+    KYBER_768,
+    ML_KEM_768,
+    ProductionKyber,
+)
+
+# encrypt_shard_hybrid's 'algorithm' labels, one per KEM. The Kyber768 label
+# is the one every shard written before the ML-KEM migration carries.
+SHARD_ALGORITHMS = {
+    'ML-KEM-768-AES-256-GCM': ML_KEM_768,
+    'Kyber-768-AES-256-GCM': KYBER_768,
+}
+_SHARD_LABELS = {kem: label for label, kem in SHARD_ALGORITHMS.items()}
 
 
 class QuantumCryptoService:
     """
     Service for quantum-resistant encryption using hybrid approach:
-    1. CRYSTALS-Kyber-768 for key encapsulation (post-quantum)
+    1. ML-KEM-768 for key encapsulation (post-quantum)
     2. AES-256-GCM for data encryption (classical but proven)
 
-    The KEM is ``kyber_crypto.ProductionKyber`` (liboqs ``Kyber768``). Its
+    The KEM is ``kyber_crypto.ProductionKyber`` (liboqs ``ML-KEM-768``, or the
+    legacy ``Kyber768`` for data that records it). Its
     simulated fallback is refused unless QUANTUM_CRYPTO['ALLOW_SIMULATION']
     is True. Until F13 (docs/pqc-hybrid-architecture-review.md) this class
     returned fresh ``os.urandom`` bytes from all three KEM methods in every
     environment, so nothing it encrypted could ever be decrypted.
     """
 
-    # Key sizes for CRYSTALS-Kyber-768 (NIST Level 3)
+    # Key sizes for ML-KEM-768 (NIST Level 3; same as Kyber768)
     PUBLIC_KEY_SIZE = ProductionKyber.PUBLIC_KEY_SIZE
     PRIVATE_KEY_SIZE = ProductionKyber.PRIVATE_KEY_SIZE
     CIPHERTEXT_SIZE = ProductionKyber.CIPHERTEXT_SIZE
@@ -42,51 +58,56 @@ class QuantumCryptoService:
         self.backend = default_backend()
 
     @staticmethod
-    def _kem() -> ProductionKyber:
+    def _kem(kem: str = DEFAULT_KEM) -> ProductionKyber:
         # Built per call rather than once: ProductionKyber picks its
         # implementation when constructed, and the module-level instance
         # below is created at import time.
-        return ProductionKyber()
+        return ProductionKyber(algorithm=kem)
 
-    def generate_kyber_keypair(self) -> Tuple[bytes, bytes]:
+    def generate_kyber_keypair(self, kem: str = DEFAULT_KEM) -> Tuple[bytes, bytes]:
         """
-        Generate CRYSTALS-Kyber-768 keypair
+        Generate a post-quantum keypair (ML-KEM-768 by default)
 
         Returns:
             (public_key, private_key): Post-quantum key pair
         """
-        return self._kem().generate_keypair()
+        return self._kem(kem).generate_keypair()
 
-    def kyber_encapsulate(self, public_key: bytes) -> Tuple[bytes, bytes]:
+    def kyber_encapsulate(self, public_key: bytes, kem: str = DEFAULT_KEM) -> Tuple[bytes, bytes]:
         """
         Encapsulate a shared secret using recipient's public key
 
         Args:
-            public_key: Recipient's Kyber public key
+            public_key: Recipient's public key
+            kem: The KEM public_key belongs to
 
         Returns:
             (ciphertext, shared_secret): Encapsulated shared secret and the secret itself
         """
-        return self._kem().encapsulate(public_key)
+        return self._kem(kem).encapsulate(public_key)
 
-    def kyber_decapsulate(self, ciphertext: bytes, private_key: bytes) -> bytes:
+    def kyber_decapsulate(self, ciphertext: bytes, private_key: bytes, *, kem: str) -> bytes:
         """
         Decapsulate shared secret using private key
 
         Args:
-            ciphertext: Kyber ciphertext
-            private_key: Recipient's Kyber private key (the one matching the
+            ciphertext: KEM ciphertext
+            private_key: Recipient's private key (the one matching the
                 public key the ciphertext was encapsulated to)
+            kem: The KEM the stored artefact records. Required, with no
+                default: decapsulating with the wrong KEM returns a wrong
+                secret instead of raising.
 
         Returns:
             shared_secret: Decapsulated shared secret
         """
-        return self._kem().decapsulate(ciphertext, private_key)
+        return self._kem(kem).decapsulate(ciphertext, private_key)
 
     def encrypt_shard_hybrid(
         self,
         shard_data: bytes,
-        public_key: bytes
+        public_key: bytes,
+        kem: str = DEFAULT_KEM,
     ) -> Dict[str, bytes]:
         """
         Encrypt a recovery shard using hybrid post-quantum encryption
@@ -104,8 +125,8 @@ class QuantumCryptoService:
         Returns:
             Dictionary with encrypted data, ciphertext, nonce
         """
-        # Step 1: Kyber key encapsulation
-        kyber_ciphertext, shared_secret = self.kyber_encapsulate(public_key)
+        # Step 1: KEM key encapsulation
+        kyber_ciphertext, shared_secret = self.kyber_encapsulate(public_key, kem)
         
         # Step 2: Derive AES key from shared secret using HKDF
         aes_key = self._derive_aes_key_from_secret(shared_secret)
@@ -119,7 +140,7 @@ class QuantumCryptoService:
             'kyber_ciphertext': kyber_ciphertext,
             'aes_ciphertext': ciphertext,
             'nonce': nonce,
-            'algorithm': 'Kyber-768-AES-256-GCM',
+            'algorithm': _SHARD_LABELS[kem],
             'version': '1.0'
         }
     
@@ -138,9 +159,14 @@ class QuantumCryptoService:
         Returns:
             Decrypted shard data
         """
-        # Step 1: Kyber key decapsulation
+        # Step 1: KEM decapsulation, with the KEM the shard records
+        label = encrypted_shard.get('algorithm')
+        if label not in SHARD_ALGORITHMS:
+            raise ValueError(f"Unsupported recovery shard algorithm {label!r}")
         kyber_ciphertext = encrypted_shard['kyber_ciphertext']
-        shared_secret = self.kyber_decapsulate(kyber_ciphertext, private_key)
+        shared_secret = self.kyber_decapsulate(
+            kyber_ciphertext, private_key, kem=SHARD_ALGORITHMS[label]
+        )
         
         # Step 2: Derive AES key from shared secret
         aes_key = self._derive_aes_key_from_secret(shared_secret)
@@ -421,39 +447,33 @@ class Kyber:
     """
     
     @staticmethod
-    def encapsulate(public_key: bytes) -> Tuple[bytes, bytes]:
+    def encapsulate(public_key: bytes, kem: str = DEFAULT_KEM) -> Tuple[bytes, bytes]:
         """
-        Encapsulate a shared secret using a public key.
-        
-        Args:
-            public_key: Kyber public key (bytes)
-            
+        Encapsulate a shared secret using a public key of the KEM ``kem``.
+
         Returns:
             Tuple of (ciphertext, shared_secret)
         """
-        return quantum_crypto_service.kyber_encapsulate(public_key)
-    
+        return quantum_crypto_service.kyber_encapsulate(public_key, kem)
+
     @staticmethod
-    def decapsulate(private_key: bytes, ciphertext: bytes) -> bytes:
+    def decapsulate(private_key: bytes, ciphertext: bytes, *, kem: str) -> bytes:
         """
         Decapsulate a shared secret using a private key.
-        
-        Args:
-            private_key: Kyber private key (bytes)
-            ciphertext: Kyber ciphertext (bytes)
-            
+
+        ``kem`` is the KEM the stored artefact records; there is no default.
+
         Returns:
             Shared secret (bytes)
         """
-        return quantum_crypto_service.kyber_decapsulate(ciphertext, private_key)
-    
+        return quantum_crypto_service.kyber_decapsulate(ciphertext, private_key, kem=kem)
+
     @staticmethod
-    def generate_keypair() -> Tuple[bytes, bytes]:
+    def generate_keypair(kem: str = DEFAULT_KEM) -> Tuple[bytes, bytes]:
         """
-        Generate a new Kyber keypair.
-        
+        Generate a new post-quantum keypair (ML-KEM-768 by default).
+
         Returns:
             Tuple of (public_key, private_key)
         """
-        return quantum_crypto_service.generate_kyber_keypair()
-
+        return quantum_crypto_service.generate_kyber_keypair(kem)

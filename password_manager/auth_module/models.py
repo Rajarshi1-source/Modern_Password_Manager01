@@ -16,7 +16,9 @@ from .time_locked_models import *  # noqa: F401,F403  Layered Recovery Mesh — 
 
 class KyberKeyPair(models.Model):
     """
-    Optimized model for storing CRYSTALS-Kyber-768 key pairs.
+    Optimized model for storing post-quantum KEM key pairs: ML-KEM-768
+    (FIPS 203) for new keys; rows from before the ML-KEM migration are
+    round-3 Kyber768 and say so in ``algorithm``, which is authoritative.
     
     Key Sizes (NIST Level 3):
     - Public key: 1184 bytes
@@ -44,11 +46,11 @@ class KyberKeyPair(models.Model):
     # Key material (binary fields for efficiency)
     public_key = models.BinaryField(
         max_length=1568,  # Kyber-1024 max size for future-proofing
-        help_text="CRYSTALS-Kyber-768 public key (1184 bytes)"
+        help_text="ML-KEM-768 or Kyber768 public key (1184 bytes); see algorithm"
     )
     private_key = models.BinaryField(
         max_length=3168,  # Kyber-1024 max size
-        help_text="CRYSTALS-Kyber-768 private key (2400 bytes) - encrypted at rest"
+        help_text="ML-KEM-768 or Kyber768 private key (2400 bytes) - encrypted at rest"
     )
     
     # Key metadata
@@ -59,8 +61,8 @@ class KyberKeyPair(models.Model):
     )
     algorithm = models.CharField(
         max_length=50, 
-        default='Kyber768',
-        help_text="Kyber variant (Kyber512, Kyber768, Kyber1024)"
+        default='ML-KEM-768',
+        help_text="liboqs KEM name: ML-KEM-768, or Kyber768 (legacy, decrypt only)"
     )
     security_level = models.IntegerField(
         default=3,
@@ -251,7 +253,7 @@ class KyberEncryptedPassword(models.Model):
     # Kyber-encrypted data
     kyber_ciphertext = models.BinaryField(
         max_length=2048,
-        help_text="Kyber KEM ciphertext (1088 bytes for Kyber-768)"
+        help_text="KEM ciphertext (1088 bytes for ML-KEM-768 and Kyber768)"
     )
     aes_ciphertext = models.BinaryField(
         help_text="AES-256-GCM encrypted password data"
@@ -276,8 +278,8 @@ class KyberEncryptedPassword(models.Model):
     )
     algorithm = models.CharField(
         max_length=100,
-        default='Kyber768-AES256-GCM',
-        help_text="Full encryption algorithm identifier"
+        default='ML-KEM-768-AES256-GCM',
+        help_text="Full encryption algorithm identifier; names the KEM used to decrypt"
     )
     
     # Additional encrypted fields (JSON blob)

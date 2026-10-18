@@ -50,14 +50,15 @@ class LatticeCryptoEngineUnitTests(TestCase):
         from security.services.lattice_crypto_engine import LatticeCryptoEngine
         
         engine = LatticeCryptoEngine()
-        self.assertEqual(engine.algorithm, 'kyber-1024')
+        self.assertEqual(engine.algorithm, 'ml-kem-1024')
         self.assertIn(engine.algorithm, engine.SUPPORTED_ALGORITHMS)
     
     def test_engine_with_custom_algorithm(self):
         """Test engine with different Kyber variants."""
         from security.services.lattice_crypto_engine import LatticeCryptoEngine
         
-        for algo in ['kyber-1024', 'kyber-768', 'kyber-512']:
+        for algo in ['ml-kem-1024', 'ml-kem-768', 'ml-kem-512',
+                     'kyber-1024', 'kyber-768', 'kyber-512']:
             engine = LatticeCryptoEngine(algorithm=algo)
             self.assertEqual(engine.algorithm, algo)
     
@@ -67,6 +68,30 @@ class LatticeCryptoEngineUnitTests(TestCase):
 
         with self.assertRaises(ValueError):
             LatticeCryptoEngine(algorithm='invalid-algo')
+
+    def test_liboqs_receives_the_ml_kem_name_for_every_operation(self):
+        """Default is FIPS 203 ML-KEM-1024; liboqs is never silently handed
+        round-3 Kyber1024 (the old fallback for an unmapped name)."""
+        import security.services.lattice_crypto_engine as lce
+
+        oqs = MagicMock(name='oqs')
+        kem = oqs.KeyEncapsulation.return_value.__enter__.return_value
+        kem.generate_keypair.return_value = b'P' * 1568
+        kem.export_secret_key.return_value = b'S' * 3168
+        kem.encap_secret.return_value = (b'C' * 1568, b'K' * 32)
+        kem.decap_secret.return_value = b'K' * 32
+        with patch.multiple(lce, create=True, LIBOQS_AVAILABLE=True, oqs=oqs):
+            engine = lce.LatticeCryptoEngine()
+            keypair = engine.generate_lattice_keypair()
+            engine.encapsulate_key(keypair.public_key)
+            engine.decapsulate_key(keypair.private_key, b'C' * 1568)
+        self.assertEqual(
+            [c.args[0] for c in oqs.KeyEncapsulation.call_args_list],
+            ['ML-KEM-1024'] * 3,
+        )
+        with patch.multiple(lce, create=True, LIBOQS_AVAILABLE=True, oqs=oqs):
+            with self.assertRaises(ValueError):
+                lce.LatticeCryptoEngine().generate_lattice_keypair('kyber-2048')
 
     @override_settings(QUANTUM_CRYPTO={'ENABLED': True, 'ALLOW_SIMULATION': False})
     def test_engine_fails_closed_when_liboqs_missing_and_simulation_disabled(self):
@@ -130,7 +155,7 @@ class LatticeCryptoEngineUnitTests(TestCase):
         
         self.assertIsNotNone(keypair.key_id)
         self.assertIsNotNone(keypair.created_at)
-        self.assertIn('kyber', keypair.algorithm.lower())
+        self.assertIn('ml-kem', keypair.algorithm.lower())
     
     def test_encapsulate_decapsulate_roundtrip(self):
         """Test key encapsulation/decapsulation produces matching secrets."""

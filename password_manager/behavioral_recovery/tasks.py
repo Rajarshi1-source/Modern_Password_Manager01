@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 @shared_task(bind=True, max_retries=3)
 def async_quantum_encrypt_commitment(self, commitment_id, embedding_data):
     """
-    Asynchronously encrypt commitment with Kyber-768
+    Asynchronously encrypt commitment with ML-KEM-768
     
     Args:
         commitment_id: ID of BehavioralCommitment to encrypt
@@ -47,8 +47,8 @@ def async_quantum_encrypt_commitment(self, commitment_id, embedding_data):
         # Update commitment
         commitment.quantum_encrypted_embedding = quantum_encrypted
         commitment.kyber_public_key = public_key
-        commitment.encryption_algorithm = 'kyber768-aes256gcm'
-        commitment.is_quantum_protected = True
+        commitment.encryption_algorithm = quantum_encrypted['algorithm']
+        commitment.is_quantum_protected = quantum_crypto.is_quantum_protected(quantum_encrypted)
         commitment.save()
         
         logger.info(f"✅ Async quantum encryption completed for commitment {commitment_id}")
@@ -109,8 +109,8 @@ def async_migrate_commitments_to_quantum(batch_size=50):
                 commitment.legacy_encrypted_embedding = commitment.encrypted_embedding
                 commitment.quantum_encrypted_embedding = quantum_encrypted
                 commitment.kyber_public_key = public_key
-                commitment.encryption_algorithm = 'kyber768-aes256gcm'
-                commitment.is_quantum_protected = True
+                commitment.encryption_algorithm = quantum_encrypted['algorithm']
+                commitment.is_quantum_protected = quantum_crypto.is_quantum_protected(quantum_encrypted)
                 commitment.migrated_to_quantum = timezone.now()
                 commitment.save()
                 

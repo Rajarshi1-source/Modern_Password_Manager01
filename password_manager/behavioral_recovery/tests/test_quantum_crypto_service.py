@@ -139,11 +139,11 @@ class RealKyberPathTests(SimpleTestCase):
 
             public_key, private_key = svc.generate_keypair()
             self.assertEqual((public_key, private_key), (PUB, PRIV))
-            oqs.KeyEncapsulation.assert_called_with('Kyber768')
+            oqs.KeyEncapsulation.assert_called_with('ML-KEM-768')
 
             encrypted = svc.encrypt_behavioral_embedding(EMBEDDING, public_key)
             kem.encap_secret.assert_called_once_with(PUB)
-            self.assertEqual(encrypted['algorithm'], 'kyber768-aes256gcm')
+            self.assertEqual(encrypted['algorithm'], 'ml-kem-768-aes256gcm')
             self.assertTrue(svc.is_quantum_protected(encrypted))
 
             oqs.KeyEncapsulation.reset_mock()
@@ -151,7 +151,7 @@ class RealKyberPathTests(SimpleTestCase):
                 svc.decrypt_behavioral_embedding(encrypted, private_key),
                 EMBEDDING,
             )
-            oqs.KeyEncapsulation.assert_called_once_with('Kyber768', private_key)
+            oqs.KeyEncapsulation.assert_called_once_with('ML-KEM-768', private_key)
             kem.decap_secret.assert_called_once_with(KYBER_CT)
 
             # A different private key decapsulates to a different secret, so
@@ -160,7 +160,37 @@ class RealKyberPathTests(SimpleTestCase):
             other_private_key = b'O' * 2400
             with self.assertRaises(InvalidTag):
                 svc.decrypt_behavioral_embedding(encrypted, other_private_key)
-            oqs.KeyEncapsulation.assert_called_with('Kyber768', other_private_key)
+            oqs.KeyEncapsulation.assert_called_with('ML-KEM-768', other_private_key)
+
+    @DENY_SIM
+    def test_pre_migration_kyber768_blob_decapsulates_with_kyber768(self):
+        """The stored label picks the KEM: an embedding written before the
+        ML-KEM migration says kyber768-aes256gcm and must be decapsulated with
+        Kyber768 (the two are not interoperable), not the new default."""
+        oqs, kem = fake_oqs()
+        with real_liboqs(oqs):
+            svc = qcs.QuantumCryptoService()
+            encrypted = svc.encrypt_behavioral_embedding(EMBEDDING, PUB)
+            encrypted['algorithm'] = 'kyber768-aes256gcm'
+            self.assertTrue(svc.is_quantum_protected(encrypted))
+            oqs.KeyEncapsulation.reset_mock()
+            self.assertEqual(svc.decrypt_behavioral_embedding(encrypted, PRIV), EMBEDDING)
+            oqs.KeyEncapsulation.assert_called_once_with('Kyber768', PRIV)
+
+    @DENY_SIM
+    def test_unknown_algorithm_label_is_refused_not_guessed(self):
+        oqs, kem = fake_oqs()
+        with real_liboqs(oqs):
+            svc = qcs.QuantumCryptoService()
+            encrypted = svc.encrypt_behavioral_embedding(EMBEDDING, PUB)
+            for label in ('kyber1024-aes256gcm', '', None):
+                bad = dict(encrypted, algorithm=label) if label is not None else {
+                    k: v for k, v in encrypted.items() if k != 'algorithm'}
+                self.assertFalse(svc.is_quantum_protected(bad))
+                oqs.KeyEncapsulation.reset_mock()
+                with self.assertRaisesRegex(ValueError, 'Unsupported behavioral-embedding algorithm'):
+                    svc.decrypt_behavioral_embedding(bad, PRIV)
+                oqs.KeyEncapsulation.assert_not_called()
 
 
 class FailClosedTests(SimpleTestCase):
@@ -280,3 +310,32 @@ class CommitmentServiceDowngradeTests(SimpleTestCase):
         with real_liboqs(oqs):
             result = self._service()._encrypt_embedding(EMBEDDING)
         self.assertIsInstance(result, bytes)
+
+
+class CommitmentRecordsItsAlgorithmTests(SimpleTestCase):
+    """BehavioralCommitment.encryption_algorithm is the blob's own label (it
+    was hard-coded to kyber768-aes256gcm, which also tagged the non-PQ DEBUG
+    fallback as quantum-protected)."""
+
+    def _create(self):
+        from behavioral_recovery.services.commitment_service import CommitmentService
+        service = CommitmentService(use_quantum=True, use_blockchain=False)
+        with patch('behavioral_recovery.services.commitment_service.BehavioralCommitment.objects.create') as create:
+            service._create_commitment(MagicMock(name='user'), 'typing', EMBEDDING, {})
+        return create.call_args.kwargs
+
+    @DENY_SIM
+    def test_ml_kem_commitment_is_labelled_ml_kem(self):
+        oqs, kem = fake_oqs()
+        with real_liboqs(oqs):
+            kwargs = self._create()
+        self.assertEqual(kwargs['encryption_algorithm'], 'ml-kem-768-aes256gcm')
+        self.assertEqual(kwargs['quantum_encrypted_embedding']['algorithm'], 'ml-kem-768-aes256gcm')
+        self.assertTrue(kwargs['is_quantum_protected'])
+
+    @ALLOW_SIM
+    def test_fallback_commitment_is_not_labelled_quantum(self):
+        with no_liboqs():
+            kwargs = self._create()
+        self.assertEqual(kwargs['encryption_algorithm'], 'fallback-aes256gcm')
+        self.assertFalse(kwargs['is_quantum_protected'])

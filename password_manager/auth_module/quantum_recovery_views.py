@@ -36,6 +36,7 @@ from .quantum_recovery_models import (
     BehavioralBiometrics,
     RecoveryShardType
 )
+from .services.kyber_crypto import DEFAULT_KEM
 from .services.quantum_crypto_service import quantum_crypto_service
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     user=user,
                     total_shards=total_shards,
                     threshold_shards=threshold_shards,
+                    encryption_algorithm=DEFAULT_KEM,
                     kyber_public_key=public_key,
                     kyber_private_key_encrypted=quantum_crypto_service.serialize_encrypted_shard(encrypted_private_key),
                     is_active=False  # Will activate after guardian acceptance

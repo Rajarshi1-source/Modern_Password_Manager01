@@ -60,25 +60,28 @@ class BehavioralCommitment(models.Model):
     kyber_public_key = models.BinaryField(
         null=True,
         blank=True,
-        help_text="Kyber-768 public key for this commitment (1184 bytes)"
+        help_text="KEM public key for this commitment (1184 bytes); KEM per encryption_algorithm"
     )
     
     kyber_ciphertext = models.BinaryField(
         null=True,
         blank=True,
-        help_text="Kyber-encapsulated shared secret (1088 bytes)"
+        help_text="KEM-encapsulated shared secret (1088 bytes)"
     )
     
     quantum_encrypted_embedding = models.JSONField(
         null=True,
         blank=True,
-        help_text="Hybrid Kyber+AES encrypted embedding (complete encrypted data structure)"
+        help_text="Hybrid KEM+AES encrypted embedding (complete encrypted data structure)"
     )
     
     encryption_algorithm = models.CharField(
         max_length=50,
         default='base64',
-        help_text="Encryption algorithm: base64 (legacy), kyber768-aes256gcm (quantum)"
+        help_text=(
+            "Encryption algorithm: base64 (legacy), ml-kem-768-aes256gcm (quantum), "
+            "kyber768-aes256gcm (quantum, pre-ML-KEM), fallback-aes256gcm (DEBUG only)"
+        )
     )
     
     is_quantum_protected = models.BooleanField(

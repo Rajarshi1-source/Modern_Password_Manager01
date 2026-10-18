@@ -16,9 +16,14 @@ import base64
 
 # Import quantum crypto service (Phase 2A)
 try:
-    from .quantum_crypto_service import QuantumCryptoService, get_quantum_crypto_service
+    from .quantum_crypto_service import (
+        QUANTUM_ALGORITHMS,
+        QuantumCryptoService,
+        get_quantum_crypto_service,
+    )
     QUANTUM_CRYPTO_AVAILABLE = True
 except ImportError:
+    QUANTUM_ALGORITHMS = {}
     QUANTUM_CRYPTO_AVAILABLE = False
 
 # Import blockchain anchoring service (Phase 2B.1)
@@ -60,7 +65,7 @@ class CommitmentService:
     - Verifying behavioral similarity
     - Assessing profile quality
     
-    Phase 2A Enhancement: Uses CRYSTALS-Kyber-768 for quantum resistance
+    Phase 2A Enhancement: Uses ML-KEM-768 (FIPS 203) for quantum resistance
     """
     
     SIMILARITY_THRESHOLD = 0.87  # Similarity threshold for recovery
@@ -201,8 +206,9 @@ class CommitmentService:
                 encrypted_embedding=b'',  # Legacy field, keep empty
                 quantum_encrypted_embedding=quantum_encrypted,
                 kyber_public_key=public_key,
-                encryption_algorithm='kyber768-aes256gcm',
-                is_quantum_protected=True,
+                encryption_algorithm=quantum_encrypted['algorithm'],
+                # False for the DEBUG/test fallback blob, which is not PQ
+                is_quantum_protected=quantum_encrypted['algorithm'] in QUANTUM_ALGORITHMS,
                 unlock_conditions=unlock_conditions,
                 samples_used=samples_used,
                 is_active=True
@@ -359,7 +365,7 @@ class CommitmentService:
         """
         Encrypt behavioral embedding using quantum-resistant crypto
         
-        Phase 2A: Uses Kyber-768 + AES hybrid encryption when available
+        Phase 2A: Uses ML-KEM-768 + AES hybrid encryption when available
         
         Args:
             embedding_data: List or array of behavioral features
@@ -379,7 +385,7 @@ class CommitmentService:
                     public_key
                 )
                 
-                logger.info("Encrypted embedding with Kyber-768 (quantum-resistant)")
+                logger.info("Encrypted embedding with %s (quantum-resistant)", quantum_encrypted['algorithm'])
                 
                 # Return quantum-encrypted data and keys
                 return quantum_encrypted, public_key, private_key
@@ -426,7 +432,7 @@ class CommitmentService:
         """
         # Check if this is quantum-encrypted data
         if isinstance(encrypted_embedding, dict) and 'algorithm' in encrypted_embedding:
-            if encrypted_embedding['algorithm'].startswith('kyber') and kyber_private_key:
+            if encrypted_embedding['algorithm'] in QUANTUM_ALGORITHMS and kyber_private_key:
                 try:
                     # Quantum decryption
                     embedding_data = self.quantum_crypto.decrypt_behavioral_embedding(
@@ -434,7 +440,7 @@ class CommitmentService:
                         kyber_private_key
                     )
                     
-                    logger.info("Decrypted embedding with Kyber-768")
+                    logger.info("Decrypted embedding with %s", encrypted_embedding['algorithm'])
                     return embedding_data
                     
                 except Exception as e:

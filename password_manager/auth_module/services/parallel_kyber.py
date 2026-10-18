@@ -29,7 +29,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple, Dict, Optional, Any
 from functools import partial
 
-from .kyber_crypto import ProductionKyber, HybridKyberEncryption
+from .kyber_crypto import DEFAULT_KEM, ProductionKyber, HybridKyberEncryption
 from .optimized_ntt import get_optimized_ntt
 
 logger = logging.getLogger(__name__)
@@ -109,6 +109,7 @@ class ParallelKyberOperations:
                 'private_key_size': len(private_key),
                 'timestamp': time.time(),
                 'generation_time_ms': elapsed * 1000,
+                'algorithm': self.kyber.algorithm,
                 'is_real_pqc': self.kyber.is_real_pqc
             }
             
@@ -121,15 +122,17 @@ class ParallelKyberOperations:
         self,
         plaintext: bytes,
         public_key: bytes,
-        associated_data: Optional[bytes] = None
+        associated_data: Optional[bytes] = None,
+        kem: str = DEFAULT_KEM,
     ) -> Dict[str, Any]:
         """
-        Encrypt data using hybrid Kyber + AES-GCM (thread-safe).
+        Encrypt data using hybrid KEM + AES-GCM (thread-safe).
         
         Args:
             plaintext: Data to encrypt
-            public_key: Recipient's Kyber public key
+            public_key: Recipient's public key
             associated_data: Optional AAD for AEAD
+            kem: The KEM public_key belongs to (must match the key)
             
         Returns:
             Dictionary containing encrypted components
@@ -137,7 +140,7 @@ class ParallelKyberOperations:
         start_time = time.perf_counter()
         
         try:
-            result = self.hybrid.encrypt(plaintext, public_key, associated_data)
+            result = self.hybrid.encrypt(plaintext, public_key, associated_data, kem=kem)
             
             elapsed = time.perf_counter() - start_time
             self._metrics['encryptions'] += 1
@@ -239,10 +242,11 @@ class ParallelKyberOperations:
         self,
         public_keys: List[bytes],
         messages: List[bytes],
-        associated_data: Optional[List[bytes]] = None
+        associated_data: Optional[List[bytes]] = None,
+        kem: str = DEFAULT_KEM,
     ) -> List[Dict[str, Any]]:
         """
-        Encrypt multiple messages in parallel.
+        Encrypt multiple messages in parallel (all public keys of KEM ``kem``).
         
         Args:
             public_keys: List of recipient public keys
@@ -269,7 +273,7 @@ class ParallelKyberOperations:
         tasks = [
             loop.run_in_executor(
                 self.executor,
-                partial(self.encrypt_data, msg, pk, aad)
+                partial(self.encrypt_data, msg, pk, aad, kem)
             )
             for pk, msg, aad in zip(public_keys, messages, associated_data)
         ]
@@ -411,10 +415,11 @@ class ParallelKyberOperations:
         self,
         public_keys: List[bytes],
         messages: List[bytes],
-        associated_data: Optional[List[bytes]] = None
+        associated_data: Optional[List[bytes]] = None,
+        kem: str = DEFAULT_KEM,
     ) -> List[Dict[str, Any]]:
         """
-        Synchronous batch encryption.
+        Synchronous batch encryption (all public keys of KEM ``kem``).
         
         Args:
             public_keys: List of recipient public keys
@@ -434,7 +439,7 @@ class ParallelKyberOperations:
             associated_data = [None] * num_items
         
         futures = [
-            self.executor.submit(self.encrypt_data, msg, pk, aad)
+            self.executor.submit(self.encrypt_data, msg, pk, aad, kem)
             for pk, msg, aad in zip(public_keys, messages, associated_data)
         ]
         
@@ -465,7 +470,8 @@ class ParallelKyberOperations:
         public_keys: List[bytes]
     ) -> List[Tuple[bytes, bytes]]:
         """
-        Perform parallel KEM encapsulation.
+        Perform parallel KEM encapsulation with this instance's KEM
+        (ML-KEM-768).
         
         Args:
             public_keys: List of public keys
@@ -490,7 +496,8 @@ class ParallelKyberOperations:
         private_keys: List[bytes]
     ) -> List[bytes]:
         """
-        Perform parallel KEM decapsulation.
+        Perform parallel KEM decapsulation with this instance's KEM
+        (ML-KEM-768); not for Kyber768 ciphertexts.
         
         Args:
             ciphertexts: List of ciphertexts
