@@ -11,17 +11,19 @@ PyJWT==2.15.1
 requests==2.33.0
 
 # Fixes for pyasn1 / pyasn1-modules compatibility (match service-identity / google-auth needs)
-pyasn1==0.6.3
+pyasn1==0.6.4  # GHSA-8ppf-4f7h-5ppj / GHSA-m4p7-r5rc-7g4j / GHSA-hm4w-wwcw-mr6r: ASN.1 decoding DoS, fixed 0.6.4
 pyasn1-modules==0.4.2
 
-# Modern HTTP/2 stack (used by httpx[http2]). h2 4.3.0 requires hyperframe>=6.1
-# and hpack>=4.1, so keep these three aligned. NOTE: the legacy apns2/hyper 0.7.0
+# Modern HTTP/2 stack (used by httpx[http2]). h2 4.4.1 requires hyperframe>=6.1
+# and hpack>=4.1, so keep these three aligned. h2 4.4.1 fixes GHSA-6hr6-w5qg-qmwg
+# (duplicate-Host request smuggling); hpack 4.2.0 fixes GHSA-8v8h-hg4w-mvq2
+# (unbounded varint decoding). NOTE: the legacy apns2/hyper 0.7.0
 # stack (hyperframe<4, h2<3) is intentionally NOT pinned here — it is incompatible
-# with h2 4.3.0 and is not pulled by any declared dependency (django-push-notifications
+# with h2 4.x and is not pulled by any declared dependency (django-push-notifications
 # is installed without the [apns] extra).
-h2==4.3.0
+h2==4.4.1
 hyperframe==6.1.0
-hpack==4.1.0
+hpack==4.2.0
 
 # Other transitive/security pins recommended by pip-audit / pip-check steps
 filelock==3.20.3

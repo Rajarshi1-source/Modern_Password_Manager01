@@ -1,10 +1,28 @@
 version: 2
+# Weekly version updates. Minor/patch bumps are grouped into one PR per
+# ecosystem/directory; majors arrive one per PR. Nothing here enables
+# auto-merge: every PR still needs CI and a human merge.
 updates:
   # Smart contracts (npm)
   - package-ecosystem: "npm"
     directory: "/contracts"
     schedule:
       interval: "weekly"
+    # Hold new releases for a week before proposing them, so a hijacked or
+    # yanked release is usually caught upstream first. Security updates are
+    # not delayed by cooldown.
+    cooldown:
+      default-days: 7
+    groups:
+      # One weekly PR for all minor/patch bumps. Major bumps are not grouped:
+      # each arrives as its own PR for manual review. Security updates stay
+      # separate PRs too (groups default to version updates only).
+      contracts-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
     ignore:
       # tmp is pinned via overrides because patch-package@6.5.1 (via @chainlink/contracts)
       # constrains it to ^0.0.33. Remove this ignore when @chainlink/contracts upgrades patch-package.
@@ -17,6 +35,21 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # Hold new releases for a week before proposing them, so a hijacked or
+    # yanked release is usually caught upstream first. Security updates are
+    # not delayed by cooldown.
+    cooldown:
+      default-days: 7
+    groups:
+      # One weekly PR for all minor/patch bumps. Major bumps are not grouped:
+      # each arrives as its own PR for manual review. Security updates stay
+      # separate PRs too (groups default to version updates only).
+      frontend-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # Backend Python dependencies (pip)
   - package-ecosystem: "pip"
@@ -24,7 +57,26 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # Hold new releases for a week before proposing them, so a hijacked or
+    # yanked release is usually caught upstream first. Security updates are
+    # not delayed by cooldown.
+    cooldown:
+      default-days: 7
     groups:
+      # Everything except the crypto stack below: one weekly minor/patch PR.
+      # Dependabot puts a dependency in the FIRST group it matches, so the
+      # crypto packages are excluded here to keep them in crypto-stack.
+      pip-minor-patch:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "cryptography"
+          - "pyopenssl"
+          - "fido2"
+          - "pyjwt"
+        update-types:
+          - "minor"
+          - "patch"
       # These cap each other (pyOpenSSL <cryptography+1 major, fido2 likewise), so a
       # lone bump of any one produces a PR that cannot resolve. Update them together;
       # .github/workflows/dependency-compat.yml then checks the combined result.
@@ -48,21 +100,81 @@ updates:
     directory: "/docker/backend"
     schedule:
       interval: "weekly"
+    # Hold new releases for a week before proposing them, so a hijacked or
+    # yanked release is usually caught upstream first. Security updates are
+    # not delayed by cooldown.
+    cooldown:
+      default-days: 7
+    groups:
+      # One weekly PR for all minor/patch bumps. Major bumps are not grouped:
+      # each arrives as its own PR for manual review. Security updates stay
+      # separate PRs too (groups default to version updates only).
+      docker-backend-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # Docker base images — frontend (production)
   - package-ecosystem: "docker"
     directory: "/docker/frontend"
     schedule:
       interval: "weekly"
+    # Hold new releases for a week before proposing them, so a hijacked or
+    # yanked release is usually caught upstream first. Security updates are
+    # not delayed by cooldown.
+    cooldown:
+      default-days: 7
+    groups:
+      # One weekly PR for all minor/patch bumps. Major bumps are not grouped:
+      # each arrives as its own PR for manual review. Security updates stay
+      # separate PRs too (groups default to version updates only).
+      docker-frontend-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # Docker base images — backend prod
   - package-ecosystem: "docker"
     directory: "/password_manager"
     schedule:
       interval: "weekly"
+    # Hold new releases for a week before proposing them, so a hijacked or
+    # yanked release is usually caught upstream first. Security updates are
+    # not delayed by cooldown.
+    cooldown:
+      default-days: 7
+    groups:
+      # One weekly PR for all minor/patch bumps. Major bumps are not grouped:
+      # each arrives as its own PR for manual review. Security updates stay
+      # separate PRs too (groups default to version updates only).
+      docker-backend-prod-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    # Hold new releases for a week before proposing them, so a hijacked or
+    # yanked release is usually caught upstream first. Security updates are
+    # not delayed by cooldown.
+    cooldown:
+      default-days: 7
+    groups:
+      # One weekly PR for all minor/patch bumps. Major bumps are not grouped:
+      # each arrives as its own PR for manual review. Security updates stay
+      # separate PRs too (groups default to version updates only).
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
