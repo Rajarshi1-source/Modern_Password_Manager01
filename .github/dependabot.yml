@@ -35,11 +35,12 @@ updates:
           - "fido2"
           - "pyjwt"
     ignore:
-      # Pinned on purpose to pair with liboqs (C) 0.11.0, built from pinned git
-      # SHAs in docker/backend/Dockerfile (PyPI only publishes the 0.16.x line, so
-      # a bump of this lock line alone would make the lock disagree with the image).
-      # Upgrading is a deliberate migration (Kyber round 3 -> ML-KEM, real-liboqs CI),
-      # not a version bump: see docs/pqc-hybrid-architecture-review.md.
+      # Pinned on purpose to pair with liboqs (C) 0.16.0: both are built from
+      # pinned git SHAs in docker/backend/Dockerfile, and the lock line only
+      # documents the image. A bump of this line alone would make the lock disagree
+      # with the image (the C library and the ctypes wrapper must move together),
+      # so upgrades are done by hand in the Dockerfile, where oqs_smoke.py checks
+      # the pairing at build time. See DEPENDENCY_POLICY.md.
       - dependency-name: "liboqs-python"
 
   # Docker base images — backend
