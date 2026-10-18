@@ -8,6 +8,7 @@ from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 import hashlib
+import hmac
 
 User = get_user_model()
 
@@ -69,9 +70,19 @@ class PasskeyRecoveryBackup(models.Model):
         return f"Passkey backup for {self.user.username} - {self.device_name or 'Unnamed device'}"
     
     def verify_recovery_key(self, recovery_key: str) -> bool:
-        """Verify if the provided recovery key matches the stored hash."""
-        key_hash = hashlib.sha256(recovery_key.encode()).hexdigest()
-        return key_hash == self.recovery_key_hash
+        """
+        Verify if the provided recovery key matches the stored hash.
+
+        Normalized exactly as PasskeyPrimaryRecoveryService.hash_recovery_key
+        does when the hash is stored (hyphens removed, upper-cased), so the
+        key is accepted as displayed (XXXX-XXXX-...) as well as compacted.
+        Compared in constant time.
+        """
+        if not isinstance(recovery_key, str):
+            return False
+        clean_key = recovery_key.replace('-', '').upper()
+        key_hash = hashlib.sha256(clean_key.encode()).hexdigest()
+        return hmac.compare_digest(key_hash, self.recovery_key_hash or '')
 
 
 class PasskeyRecoveryAttempt(models.Model):

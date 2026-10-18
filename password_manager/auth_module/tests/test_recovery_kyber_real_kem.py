@@ -481,3 +481,48 @@ class KyberPublicKeyCacheKemTests(SimpleTestCase):
         cache = KyberCacheManager()
         cache.cache_keypair(47, b'P' * 1184, b'S' * 2400, algorithm='Kyber768')
         self.assertEqual(cache.get_cached_keypair(47)['algorithm'], 'Kyber768')
+
+
+@DENY_SIM
+class KemInputLengthTests(SimpleTestCase):
+    """liboqs-python copies inputs with create_string_buffer(value, length),
+    which zero-pads a short value silently. ProductionKyber must refuse wrong
+    lengths before any backend sees them."""
+
+    def setUp(self):
+        self.oqs, patcher = fake_liboqs()
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_wrong_length_inputs_are_refused_before_liboqs(self):
+        kem = kc.ProductionKyber()
+        cases = [
+            (lambda: kem.encapsulate(b'P' * 1183), 'public key must be 1184 bytes, got 1183'),
+            (lambda: kem.encapsulate(b'P' * 1185), 'public key must be 1184 bytes, got 1185'),
+            (lambda: kem.decapsulate(b'C' * 1087, b'S' * 2400), 'ciphertext must be 1088 bytes'),
+            (lambda: kem.decapsulate(b'C' * 1088, b'S' * 2399), 'private key must be 2400 bytes'),
+            (lambda: kem.encapsulate('P' * 1184), 'must be bytes'),
+        ]
+        for call, message in cases:
+            with self.assertRaisesRegex(ValueError, message):
+                call()
+        self.oqs.KeyEncapsulation.assert_not_called()
+
+    def test_simulation_checks_lengths_too(self):
+        with simulated_kem(), override_settings(QUANTUM_CRYPTO={'ALLOW_SIMULATION': True}):
+            with self.assertRaisesRegex(ValueError, 'ciphertext must be 1088 bytes'):
+                kc.ProductionKyber().decapsulate(b'C' * 10, b'S' * 2400)
+
+
+class PasskeyRecoveryKeyVerificationTests(SimpleTestCase):
+    def test_key_is_accepted_as_displayed_and_compacted(self):
+        from auth_module.passkey_primary_recovery_models import PasskeyRecoveryBackup
+        service = PasskeyPrimaryRecoveryService()
+        key = service.generate_recovery_key()
+        backup = PasskeyRecoveryBackup(recovery_key_hash=service.hash_recovery_key(key))
+        self.assertIn('-', key)
+        self.assertTrue(backup.verify_recovery_key(key))
+        self.assertTrue(backup.verify_recovery_key(key.replace('-', '')))
+        self.assertTrue(backup.verify_recovery_key(key.lower()))
+        self.assertFalse(backup.verify_recovery_key(service.generate_recovery_key()))
+        self.assertFalse(backup.verify_recovery_key(None))

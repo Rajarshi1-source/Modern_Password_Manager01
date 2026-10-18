@@ -42,7 +42,9 @@ _liboqs_warning_shown = False
 # and carried into the log line and the refusal messages.
 _LIBOQS_IMPORT_ERROR = None
 try:
-    import oqs
+    # Never lets liboqs-python download and build liboqs at import time.
+    from shared.oqs_loader import import_oqs
+    oqs = import_oqs()
     LIBOQS_AVAILABLE = True
     logger.info("liboqs-python available - using production Kyber-768")
 except (ImportError, Exception, SystemExit) as _exc:
@@ -75,6 +77,15 @@ QUANTUM_ALGORITHMS = {
 }
 STORED_ALGORITHM = 'ml-kem-768-aes256gcm'
 FALLBACK_ALGORITHM = 'fallback-aes256gcm'
+
+
+def _require_length(what: str, value, expected: int) -> bytes:
+    """Exact-length check before liboqs: its wrapper zero-pads short inputs
+    silently, turning a truncated key or ciphertext into a wrong secret."""
+    if not isinstance(value, (bytes, bytearray, memoryview)) or len(value) != expected:
+        size = len(value) if isinstance(value, (bytes, bytearray, memoryview)) else type(value).__name__
+        raise ValueError(f"KEM {what} must be {expected} bytes, got {size}")
+    return bytes(value)
 
 
 def simulation_allowed() -> bool:
@@ -188,6 +199,7 @@ class QuantumCryptoService:
             - algorithm: Encryption algorithm identifier
         """
         if LIBOQS_AVAILABLE:
+            public_key = _require_length('public key', public_key, self.PUBLIC_KEY_SIZE)
             try:
                 # Step 1: Kyber encapsulation
                 with oqs.KeyEncapsulation(self.ALGORITHM) as kem:
@@ -266,7 +278,9 @@ class QuantumCryptoService:
             )
         try:
             # Step 1: Kyber decapsulation with the caller's private key
-            kyber_ciphertext = base64.b64decode(encrypted_data['kyber_ciphertext'])
+            kyber_ciphertext = _require_length(
+                'ciphertext', base64.b64decode(encrypted_data['kyber_ciphertext']), self.CIPHERTEXT_SIZE)
+            private_key = _require_length('private key', private_key, self.PRIVATE_KEY_SIZE)
             with oqs.KeyEncapsulation(kem_name, private_key) as kem:
                 shared_secret = kem.decap_secret(kyber_ciphertext)
                 

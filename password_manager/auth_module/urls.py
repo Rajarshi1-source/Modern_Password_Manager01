@@ -237,16 +237,15 @@ urlpatterns = [
     path('vault/time-locked/canary-ack/', TimeLockedCanaryAckView.as_view(), name='vault-time-locked-canary-ack'),
 
     # ==================== Kyber Post-Quantum Cryptography Endpoints ====================
-    # Keypair generation
-    path('kyber/keypair/', kyber_views.generate_keypair_view, name='kyber_generate_keypair'),
-    path('kyber/keypair/batch/', kyber_views.batch_keygen_view, name='kyber_batch_keygen'),
+    # Server-side keygen/encrypt/decrypt are retired (410): they kept users'
+    # private keys and plaintext on the server. See kyber_views.server_side_kem_retired.
+    path('kyber/keypair/', kyber_views.server_side_kem_retired, name='kyber_generate_keypair'),
+    path('kyber/keypair/batch/', kyber_views.server_side_kem_retired, name='kyber_batch_keygen'),
     path('kyber/public-key/', kyber_views.get_user_public_key, name='kyber_get_public_key'),
     path('kyber/keypair/invalidate/', kyber_views.invalidate_keypair, name='kyber_invalidate_keypair'),
-    
-    # Encryption/Decryption
-    path('kyber/encrypt/', kyber_views.encrypt_view, name='kyber_encrypt'),
-    path('kyber/decrypt/', kyber_views.decrypt_view, name='kyber_decrypt'),
-    path('kyber/batch/encrypt/', kyber_views.batch_encrypt_view, name='kyber_batch_encrypt'),
+    path('kyber/encrypt/', kyber_views.server_side_kem_retired, name='kyber_encrypt'),
+    path('kyber/decrypt/', kyber_views.server_side_kem_retired, name='kyber_decrypt'),
+    path('kyber/batch/encrypt/', kyber_views.server_side_kem_retired, name='kyber_batch_encrypt'),
     
     # Status and Metrics
     path('kyber/status/', kyber_views.get_kyber_status, name='kyber_status'),

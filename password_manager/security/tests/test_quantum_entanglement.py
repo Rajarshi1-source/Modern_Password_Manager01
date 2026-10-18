@@ -93,6 +93,21 @@ class LatticeCryptoEngineUnitTests(TestCase):
             with self.assertRaises(ValueError):
                 lce.LatticeCryptoEngine().generate_lattice_keypair('kyber-2048')
 
+    def test_liboqs_never_sees_a_wrong_length_input(self):
+        """liboqs-python zero-pads short inputs silently; refuse them."""
+        import security.services.lattice_crypto_engine as lce
+
+        oqs = MagicMock(name='oqs')
+        with patch.multiple(lce, create=True, LIBOQS_AVAILABLE=True, oqs=oqs):
+            engine = lce.LatticeCryptoEngine()
+            with self.assertRaisesRegex(ValueError, 'public key must be 1568 bytes'):
+                engine.encapsulate_key(b'P' * 1567)
+            with self.assertRaisesRegex(ValueError, 'private key must be 3168 bytes'):
+                engine.decapsulate_key(b'S' * 100, b'C' * 1568)
+            with self.assertRaisesRegex(ValueError, 'ciphertext must be 1568 bytes'):
+                engine.decapsulate_key(b'S' * 3168, b'C' * 1088)
+        oqs.KeyEncapsulation.assert_not_called()
+
     @override_settings(QUANTUM_CRYPTO={'ENABLED': True, 'ALLOW_SIMULATION': False})
     def test_engine_fails_closed_when_liboqs_missing_and_simulation_disabled(self):
         """Audit finding #7: the simulated lattice backend is NOT

@@ -72,7 +72,7 @@ class LiboqsImportTests(SimpleTestCase):
         # Load a private copy so the real module's state is left untouched.
         spec = importlib.util.spec_from_file_location('_qcs_import_probe', qcs.__file__)
         probe = importlib.util.module_from_spec(spec)
-        with patch.dict(sys.modules, {'oqs': api}):
+        with patch.dict(sys.modules, {'oqs': api}),                 patch('shared.oqs_loader.find_liboqs', return_value='liboqs.so.9'):
             spec.loader.exec_module(probe)
 
         self.assertTrue(probe.LIBOQS_AVAILABLE)
@@ -95,7 +95,8 @@ class LiboqsImportFailureTests(SimpleTestCase):
             saved = sys.modules.pop('oqs', None)
             sys.path.insert(0, tmp)
             try:
-                spec.loader.exec_module(probe)
+                with patch('shared.oqs_loader.find_liboqs', return_value='liboqs.so.9'):
+                    spec.loader.exec_module(probe)
             finally:
                 sys.path.remove(tmp)
                 sys.modules.pop('oqs', None)
@@ -339,3 +340,24 @@ class CommitmentRecordsItsAlgorithmTests(SimpleTestCase):
             kwargs = self._create()
         self.assertEqual(kwargs['encryption_algorithm'], 'fallback-aes256gcm')
         self.assertFalse(kwargs['is_quantum_protected'])
+
+
+class KemInputLengthTests(SimpleTestCase):
+    """liboqs-python zero-pads short inputs; the service must refuse them
+    before liboqs sees them."""
+
+    @DENY_SIM
+    def test_short_or_long_inputs_are_refused_before_liboqs(self):
+        oqs, kem = fake_oqs()
+        with real_liboqs(oqs):
+            svc = qcs.QuantumCryptoService()
+            with self.assertRaisesRegex(ValueError, 'public key must be 1184 bytes, got 1183'):
+                svc.encrypt_behavioral_embedding(EMBEDDING, PUB[:-1])
+            blob = svc.encrypt_behavioral_embedding(EMBEDDING, PUB)
+            oqs.KeyEncapsulation.reset_mock()
+            import base64
+            for bad_ct, bad_sk in ((KYBER_CT[:-1], PRIV), (KYBER_CT, PRIV + b'x')):
+                tampered = dict(blob, kyber_ciphertext=base64.b64encode(bad_ct).decode())
+                with self.assertRaisesRegex(ValueError, 'must be'):
+                    svc.decrypt_behavioral_embedding(tampered, bad_sk)
+            oqs.KeyEncapsulation.assert_not_called()

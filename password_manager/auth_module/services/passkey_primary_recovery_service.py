@@ -5,6 +5,7 @@ Handles encryption/decryption of passkey credentials using Kyber + AES-GCM
 
 import secrets
 import hashlib
+import hmac
 import base64
 import json
 import logging
@@ -63,7 +64,7 @@ class PasskeyPrimaryRecoveryService:
     def verify_recovery_key(self, recovery_key: str, stored_hash: str) -> bool:
         """Verify if recovery key matches stored hash."""
         computed_hash = self.hash_recovery_key(recovery_key)
-        return computed_hash == stored_hash
+        return hmac.compare_digest(computed_hash, stored_hash or '')
     
     # Bump when the blob layout changes.
     #   1: before F13. Never stored the private key, and encapsulated with a

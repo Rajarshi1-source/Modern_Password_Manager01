@@ -452,6 +452,28 @@ now runs `docker/backend/oqs_smoke.py` at build time. The frontend's WASM Kyber 
 unchanged: it never exchanges KEM material with the backend (`setup-commitments/` drops the
 `kyber_public_key` it sends, and nothing calls `/api/kyber/*`).
 
+**Zero-knowledge pass on the same branch (2026-10-19).**
+- `/api/kyber/` keypair, encrypt, decrypt and batch endpoints are retired (410).
+  They generated and stored users' KEM private keys unwrapped on the server,
+  accepted vault plaintext and even a client's private key, and decrypted
+  server-side, against the zero-knowledge model. They were also unreachable:
+  every one was an `async def` under DRF's `@api_view`, which does not await
+  coroutines, so each call returned 500. No client called them.
+- KEM inputs are length-checked before liboqs (its wrapper zero-pads short
+  inputs silently), in `ProductionKyber`, the behavioral service and
+  `LatticeCryptoEngine`.
+- liboqs-python is imported only through `shared/oqs_loader.import_oqs()`, so a
+  missing C library can no longer make the wrapper download and build liboqs
+  inside a web or worker process.
+- Passkey-primary recovery keys are verified with the same normalization used
+  when hashing them (so the key as displayed works over the API) and compared in
+  constant time.
+
+Where post-quantum protection matters for zero knowledge, vault data at rest is
+wrapped symmetrically (AES-256-GCM), which is already quantum-resistant. A KEM
+helps only for client-to-client key transport (guardian shards, sharing,
+pairing), and there it has to run on the clients, in hybrid with X25519.
+
 **Still open (not fixed here):** `quantum_recovery_views.py` setup encrypts each
 guardian shard to a freshly generated guardian keypair and **discards the private
 key** (`guardian_public_key, _ = …`), and wraps the user's Kyber private key

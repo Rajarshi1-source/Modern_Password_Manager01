@@ -174,6 +174,32 @@ def store_encrypted_password_db(
 # API VIEWS
 # =============================================================================
 
+# Server-side KEM endpoints (keypair, keypair/batch, encrypt, decrypt,
+# batch/encrypt) are retired and routed to ``server_side_kem_retired``
+# (auth_module/urls.py). They broke the zero-knowledge model: the server
+# generated and stored users' KEM private keys unwrapped, took vault plaintext
+# and even a client's private key in the request, and decrypted on its own
+# side. They were also never reachable: each is an ``async def`` under DRF's
+# ``@api_view``, which does not await coroutines, so every call returned 500.
+# No client calls them. The implementations below stay only until the plan in
+# docs/ removes them; post-quantum protection for vault data belongs on the
+# client.
+SERVER_SIDE_KEM_RETIRED_MESSAGE = (
+    "Server-side KEM operations are retired: the server must not hold users' "
+    "private keys or see plaintext. Use client-side encryption."
+)
+
+
+@api_view(['GET', 'POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def server_side_kem_retired(request):
+    return Response(
+        {'status': 'error', 'code': 'server_side_kem_retired',
+         'message': SERVER_SIDE_KEM_RETIRED_MESSAGE},
+        status=status.HTTP_410_GONE,
+    )
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 async def generate_keypair_view(request):

@@ -131,6 +131,20 @@ where a broken pairing has to fail. liboqs-python 0.16 reads its version from it
 package metadata, so the Dockerfile installs it with `--target` and copies the
 `.dist-info` into the venv along with the package.
 
+### No runtime installs
+
+liboqs-python (0.10 through 0.16.0.1) reacts to a missing C library by running
+`git clone` and a CMake build of liboqs at **import time**. Backend code must
+therefore import the wrapper only through `shared/oqs_loader.import_oqs()`,
+which refuses (ImportError, so the usual fail-closed path applies) unless the
+library is already installed. `oqs_smoke.py` checks that the lookup the loader
+uses (`ctypes.util.find_library`) finds liboqs in the shipped image.
+
+KEM inputs are length-checked before they reach liboqs: the wrapper copies them
+with `ctypes.create_string_buffer(value, length)`, which zero-pads a short value
+silently, so a truncated key or ciphertext would otherwise produce a wrong
+secret instead of an error.
+
 ### Minimal build
 
 `OQS_MINIMAL_BUILD` is restricted to the algorithms that production code
