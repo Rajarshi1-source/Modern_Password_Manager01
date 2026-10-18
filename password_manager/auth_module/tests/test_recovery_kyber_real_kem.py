@@ -466,3 +466,18 @@ class KyberPublicKeyCacheKemTests(SimpleTestCase):
         cache = KyberCacheManager()
         cache._l1_set('kyber:pubkey:43', base64.b64encode(b'P' * 1184).decode(), 60)
         self.assertIsNone(cache.get_cached_public_key_entry(43))
+
+    def test_batch_readers_and_writers_share_the_entry_format(self):
+        cache = KyberCacheManager()
+        cache.cache_public_key(44, b'A' * 1184, algorithm='Kyber768')
+        cache.set_many_public_keys({45: (b'B' * 1184, 'ML-KEM-768')})
+        self.assertEqual(
+            cache.get_many_public_keys([44, 45, 46]),
+            {44: (b'A' * 1184, 'Kyber768'), 45: (b'B' * 1184, 'ML-KEM-768'), 46: None},
+        )
+        self.assertEqual(cache.get_cached_public_key_entry(45), (b'B' * 1184, 'ML-KEM-768'))
+
+    def test_cached_keypair_reports_its_kem(self):
+        cache = KyberCacheManager()
+        cache.cache_keypair(47, b'P' * 1184, b'S' * 2400, algorithm='Kyber768')
+        self.assertEqual(cache.get_cached_keypair(47)['algorithm'], 'Kyber768')
