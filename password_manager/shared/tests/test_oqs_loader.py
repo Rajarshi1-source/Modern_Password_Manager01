@@ -44,19 +44,44 @@ class OqsLoaderTests(SimpleTestCase):
                 patch.object(oqs_loader, 'find_liboqs', return_value='liboqs.so.9'):
             self.assertIs(oqs_loader.import_oqs(), fake)
 
-    def test_find_liboqs_checks_the_install_path(self):
+    def _system_file(self):
+        return {'Windows': ('bin', 'oqs.dll'), 'Darwin': ('lib', 'liboqs.dylib')}.get(
+            oqs_loader.platform.system(), ('lib', 'liboqs.so'))
+
+    def test_only_the_wrappers_install_dir_is_searched(self):
+        # With OQS_INSTALL_PATH set, liboqs-python does NOT look in $HOME/_oqs,
+        # so neither may the loader.
+        from pathlib import Path
+        with patch.object(oqs_loader.ctypes.util, 'find_library', return_value=None),                 patch.dict('os.environ', {'OQS_INSTALL_PATH': '/opt/custom-oqs'}),                 patch.object(oqs_loader.Path, 'home', return_value=Path('/home/app')):
+            candidates = oqs_loader._wrapper_candidates()
+        self.assertTrue(candidates)
+        self.assertTrue(all(Path(c).parts[:3] == Path('/opt/custom-oqs').parts[:3] for c in candidates))
+        self.assertFalse(any('_oqs' in c for c in candidates))
+
+    def test_versioned_soname_is_not_a_wrapper_path(self):
+        if oqs_loader.platform.system() in ('Windows', 'Darwin'):
+            self.skipTest('Linux naming')
+        with patch.object(oqs_loader.ctypes.util, 'find_library', return_value=None),                 patch.dict('os.environ', {'OQS_INSTALL_PATH': '/x'}):
+            self.assertNotIn('/x/lib/liboqs.so.9', oqs_loader._wrapper_candidates())
+
+    def test_find_library_results_come_first_in_the_wrappers_order(self):
+        results = {'oqs': 'oqs-result', 'liboqs': 'liboqs-result'}
+        with patch.object(oqs_loader.ctypes.util, 'find_library', side_effect=results.get):
+            candidates = oqs_loader._wrapper_candidates()
+        self.assertEqual(candidates[:2], ['liboqs-result', 'oqs-result'])
+
+    def test_a_present_but_unloadable_library_does_not_count(self):
         import tempfile
         from pathlib import Path
+        sub, name = self._system_file()
         with tempfile.TemporaryDirectory() as tmp:
-            lib = Path(tmp, 'lib')
-            lib.mkdir()
-            name = {'Windows': 'oqs.dll', 'Darwin': 'liboqs.9.dylib'}.get(
-                oqs_loader.platform.system(), 'liboqs.so.9')
-            (lib / name).write_bytes(b'')
-            with patch.object(oqs_loader.ctypes.util, 'find_library', return_value=None), \
-                    patch.dict('os.environ', {'OQS_INSTALL_PATH': tmp}):
-                self.assertEqual(oqs_loader.find_liboqs(), str(lib / name))
-            with patch.object(oqs_loader.ctypes.util, 'find_library', return_value=None), \
-                    patch.dict('os.environ', {'OQS_INSTALL_PATH': str(Path(tmp, 'nothing'))}), \
-                    patch.object(oqs_loader.Path, 'home', return_value=Path(tmp, 'nohome')):
+            Path(tmp, sub).mkdir()
+            Path(tmp, sub, name).write_bytes(b'not a shared library')
+            with patch.object(oqs_loader.ctypes.util, 'find_library', return_value=None),                     patch.dict('os.environ', {'OQS_INSTALL_PATH': tmp}):
                 self.assertIsNone(oqs_loader.find_liboqs())
+                with self.assertRaises(ImportError):
+                    oqs_loader.import_oqs()
+
+    def test_the_first_loadable_candidate_is_returned(self):
+        with patch.object(oqs_loader, '_wrapper_candidates', return_value=['a', 'b', 'c']),                 patch.object(oqs_loader, '_loadable', side_effect=lambda p: p in ('b', 'c')):
+            self.assertEqual(oqs_loader.find_liboqs(), 'b')

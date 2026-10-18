@@ -104,6 +104,15 @@ def async_migrate_commitments_to_quantum(batch_size=50):
                     embedding,
                     public_key
                 )
+                if not quantum_crypto.is_quantum_protected(quantum_encrypted):
+                    # The non-PQ fallback (liboqs missing, simulation allowed)
+                    # is not a migration: leave the row as it is so a later
+                    # run with liboqs picks it up again.
+                    logger.warning(
+                        "Not migrating commitment %s: liboqs unavailable, got %s",
+                        commitment.id, quantum_encrypted.get('algorithm'),
+                    )
+                    continue
                 
                 # Update commitment
                 commitment.legacy_encrypted_embedding = commitment.encrypted_embedding

@@ -182,7 +182,7 @@ class QuantumCryptoServiceRealKemTests(SimpleTestCase):
         self.assertEqual(public_key, _public_from_secret('ML-KEM-768', private_key))
 
     def test_no_new_kyber768_keys(self):
-        with self.assertRaisesRegex(ValueError, 'decrypting existing data only'):
+        with self.assertRaisesRegex(ValueError, 'legacy: no new keypairs'):
             self.service.generate_kyber_keypair('Kyber768')
         self.oqs.KeyEncapsulation.assert_not_called()
 

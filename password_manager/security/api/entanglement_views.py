@@ -111,6 +111,7 @@ class VerifyPairingView(APIView):
                 session_id=serializer.validated_data['session_id'],
                 verification_code=serializer.validated_data['verification_code'],
                 device_b_public_key=public_key_bytes,
+                kem=serializer.validated_data['kem'],
             )
             
             return Response(result, status=status.HTTP_200_OK)

@@ -231,7 +231,7 @@ class ProductionKyber:
         """
         if self.algorithm in LEGACY_KEMS:
             raise ValueError(
-                f"{self.algorithm} is kept for decrypting existing data only; "
+                f"{self.algorithm} is legacy: no new keypairs (existing data and keys still work); "
                 f"generate new keys with {DEFAULT_KEM}."
             )
         if self.implementation == 'liboqs':

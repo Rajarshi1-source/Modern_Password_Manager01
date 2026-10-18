@@ -444,7 +444,8 @@ both and record the KEM per artefact:
   `algorithm` label; unknown labels are refused, never guessed;
 - `KyberKeyPair.algorithm` is authoritative: encrypting to a stored Kyber768 key still uses
   Kyber768, and the public-key cache now stores the KEM with the key (new cache key prefix);
-- Kyber768 is decrypt-only: no new Kyber768 keypairs.
+- Kyber768 is legacy: no new Kyber768 keypairs are generated, while Kyber768 data
+  still decrypts and encapsulation to a stored Kyber768 public key still works.
 Verified with real liboqs in Docker: Kyber768 artefacts written by the old code on liboqs
 0.11.0 (a v2 passkey blob, a hybrid blob, a shard, a behavioral embedding) decrypt with the
 new code on 0.16.0, and a Kyber768 blob relabelled as ML-KEM-768 fails its tag. The image

@@ -18,38 +18,56 @@ import os
 import platform
 from pathlib import Path
 
-_LIB_NAMES = ('oqs', 'liboqs')
-
-
-def _install_dirs():
-    root = os.environ.get('OQS_INSTALL_PATH')
-    roots = [Path(root)] if root else []
-    roots.append(Path.home() / '_oqs')  # where the wrapper's auto-installer puts it
-    for r in roots:
-        for sub in ('lib', 'lib64', 'bin'):
-            yield r / sub
-
-
-def find_liboqs():
-    """Path or soname of an installed liboqs shared library, or None."""
-    for name in _LIB_NAMES:
+def _wrapper_candidates():
+    """
+    The paths liboqs-python 0.16.0.1 tries, in its order (``_load_liboqs`` /
+    ``_load_shared_obj``): ``find_library("liboqs")``, ``find_library("oqs")``,
+    then the ONE install dir (``$OQS_INSTALL_PATH`` if set, else
+    ``$HOME/_oqs``): ``bin/oqs.dll``/``bin/liboqs.dll`` on Windows,
+    ``lib{,64}/liboqs.dylib`` on macOS, ``lib{,64}/liboqs.so`` (unversioned)
+    elsewhere. Anything outside this list is invisible to the wrapper, which
+    would then run its installer, so it must not count as "installed" here.
+    """
+    candidates = []
+    for name in ('oqs', 'liboqs'):  # the wrapper inserts each at index 0
         try:
             found = ctypes.util.find_library(name)
         except Exception:  # find_library shells out (ldconfig/gcc) on Linux
             found = None
         if found:
-            return found
-    if platform.system() == 'Windows':
-        patterns = ('oqs.dll', 'liboqs.dll')
-    elif platform.system() == 'Darwin':
-        patterns = ('liboqs*.dylib',)
+            candidates.insert(0, found)
+    root = os.environ.get('OQS_INSTALL_PATH')
+    root = Path(root) if root is not None else Path.home() / '_oqs'
+    system = platform.system()
+    if system == 'Windows':
+        candidates += [str(root / 'bin' / f) for f in ('oqs.dll', 'liboqs.dll')]
     else:
-        patterns = ('liboqs.so*',)
-    for directory in _install_dirs():
-        for pattern in patterns:
-            match = next(iter(sorted(directory.glob(pattern))), None)
-            if match is not None:
-                return str(match)
+        filename = 'liboqs.dylib' if system == 'Darwin' else 'liboqs.so'
+        candidates += [str(root / sub / filename) for sub in ('lib', 'lib64')]
+    return candidates
+
+
+def _loadable(path) -> bool:
+    """Whether the wrapper's loader would succeed on ``path``."""
+    loader = ctypes.windll if platform.system() == 'Windows' else ctypes.cdll
+    try:
+        loader.LoadLibrary(path)
+    except OSError:
+        return False
+    return True
+
+
+def find_liboqs():
+    """
+    The first liboqs the wrapper would load, or None.
+
+    Checked by actually loading it: a stale or broken file on a searched
+    path would otherwise pass, and the wrapper, failing to load it, would
+    fall back to its download-and-build installer.
+    """
+    for candidate in _wrapper_candidates():
+        if _loadable(candidate):
+            return candidate
     return None
 
 

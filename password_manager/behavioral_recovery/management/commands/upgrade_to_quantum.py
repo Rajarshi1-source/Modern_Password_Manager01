@@ -111,6 +111,16 @@ class Command(BaseCommand):
                         old_embedding,
                         public_key
                     )
+                    if not quantum_crypto.is_quantum_protected(quantum_encrypted):
+                        # Non-PQ fallback (liboqs missing): not an upgrade,
+                        # and the legacy field must not be cleared for it.
+                        self.stdout.write(self.style.WARNING(
+                            f"
+⚠️  Skipping {commitment.commitment_id}: liboqs unavailable "
+                            f"({quantum_encrypted.get('algorithm')})"
+                        ))
+                        failed += 1
+                        continue
                     
                     # Store original encrypted data as legacy
                     commitment.legacy_encrypted_embedding = commitment.encrypted_embedding

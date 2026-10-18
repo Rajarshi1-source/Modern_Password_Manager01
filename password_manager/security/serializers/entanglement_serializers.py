@@ -58,6 +58,7 @@ class PairingSessionSerializer(serializers.Serializer):
     device_a_id = serializers.UUIDField()
     device_b_id = serializers.UUIDField()
     verification_code = serializers.CharField()
+    kem = serializers.CharField(help_text="KEM device B must use for its public key")
     expires_at = serializers.DateTimeField()
     created_at = serializers.DateTimeField()
 
@@ -75,6 +76,9 @@ class VerifyPairingSerializer(serializers.Serializer):
     )
     device_b_public_key = serializers.CharField(
         help_text="Base64-encoded lattice public key from device B"
+    )
+    kem = serializers.CharField(
+        help_text="KEM of device_b_public_key; must equal the session's kem"
     )
 
 

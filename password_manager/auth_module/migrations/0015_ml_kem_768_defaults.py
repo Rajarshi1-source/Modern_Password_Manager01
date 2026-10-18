@@ -23,7 +23,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='kyberkeypair',
             name='algorithm',
-            field=models.CharField(default='ML-KEM-768', help_text='liboqs KEM name: ML-KEM-768, or Kyber768 (legacy, decrypt only)', max_length=50),
+            field=models.CharField(default='ML-KEM-768', help_text='liboqs KEM name: ML-KEM-768, or Kyber768 (legacy; no new keypairs)', max_length=50),
         ),
         migrations.AlterField(
             model_name='kyberkeypair',
