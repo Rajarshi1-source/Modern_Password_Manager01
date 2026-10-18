@@ -21,9 +21,12 @@ Usage:
 """
 
 import logging
+
+from asgiref.sync import sync_to_async
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.db import transaction
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from rest_framework_simplejwt.tokens import RefreshToken
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +37,24 @@ def get_family_max_size() -> int:
     return simple_jwt.get('REFRESH_TOKEN_FAMILY_MAX_SIZE', 5)
 
 
-def enforce_token_family_limit(user):
+def enforce_token_family_limit(user) -> int:
     """
     Enforce the refresh token family size limit for a user.
 
     If the user has more outstanding (non-blacklisted) refresh tokens
     than REFRESH_TOKEN_FAMILY_MAX_SIZE, blacklist the oldest ones.
 
+    The count and the blacklisting run in one transaction with the user's
+    row locked, so concurrent logins for the same user are serialized: each
+    sees the others' new tokens and blacklists, instead of both picking the
+    same "oldest" tokens (one of them then failed with an IntegrityError).
+    The excess is blacklisted in a single bulk insert.
+
     Args:
         user: The Django User instance.
+
+    Returns:
+        The number of tokens blacklisted.
     """
     from rest_framework_simplejwt.token_blacklist.models import (
         OutstandingToken,
@@ -51,40 +63,44 @@ def enforce_token_family_limit(user):
 
     max_size = get_family_max_size()
 
-    # Get all outstanding tokens for this user that are NOT blacklisted,
-    # ordered by created_at ascending (oldest first).
-    outstanding = (
-        OutstandingToken.objects
-        .filter(user=user)
-        .exclude(id__in=BlacklistedToken.objects.values_list('token_id', flat=True))
-        .order_by('created_at')
-    )
+    with transaction.atomic():
+        # Row lock (a no-op on SQLite, which serializes writers anyway).
+        get_user_model().objects.select_for_update().filter(pk=user.pk).exists()
 
-    count = outstanding.count()
-
-    if count <= max_size:
-        return  # Under the limit, nothing to do
-
-    # Number of tokens to blacklist (keep only max_size)
-    excess = count - max_size
-    tokens_to_blacklist = outstanding[:excess]
-
-    blacklisted_count = 0
-    for token in tokens_to_blacklist:
-        try:
-            BlacklistedToken.objects.get_or_create(token=token)
-            blacklisted_count += 1
-        except Exception as e:
-            logger.error(
-                f"Failed to blacklist token {token.id} for user {user.id}: {e}"
-            )
-
-    if blacklisted_count > 0:
-        logger.info(
-            f"Token family enforcement: blacklisted {blacklisted_count} oldest "
-            f"refresh token(s) for user {user.id} "
-            f"(limit={max_size}, had={count})"
+        live_ids = list(
+            OutstandingToken.objects
+            .filter(user=user, blacklistedtoken__isnull=True)
+            .order_by('created_at', 'id')
+            .values_list('id', flat=True)
         )
+        excess = len(live_ids) - max_size
+        if excess <= 0:
+            return 0  # Under the limit, nothing to do
+
+        BlacklistedToken.objects.bulk_create(
+            [BlacklistedToken(token_id=token_id) for token_id in live_ids[:excess]],
+            ignore_conflicts=True,
+        )
+
+    logger.info(
+        "Token family enforcement: blacklisted %d oldest refresh token(s) for "
+        "user %s (limit=%d, had=%d)",
+        excess, user.pk, max_size, len(live_ids),
+    )
+    return excess
+
+
+async def aenforce_token_family_limit(user) -> int:
+    """
+    ``enforce_token_family_limit`` for async views and consumers.
+
+    Runs the ORM work in Django's thread-sensitive sync executor (the ORM is
+    synchronous). Today every caller is a sync view, so this exists only for
+    future async callers; wrapping the sync serializer in async would not
+    unblock anything, because Django already runs sync views off the event
+    loop under ASGI.
+    """
+    return await sync_to_async(enforce_token_family_limit, thread_sensitive=True)(user)
 
 
 class FamilyLimitedTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -110,31 +126,3 @@ class FamilyLimitedTokenObtainPairSerializer(TokenObtainPairSerializer):
             )
 
         return data
-
-
-class FamilyLimitedRefreshToken(RefreshToken):
-    """
-    Custom RefreshToken that enforces family limits on rotation.
-
-    When ROTATE_REFRESH_TOKENS is True and a refresh token is used,
-    a new one is issued — this class ensures the family limit is
-    checked on rotation too.
-    """
-
-    def set_jti(self):
-        """Override to enforce family limit after rotation."""
-        super().set_jti()
-
-    @classmethod
-    def for_user(cls, user):
-        """Create a new token for a user and enforce family limits."""
-        token = super().for_user(user)
-
-        try:
-            enforce_token_family_limit(user)
-        except Exception as e:
-            logger.error(
-                f"Token family enforcement error on rotation for user {user.id}: {e}"
-            )
-
-        return token
