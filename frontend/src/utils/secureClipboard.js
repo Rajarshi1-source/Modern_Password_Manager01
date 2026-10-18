@@ -35,6 +35,11 @@ let pendingTimer = null;
 let scheduleGeneration = 0;
 let pendingValue = null;
 let pageExitListening = false;
+// A Clipboard API clear the browser refused, retried once when the page next
+// has focus (Chromium refuses clipboard access from an unfocused document,
+// which is where the user usually is when the timer fires: pasting elsewhere).
+let retryPending = false;
+let retryValue = null;
 
 const CLEAR_FAILED_KEY = 'clipboardAutoClearFailed';
 const CLEAR_HINT_KEY = 'clipboardClearHintShown';
@@ -99,9 +104,10 @@ function clearViaExecCommand() {
 /**
  * Clear the clipboard now if it still holds `value` (or unconditionally if
  * value is null). `generation`, when given, must still be current after the
- * clipboard read, or the clear is abandoned as superseded.
+ * clipboard read, or the clear is abandoned as superseded. A refused write is
+ * retried once on the next focus (`isRetry` marks that attempt).
  */
-export async function clearClipboardIfUnchanged(value, generation) {
+export async function clearClipboardIfUnchanged(value, generation, isRetry = false) {
   const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
   if (!clipboard?.writeText || (typeof window !== 'undefined' && window.isSecureContext === false)) {
     const cleared = clearViaExecCommand();
@@ -123,10 +129,16 @@ export async function clearClipboardIfUnchanged(value, generation) {
   }
   try {
     await clipboard.writeText('');
+    retryPending = false;
     recordClearOutcome(true);
     return true;
   } catch (err) {
     console.warn('Could not clear the clipboard:', err?.message || err);
+    if (!isRetry && (generation === undefined || generation === scheduleGeneration)) {
+      retryPending = true;
+      retryValue = value;
+      listenForPageExit();
+    }
     recordClearOutcome(false);
     return false;
   }
@@ -156,6 +168,7 @@ export function scheduleClipboardClear(value, { prefs } = {}) {
 export function cancelScheduledClipboardClear() {
   scheduleGeneration += 1;
   pendingValue = null;
+  retryPending = false;
   if (pendingTimer !== null) {
     clearTimeout(pendingTimer);
     pendingTimer = null;
@@ -165,7 +178,8 @@ export function cancelScheduledClipboardClear() {
 // Hidden: record the pending clear as not done, synchronously, since a hidden
 // tab may be discarded without another event (mobile). Do not clear: the user
 // is most likely pasting elsewhere. If the page comes back, the timer still
-// fires and its outcome replaces this record.
+// fires and its outcome replaces this record; if the timer already fired and
+// was refused while away, onPageShown retries it.
 // pagehide (close, reload, navigation): also try the clear now. Best-effort;
 // the timer keeps running if the page is only entering the back/forward cache.
 function onPageHidden(event) {
@@ -175,11 +189,24 @@ function onPageHidden(event) {
   if (event.type === 'pagehide') clearClipboardIfUnchanged(pendingValue, scheduleGeneration);
 }
 
+// Back on the page: retry a refused clear, still only if the clipboard holds
+// the secret. Once: a second refusal is reported and left to Settings.
+function onPageShown() {
+  if (!retryPending || document.visibilityState === 'hidden') return;
+  // Visible is not yet focused in Chromium; wait for focus rather than spend
+  // the one retry on a write that would be refused again.
+  if (typeof document.hasFocus === 'function' && !document.hasFocus()) return;
+  retryPending = false;
+  clearClipboardIfUnchanged(retryValue, scheduleGeneration, true);
+}
+
 function listenForPageExit() {
   if (pageExitListening || typeof window === 'undefined') return;
   pageExitListening = true;
   window.addEventListener('pagehide', onPageHidden);
   document.addEventListener('visibilitychange', onPageHidden);
+  window.addEventListener('focus', onPageShown);
+  document.addEventListener('visibilitychange', onPageShown);
 }
 
 // Shown once per browser, the first time a secret is copied: the limit is a

@@ -186,23 +186,28 @@ class ProductionKyber:
     
     # ==================== liboqs Implementation ====================
     
+    # Always via `with`: liboqs-python's KeyEncapsulation has no __del__, so
+    # only free() (called by __exit__) cleanses its native secret-key buffer
+    # and releases the native OQS_KEM. The bytes returned to callers are
+    # Python copies and are not cleansed.
+
     def _generate_keypair_liboqs(self) -> Tuple[bytes, bytes]:
         """Generate keypair using liboqs."""
-        kem = oqs.KeyEncapsulation("Kyber768")
-        public_key = kem.generate_keypair()
-        private_key = kem.export_secret_key()
+        with oqs.KeyEncapsulation("Kyber768") as kem:
+            public_key = kem.generate_keypair()
+            private_key = kem.export_secret_key()
         return public_key, private_key
-    
+
     def _encapsulate_liboqs(self, public_key: bytes) -> Tuple[bytes, bytes]:
         """Encapsulate using liboqs."""
-        kem = oqs.KeyEncapsulation("Kyber768")
-        ciphertext, shared_secret = kem.encap_secret(public_key)
+        with oqs.KeyEncapsulation("Kyber768") as kem:
+            ciphertext, shared_secret = kem.encap_secret(public_key)
         return ciphertext, shared_secret
-    
+
     def _decapsulate_liboqs(self, ciphertext: bytes, private_key: bytes) -> bytes:
         """Decapsulate using liboqs."""
-        kem = oqs.KeyEncapsulation("Kyber768", private_key)
-        shared_secret = kem.decap_secret(ciphertext)
+        with oqs.KeyEncapsulation("Kyber768", private_key) as kem:
+            shared_secret = kem.decap_secret(ciphertext)
         return shared_secret
     
     # ==================== pqcrypto Implementation ====================

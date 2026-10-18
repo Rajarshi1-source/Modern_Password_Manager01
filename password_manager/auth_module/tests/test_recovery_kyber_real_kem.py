@@ -38,16 +38,24 @@ def _public_from_secret(secret_key):
 class _FakeKeyEncapsulation:
     """Kyber768-shaped KEM where a public key is a function of its secret key."""
 
+    instances = []
+
     def __init__(self, alg, secret_key=None):
         if alg != 'Kyber768':
             raise ValueError(f'unexpected algorithm {alg!r}')
         self.secret_key = secret_key
+        self.freed = False
+        _FakeKeyEncapsulation.instances.append(self)
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
+        self.free()  # as liboqs-python's __exit__ does
         return False
+
+    def free(self):
+        self.freed = True
 
     def generate_keypair(self):
         self.secret_key = os.urandom(2400)
@@ -97,6 +105,15 @@ class QuantumCryptoServiceRealKemTests(SimpleTestCase):
         ciphertext, secret = self.service.kyber_encapsulate(public_key)
         self.assertEqual(self.service.kyber_decapsulate(ciphertext, private_key), secret)
         self.assertEqual(secret_keys_used_for_decapsulation(self.oqs), [private_key])
+
+    def test_every_native_kem_is_freed(self):
+        # free() is what cleanses liboqs's secret-key buffer; there is no __del__.
+        _FakeKeyEncapsulation.instances.clear()
+        public_key, private_key = self.service.generate_kyber_keypair()
+        ciphertext, _ = self.service.kyber_encapsulate(public_key)
+        self.service.kyber_decapsulate(ciphertext, private_key)
+        self.assertEqual(len(_FakeKeyEncapsulation.instances), 3)
+        self.assertTrue(all(kem.freed for kem in _FakeKeyEncapsulation.instances))
 
     def test_kyber_wrapper_passes_the_callers_private_key(self):
         public_key, private_key = Kyber.generate_keypair()
