@@ -40,9 +40,11 @@ class ErrorTracker {
     // Error rate tracking
     this.errorCounts = {
       total: 0,
-      byType: {},
-      bySeverity: {},
-      byContext: {}
+      // Prototype-less maps: the keys (error type/severity/context) can come
+      // from caller-supplied data, so '__proto__' must stay an ordinary key.
+      byType: Object.create(null),
+      bySeverity: Object.create(null),
+      byContext: Object.create(null)
     };
     
     // Initialize global error handlers
@@ -368,9 +370,11 @@ class ErrorTracker {
     this.errorGroups.clear();
     this.errorCounts = {
       total: 0,
-      byType: {},
-      bySeverity: {},
-      byContext: {}
+      // Prototype-less maps: the keys (error type/severity/context) can come
+      // from caller-supplied data, so '__proto__' must stay an ordinary key.
+      byType: Object.create(null),
+      bySeverity: Object.create(null),
+      byContext: Object.create(null)
     };
   }
 

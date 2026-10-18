@@ -23,6 +23,11 @@ env:
   REGISTRY: ghcr.io
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+# Read-only default for the GITHUB_TOKEN. Every job below declares the
+# permissions it needs, so this only covers a job added without one.
+permissions:
+  contents: read
+
 jobs:
   # ===========================================================================
   # Secret Scanning with Gitleaks

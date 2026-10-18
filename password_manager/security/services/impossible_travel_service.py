@@ -13,6 +13,7 @@ Speed Thresholds (km/h):
 - Supersonic/Impossible: > 1200 km/h
 """
 
+import ipaddress
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -591,7 +592,13 @@ class ImpossibleTravelService:
         """Get location from IP address using GeoIP."""
         if not ip_address or ip_address in ('127.0.0.1', '::1', 'localhost'):
             return {}
-        
+        # The address is interpolated into the ipinfo.io URL path below, so only
+        # a parsed IP literal may reach it (no '/', '?', '#' or '..' segments).
+        try:
+            ip_address = str(ipaddress.ip_address(ip_address.strip()))
+        except ValueError:
+            return {}
+
         geo_db_path = getattr(settings, 'GEOIP_DB_PATH', None)
         
         if geo_db_path:
