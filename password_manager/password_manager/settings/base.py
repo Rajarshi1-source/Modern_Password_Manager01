@@ -1348,7 +1348,7 @@ for _cidr in TRUSTED_PROXY_CIDRS:
         _ipaddress.ip_network(_cidr, strict=False)
     except ValueError:
         from django.core.exceptions import ImproperlyConfigured
-        raise ImproperlyConfigured(f'TRUSTED_PROXY_CIDRS: invalid entry {_cidr!r}')
+        raise ImproperlyConfigured(f'TRUSTED_PROXY_CIDRS: invalid entry {_cidr!r}') from None
 # DRF's throttles read NUM_PROXIES with the same right-hand semantics. Unset,
 # they key anonymous clients on the WHOLE X-Forwarded-For string, which a
 # client can change on every request to get a fresh bucket.
