@@ -10,6 +10,7 @@ production. Every failure exits non-zero and fails the image build.
 Usage: python oqs_smoke.py <liboqs version> <liboqs-python version>
 """
 
+import ctypes.util
 import sys
 import warnings
 
@@ -47,6 +48,13 @@ def round_trip(alg):
 
 
 def main(expected_c, expected_py):
+    # The backend imports liboqs-python only when this lookup finds the C
+    # library (shared/oqs_loader.py), so that it never downloads and builds
+    # liboqs at runtime. If the shipped image's loader cache misses it, every
+    # PQC path would fail closed in production.
+    if not (ctypes.util.find_library('oqs') or ctypes.util.find_library('liboqs')):
+        fail('ctypes.util.find_library cannot find liboqs (run ldconfig after copying it)')
+
     if oqs.oqs_version() != expected_c:
         fail(f'liboqs is {oqs.oqs_version()}, expected {expected_c}')
     if oqs.oqs_python_version() != expected_py:

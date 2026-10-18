@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 
 # Try to import liboqs for true post-quantum crypto
 try:
-    import oqs
+    # Never lets liboqs-python download and build liboqs at import time.
+    from shared.oqs_loader import import_oqs
+    oqs = import_oqs()
     LIBOQS_AVAILABLE = True
     logger.info("liboqs available - using real ML-KEM implementation")
 except (ImportError, Exception, SystemExit):
@@ -178,6 +180,12 @@ class LatticeCryptoEngine:
         'kyber-768': 'Kyber768',
         'kyber-512': 'Kyber512',
     }
+    # (public key, secret key, ciphertext) bytes; Kyber and ML-KEM share them.
+    KEY_SIZES = {
+        'ml-kem-1024': (1568, 3168, 1568), 'kyber-1024': (1568, 3168, 1568),
+        'ml-kem-768': (1184, 2400, 1088), 'kyber-768': (1184, 2400, 1088),
+        'ml-kem-512': (800, 1632, 768), 'kyber-512': (800, 1632, 768),
+    }
     SUPPORTED_ALGORITHMS = list(LIBOQS_NAMES)
     DEFAULT_ALGORITHM = 'ml-kem-1024'
 
@@ -228,6 +236,12 @@ class LatticeCryptoEngine:
 
         logger.info(f"LatticeCryptoEngine initialized with {self.algorithm}")
     
+    def _require_length(self, what: str, value, expected: int) -> None:
+        # liboqs-python zero-pads short inputs silently; refuse them instead.
+        if not isinstance(value, (bytes, bytearray, memoryview)) or len(value) != expected:
+            size = len(value) if isinstance(value, (bytes, bytearray, memoryview)) else type(value).__name__
+            raise ValueError(f"{self.algorithm} {what} must be {expected} bytes, got {size}")
+
     def generate_lattice_keypair(self, algorithm: str = None) -> LatticeKeyPair:
         """
         Generate a lattice-based keypair.
@@ -292,6 +306,7 @@ class LatticeCryptoEngine:
     def _encapsulate_liboqs(self, public_key: bytes) -> Tuple[bytes, bytes]:
         """Encapsulate using liboqs."""
         liboqs_algo = self.LIBOQS_NAMES[self.algorithm]
+        self._require_length('public key', public_key, self.KEY_SIZES[self.algorithm][0])
         
         with oqs.KeyEncapsulation(liboqs_algo) as kem:
             ciphertext, shared_secret = kem.encap_secret(public_key)
@@ -324,6 +339,9 @@ class LatticeCryptoEngine:
     ) -> bytes:
         """Decapsulate using liboqs."""
         liboqs_algo = self.LIBOQS_NAMES[self.algorithm]
+        pk_len, sk_len, ct_len = self.KEY_SIZES[self.algorithm]
+        self._require_length('private key', private_key, sk_len)
+        self._require_length('ciphertext', ciphertext, ct_len)
         
         with oqs.KeyEncapsulation(liboqs_algo, private_key) as kem:
             shared_secret = kem.decap_secret(ciphertext)

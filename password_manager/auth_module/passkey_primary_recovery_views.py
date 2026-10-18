@@ -62,13 +62,20 @@ def setup_primary_passkey_recovery(request):
             {"error": "passkey_credential_id is required"},
             status=status.HTTP_400_BAD_REQUEST
         )
+    try:
+        credential_id = bytes.fromhex(passkey_credential_id)
+    except (TypeError, ValueError):
+        return Response(
+            {"error": "passkey_credential_id must be hex"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
     
     try:
         # Find the passkey
         try:
             passkey = UserPasskey.objects.get(
                 user=user,
-                credential_id=bytes.fromhex(passkey_credential_id)
+                credential_id=credential_id
             )
         except UserPasskey.DoesNotExist:
             return Response(

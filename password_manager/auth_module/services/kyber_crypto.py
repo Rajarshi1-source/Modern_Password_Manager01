@@ -60,6 +60,24 @@ HYBRID_ALGORITHMS = {
 }
 
 
+def require_kem_length(what: str, value, expected: int, kem: str) -> bytes:
+    """
+    ``value`` as bytes if it is exactly ``expected`` long, else ValueError.
+
+    liboqs-python copies inputs with ``ctypes.create_string_buffer(value,
+    length)``, which silently zero-pads a SHORT value: a truncated public
+    key, secret key or ciphertext then yields a wrong secret (or an
+    unopenable ciphertext) instead of an error. So lengths are checked here,
+    before any backend sees the bytes.
+    """
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise ValueError(f"{kem} {what} must be bytes, got {type(value).__name__}")
+    value = bytes(value)
+    if len(value) != expected:
+        raise ValueError(f"{kem} {what} must be {expected} bytes, got {len(value)}")
+    return value
+
+
 def require_supported_kem(kem: str) -> str:
     """Return ``kem`` if this module supports it, else raise ValueError."""
     if kem not in SUPPORTED_KEMS:
@@ -96,8 +114,9 @@ LIBOQS_AVAILABLE = False
 oqs = None
 
 try:
-    import oqs as oqs_lib
-    oqs = oqs_lib
+    # Never lets liboqs-python download and build liboqs at import time.
+    from shared.oqs_loader import import_oqs
+    oqs = import_oqs()
     LIBOQS_AVAILABLE = True
     logger.info("liboqs-python loaded - using real ML-KEM-768")
 except (ImportError, Exception, SystemExit):
@@ -233,6 +252,7 @@ class ProductionKyber:
         Returns:
             (ciphertext, shared_secret): Encapsulated key and shared secret
         """
+        public_key = require_kem_length('public key', public_key, self.PUBLIC_KEY_SIZE, self.algorithm)
         if self.implementation == 'liboqs':
             return self._encapsulate_liboqs(public_key)
         elif self.implementation == 'pqcrypto':
@@ -252,6 +272,8 @@ class ProductionKyber:
         Returns:
             shared_secret: Decapsulated shared secret
         """
+        ciphertext = require_kem_length('ciphertext', ciphertext, self.CIPHERTEXT_SIZE, self.algorithm)
+        private_key = require_kem_length('private key', private_key, self.PRIVATE_KEY_SIZE, self.algorithm)
         if self.implementation == 'liboqs':
             return self._decapsulate_liboqs(ciphertext, private_key)
         elif self.implementation == 'pqcrypto':
