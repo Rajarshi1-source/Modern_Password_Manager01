@@ -1129,6 +1129,42 @@ class EntanglementFunctionalTests(TransactionTestCase):
         from security.services.quantum_entanglement_service import QuantumEntanglementService
         self.service = QuantumEntanglementService()
     
+    def test_pairing_rejects_a_public_key_for_another_kem(self):
+        """Kyber1024 and ML-KEM-1024 keys have the same size; the declared
+        KEM, not the length, decides, and a mismatch creates no pair."""
+        from security.models import EntangledDevicePair
+
+        session = self.service.initiate_pairing(
+            user_id=self.user.id,
+            device_a_id=str(self.device_a.device_id),
+            device_b_id=str(self.device_b.device_id),
+        )
+        self.assertEqual(session.kem, self.service.lattice.algorithm)
+        self.assertEqual(session.to_dict()['kem'], session.kem)
+        other = 'kyber-1024' if session.kem != 'kyber-1024' else 'ml-kem-1024'
+        with self.assertRaisesRegex(ValueError, 'KEM mismatch'):
+            self.service.complete_pairing(
+                session_id=session.session_id,
+                verification_code=session.verification_code,
+                device_b_public_key=secrets.token_bytes(1568),
+                kem=other,
+            )
+        self.assertFalse(EntangledDevicePair.objects.exists())
+        result = self.service.complete_pairing(
+            session_id=session.session_id,
+            verification_code=session.verification_code,
+            device_b_public_key=secrets.token_bytes(1568),
+            kem=session.kem,
+        )
+        self.assertEqual(result['kem'], session.kem)
+
+    def test_service_uses_the_configured_lattice_algorithm(self):
+        from security.services.quantum_entanglement_service import QuantumEntanglementService
+        with override_settings(QUANTUM_ENTANGLEMENT={'LATTICE_ALGORITHM': 'kyber-1024'}):
+            self.assertEqual(QuantumEntanglementService().lattice.algorithm, 'kyber-1024')
+        with override_settings(QUANTUM_ENTANGLEMENT={}):
+            self.assertEqual(QuantumEntanglementService().lattice.algorithm, 'ml-kem-1024')
+
     def test_full_pairing_workflow(self):
         """Test complete pairing workflow from initiation to completion."""
         from security.models import EntangledDevicePair
@@ -1150,7 +1186,8 @@ class EntanglementFunctionalTests(TransactionTestCase):
         result = self.service.complete_pairing(
             session_id=session.session_id,
             verification_code=session.verification_code,
-            device_b_public_key=fake_public_key
+            device_b_public_key=fake_public_key,
+            kem=session.kem,
         )
         
         self.assertIn('pair_id', result)
@@ -1592,7 +1629,8 @@ class EntanglementE2ETests(TransactionTestCase):
             {
                 'session_id': session_id,
                 'verification_code': code,
-                'device_b_public_key': base64.b64encode(fake_pk).decode()
+                'device_b_public_key': base64.b64encode(fake_pk).decode(),
+                'kem': response.data['kem'],
             },
             format='json'
         )

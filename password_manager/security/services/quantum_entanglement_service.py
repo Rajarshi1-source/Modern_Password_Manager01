@@ -38,6 +38,7 @@ from .lattice_crypto_engine import (
     LatticeCryptoEngine,
     LatticeKeyPair,
     EntangledState,
+    get_lattice_engine,
     lattice_crypto_engine,
 )
 from .entropy_monitor import (
@@ -102,6 +103,9 @@ class PairingSession:
     verification_code: str
     device_a_public_key: bytes
     device_b_public_key: Optional[bytes] = None
+    # Engine algorithm name (e.g. 'ml-kem-1024'). Device B must use the same
+    # KEM: ML-KEM and round-3 Kyber keys have equal sizes but do not interoperate.
+    kem: str = ''
     expires_at: datetime = field(default_factory=lambda: timezone.now() + timedelta(minutes=10))
     created_at: datetime = field(default_factory=timezone.now)
     
@@ -114,6 +118,7 @@ class PairingSession:
             'device_a_id': self.device_a_id,
             'device_b_id': self.device_b_id,
             'verification_code': self.verification_code,
+            'kem': self.kem,
             'expires_at': self.expires_at.isoformat(),
             'created_at': self.created_at.isoformat(),
         }
@@ -210,11 +215,14 @@ class QuantumEntanglementService:
         Initialize service with crypto and monitoring components.
         
         Args:
-            lattice_engine: Lattice crypto engine (default: singleton)
+            lattice_engine: Lattice crypto engine (default: the shared engine
+                for QUANTUM_ENTANGLEMENT['LATTICE_ALGORITHM'])
             entropy_mon: Entropy monitor (default: singleton)
         """
         self.config = get_entanglement_config()
-        self.lattice = lattice_engine or lattice_crypto_engine
+        self.lattice = lattice_engine or get_lattice_engine(
+            self.config.get('LATTICE_ALGORITHM')
+        )
         self.entropy = entropy_mon or entropy_monitor
         
         # In-memory pairing sessions (could be Redis in production)
@@ -307,6 +315,7 @@ class QuantumEntanglementService:
             device_b_id=device_b_id,
             verification_code=verification_code,
             device_a_public_key=keypair.public_key,
+            kem=self.lattice.algorithm,
             expires_at=timezone.now() + timedelta(minutes=timeout_minutes),
         )
         
@@ -326,6 +335,7 @@ class QuantumEntanglementService:
         session_id: str,
         verification_code: str,
         device_b_public_key: bytes,
+        kem: str,
     ) -> Dict[str, Any]:
         """
         Complete device pairing after verification.
@@ -334,6 +344,7 @@ class QuantumEntanglementService:
             session_id: Pairing session ID
             verification_code: Code entered by user
             device_b_public_key: Device B's lattice public key
+            kem: The KEM of device_b_public_key (must equal the session's)
             
         Returns:
             Dict with pair_id and initial sync info
@@ -355,6 +366,13 @@ class QuantumEntanglementService:
         # Verify code
         if session.verification_code != verification_code:
             raise ValueError("Invalid verification code")
+        
+        # Device B's key must be for the session's KEM. Kyber and ML-KEM keys
+        # of the same level have equal sizes, so a length check cannot tell
+        # them apart, and encapsulating with the wrong one yields a ciphertext
+        # device B cannot open while the pair is still recorded as active.
+        if kem != session.kem:
+            raise ValueError(f"KEM mismatch: session uses {session.kem}")
         
         # Retrieve device A's private key
         device_a_private_key = self._get_temp_private_key(session_id)
@@ -435,6 +453,7 @@ class QuantumEntanglementService:
             'generation': 0,
             'device_a_id': session.device_a_id,
             'device_b_id': session.device_b_id,
+            'kem': self.lattice.algorithm,
             'ciphertext_b64': base64.b64encode(ciphertext).decode(),
         }
     

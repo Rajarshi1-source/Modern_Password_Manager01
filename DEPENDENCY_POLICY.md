@@ -195,8 +195,9 @@ stored artefact records it, and decryption dispatches on that record.
 | Behavioral embedding, `BehavioralCommitment.encryption_algorithm` | `"ml-kem-768-aes256gcm"` | `"kyber768-aes256gcm"` |
 | Cached public key (`kyber:kem-pubkey:<user>`) | `"<KEM>\|<base64>"` | old `kyber:pubkey:` entries are never read |
 
-Kyber768 is decrypt-only: `ProductionKyber` refuses to generate new Kyber768
-keys. liboqs has said since `0.12.0` that Kyber may be removed; if a future
+Kyber768 is legacy: `ProductionKyber` refuses to generate new Kyber768 keys,
+while decapsulation of Kyber768 data and encapsulation to an existing Kyber768
+public key (a stored `KyberKeyPair`) keep working. liboqs has said since `0.12.0` that Kyber may be removed; if a future
 release does remove it, the remaining Kyber768 artefacts above must be re-created
 (or re-wrapped) before that upgrade.
 

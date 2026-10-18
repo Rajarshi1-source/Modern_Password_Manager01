@@ -67,7 +67,7 @@ from cryptography.hazmat.backends import default_backend
 # derivation and implicit rejection), and decapsulating with the wrong one
 # returns a wrong secret rather than raising.
 ML_KEM_768 = 'ML-KEM-768'
-KYBER_768 = 'Kyber768'  # legacy: decrypt only
+KYBER_768 = 'Kyber768'  # legacy: decrypts pre-migration data; never used for new data
 
 # Stored 'algorithm' label (also BehavioralCommitment.encryption_algorithm)
 # -> KEM. The Kyber768 label is what every pre-migration embedding carries.

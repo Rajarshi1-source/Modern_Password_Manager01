@@ -23,7 +23,8 @@ import oqs  # noqa: E402
 EXPECTED_KEMS = {
     # New data: FIPS 203.
     'ML-KEM-512', 'ML-KEM-768', 'ML-KEM-1024',
-    # Legacy round-3 Kyber: decrypt-only for data written before ML-KEM, plus
+    # Legacy round-3 Kyber: no new keys, but data written before ML-KEM and
+    # stored Kyber768 public keys must keep working, plus
     # LatticeCryptoEngine configurations that name kyber-* explicitly.
     'Kyber512', 'Kyber768', 'Kyber1024',
 }

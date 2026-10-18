@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 from cryptography.exceptions import InvalidTag
 from django.core.exceptions import ImproperlyConfigured
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
 import behavioral_recovery.services.quantum_crypto_service as qcs
 
@@ -167,16 +167,54 @@ class RealKyberPathTests(SimpleTestCase):
     def test_pre_migration_kyber768_blob_decapsulates_with_kyber768(self):
         """The stored label picks the KEM: an embedding written before the
         ML-KEM migration says kyber768-aes256gcm and must be decapsulated with
-        Kyber768 (the two are not interoperable), not the new default."""
-        oqs, kem = fake_oqs()
+        Kyber768 (the two are not interoperable), not the new default.
+
+        The blob is built as the pre-migration code wrote it (AES key = the
+        Kyber768 shared secret), and the fake KEM returns that secret only
+        for Kyber768 with the right key, as liboqs would: ML-KEM-768 on the
+        same bytes yields an unrelated (implicit-rejection) secret.
+        """
+        import base64
+        import json
+        import os
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        kyber_secret = b'Y' * 32
+        nonce = os.urandom(12)
+        legacy_blob = {
+            'kyber_ciphertext': base64.b64encode(KYBER_CT).decode(),
+            'aes_ciphertext': base64.b64encode(
+                AESGCM(kyber_secret).encrypt(nonce, json.dumps(EMBEDDING).encode(), None)
+            ).decode(),
+            'nonce': base64.b64encode(nonce).decode(),
+            'algorithm': 'kyber768-aes256gcm',
+            'version': '1.0',
+        }
+
+        oqs = MagicMock(name='oqs')
+
+        def construct(alg, secret_key=None):
+            kem = MagicMock(name=f'KEM({alg})')
+            kem.__enter__.return_value = kem
+            kem.decap_secret.return_value = (
+                kyber_secret if (alg, secret_key) == ('Kyber768', PRIV)
+                else hashlib.sha256(alg.encode() + (secret_key or b'')).digest()
+            )
+            return kem
+
+        oqs.KeyEncapsulation.side_effect = construct
         with real_liboqs(oqs):
             svc = qcs.QuantumCryptoService()
-            encrypted = svc.encrypt_behavioral_embedding(EMBEDDING, PUB)
-            encrypted['algorithm'] = 'kyber768-aes256gcm'
-            self.assertTrue(svc.is_quantum_protected(encrypted))
-            oqs.KeyEncapsulation.reset_mock()
-            self.assertEqual(svc.decrypt_behavioral_embedding(encrypted, PRIV), EMBEDDING)
+            self.assertTrue(svc.is_quantum_protected(legacy_blob))
+            self.assertEqual(svc.decrypt_behavioral_embedding(legacy_blob, PRIV), EMBEDDING)
             oqs.KeyEncapsulation.assert_called_once_with('Kyber768', PRIV)
+
+            # The same Kyber768 bytes labelled ML-KEM-768 do not open.
+            with self.assertRaises(InvalidTag):
+                svc.decrypt_behavioral_embedding(
+                    dict(legacy_blob, algorithm='ml-kem-768-aes256gcm'), PRIV,
+                )
+            oqs.KeyEncapsulation.assert_called_with('ML-KEM-768', PRIV)
 
     @DENY_SIM
     def test_unknown_algorithm_label_is_refused_not_guessed(self):
@@ -361,3 +399,41 @@ class KemInputLengthTests(SimpleTestCase):
                 with self.assertRaisesRegex(ValueError, 'must be'):
                     svc.decrypt_behavioral_embedding(tampered, bad_sk)
             oqs.KeyEncapsulation.assert_not_called()
+
+
+class MigrationTaskSkipsFallbackTests(TestCase):
+    """async_migrate_commitments_to_quantum must not count (or save) the
+    non-PQ fallback as a migration: the row stays eligible for a later run
+    with liboqs."""
+
+    def _commitment(self):
+        import base64
+        import json
+        from django.contrib.auth.models import User
+        from behavioral_recovery.models import BehavioralCommitment
+        user = User.objects.create_user('migrate', 'migrate@example.com', 'Migrate-Pass-1!')
+        return BehavioralCommitment.objects.create(
+            user=user, challenge_type='typing', unlock_conditions={},
+            encrypted_embedding=base64.b64encode(json.dumps(EMBEDDING).encode()),
+        )
+
+    @ALLOW_SIM
+    def test_fallback_result_is_not_a_migration(self):
+        from behavioral_recovery.tasks import async_migrate_commitments_to_quantum
+        commitment = self._commitment()
+        with no_liboqs(), patch.object(qcs, '_global_quantum_crypto', None):
+            self.assertEqual(async_migrate_commitments_to_quantum(batch_size=10), 0)
+        commitment.refresh_from_db()
+        self.assertFalse(commitment.is_quantum_protected)
+        self.assertIsNone(commitment.migrated_to_quantum)
+
+    @DENY_SIM
+    def test_quantum_result_is_migrated(self):
+        from behavioral_recovery.tasks import async_migrate_commitments_to_quantum
+        commitment = self._commitment()
+        oqs, kem = fake_oqs()
+        with real_liboqs(oqs), patch.object(qcs, '_global_quantum_crypto', None):
+            self.assertEqual(async_migrate_commitments_to_quantum(batch_size=10), 1)
+        commitment.refresh_from_db()
+        self.assertTrue(commitment.is_quantum_protected)
+        self.assertEqual(commitment.encryption_algorithm, 'ml-kem-768-aes256gcm')

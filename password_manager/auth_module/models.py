@@ -62,7 +62,7 @@ class KyberKeyPair(models.Model):
     algorithm = models.CharField(
         max_length=50, 
         default='ML-KEM-768',
-        help_text="liboqs KEM name: ML-KEM-768, or Kyber768 (legacy, decrypt only)"
+        help_text="liboqs KEM name: ML-KEM-768, or Kyber768 (legacy; no new keypairs)"
     )
     security_level = models.IntegerField(
         default=3,

@@ -517,3 +517,19 @@ class LatticeCryptoEngine:
 # =============================================================================
 
 lattice_crypto_engine = LatticeCryptoEngine()
+_engines_by_algorithm = {lattice_crypto_engine.algorithm: lattice_crypto_engine}
+
+
+def get_lattice_engine(algorithm: str = None) -> LatticeCryptoEngine:
+    """
+    The shared engine for ``algorithm`` (default: the module default).
+
+    QUANTUM_ENTANGLEMENT['LATTICE_ALGORITHM'] (LATTICE_ALGO) selects the KEM
+    used for device pairing through this, so an operator's choice is honoured
+    instead of silently using the default.
+    """
+    algorithm = algorithm or LatticeCryptoEngine.DEFAULT_ALGORITHM
+    engine = _engines_by_algorithm.get(algorithm)
+    if engine is None:
+        engine = _engines_by_algorithm[algorithm] = LatticeCryptoEngine(algorithm)
+    return engine
