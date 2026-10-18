@@ -69,7 +69,7 @@ Scans are required:
 
 ### 6️⃣ `Twisted` – IMAP LIST Wildcard ReDoS (CVE-2026-106454)
 - **Source:** Indirect dependency (daphne's ASGI server, scrapy); `Twisted>=26.4.0` in `requirements.txt` is a floor for an older, fixed advisory.
-- **Severity (upstream):** Medium — GitHub advisory GHSA-8pqf-f4m5-798g.
+- **Severity (upstream):** Moderate — GitHub advisory GHSA-8pqf-f4m5-798g (`medium` in the advisory API).
 - **Issue:** `twisted.mail.imap4.wildcardToRegexp()` compiles an authenticated IMAP client's LIST/LSUB pattern as a regex, so a backtracking pattern can stall the reactor.
 - **Mitigation:** Unreachable in this codebase — no `twisted.mail`, `imap4` or IMAP service anywhere in `password_manager/`.
 - **Status:** Accepted risk (no upstream fix: affected `<= 26.4.0`, which is the newest release, `fix_versions: []`). Suppressed in `password_manager/pip-audit-ignores.txt` with a short expiry; remove it and raise the `Twisted>=` floor once a fixed release ships.

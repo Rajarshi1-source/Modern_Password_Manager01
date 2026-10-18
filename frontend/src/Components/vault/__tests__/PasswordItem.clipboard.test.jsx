@@ -8,7 +8,7 @@ import { act, fireEvent, render } from '@testing-library/react';
 vi.mock('../../../services/preferencesService', () => ({
   default: { get: (_path, fallback) => fallback },
 }));
-vi.mock('react-hot-toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('react-hot-toast', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 import PasswordItem from '../PasswordItem';
 import { cancelScheduledClipboardClear } from '../../../utils/secureClipboard';

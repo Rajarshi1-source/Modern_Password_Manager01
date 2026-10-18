@@ -12,6 +12,14 @@
  * clear is best-effort. Browsers can also refuse the write (Firefox and
  * Safari need a fresh user gesture; Chromium a focused page). A refused clear
  * is told to the user, and remembered so Settings can say so too.
+ *
+ * The timer lives in this page, so it cannot run after the tab is closed or
+ * discarded (desktop and extension password managers clear from a process
+ * that outlives the window; a web page has none). Closing the tab therefore
+ * attempts one best-effort clear on `pagehide`, which browsers usually drop,
+ * and, because nothing after hiding is guaranteed to run, records the clear
+ * as not done until a later clear succeeds. Nothing is cleared when the page
+ * is merely hidden: that is the user switching away to paste.
  */
 
 import preferencesService from '../services/preferencesService';
@@ -25,10 +33,16 @@ let pendingTimer = null;
 // and re-checks it after awaiting readText(), so an older clear that was
 // already running cannot erase a newer copy (even of the same secret).
 let scheduleGeneration = 0;
+let pendingValue = null;
+let pageExitListening = false;
 
 const CLEAR_FAILED_KEY = 'clipboardAutoClearFailed';
+const CLEAR_HINT_KEY = 'clipboardClearHintShown';
 
-/** True if the browser refused the most recent automatic clear. */
+/**
+ * True if the most recent automatic clear did not happen: the browser refused
+ * it, or the page was hidden or closed while it was still pending.
+ */
 export function clipboardAutoClearFailed() {
   try {
     return localStorage.getItem(CLEAR_FAILED_KEY) === '1';
@@ -37,14 +51,14 @@ export function clipboardAutoClearFailed() {
   }
 }
 
-function recordClearOutcome(cleared) {
+function recordClearOutcome(cleared, { silent = false } = {}) {
   try {
     if (cleared) localStorage.removeItem(CLEAR_FAILED_KEY);
     else localStorage.setItem(CLEAR_FAILED_KEY, '1');
   } catch {
     // Storage unavailable: the toast below still tells the user.
   }
-  if (!cleared) {
+  if (!cleared && !silent) {
     toast.error(
       'Your browser blocked clearing the clipboard. The copied password may '
       + 'still be there: copy something else to replace it.',
@@ -96,7 +110,12 @@ export async function clearClipboardIfUnchanged(value, generation) {
   }
   if (value != null && typeof clipboard.readText === 'function') {
     try {
-      if ((await clipboard.readText()) !== value) return false;
+      if ((await clipboard.readText()) !== value) {
+        // Already replaced: the secret is off the clipboard, which is the
+        // outcome a clear is for (no toast, nothing was attempted).
+        if (generation === undefined || generation === scheduleGeneration) recordClearOutcome(true);
+        return false;
+      }
     } catch {
       // Reading not permitted: fall through and clear anyway (best-effort).
     }
@@ -124,8 +143,11 @@ export function scheduleClipboardClear(value, { prefs } = {}) {
   const { enabled, timeoutMs } = getClipboardClearSettings(prefs);
   if (!enabled) return false;
   const generation = scheduleGeneration;
+  pendingValue = value;
+  listenForPageExit();
   pendingTimer = setTimeout(() => {
     pendingTimer = null;
+    pendingValue = null;
     clearClipboardIfUnchanged(value, generation);
   }, timeoutMs);
   return true;
@@ -133,16 +155,55 @@ export function scheduleClipboardClear(value, { prefs } = {}) {
 
 export function cancelScheduledClipboardClear() {
   scheduleGeneration += 1;
+  pendingValue = null;
   if (pendingTimer !== null) {
     clearTimeout(pendingTimer);
     pendingTimer = null;
   }
 }
 
+// Hidden: record the pending clear as not done, synchronously, since a hidden
+// tab may be discarded without another event (mobile). Do not clear: the user
+// is most likely pasting elsewhere. If the page comes back, the timer still
+// fires and its outcome replaces this record.
+// pagehide (close, reload, navigation): also try the clear now. Best-effort;
+// the timer keeps running if the page is only entering the back/forward cache.
+function onPageHidden(event) {
+  if (pendingTimer === null) return;
+  if (event.type === 'visibilitychange' && document.visibilityState !== 'hidden') return;
+  recordClearOutcome(false, { silent: true });
+  if (event.type === 'pagehide') clearClipboardIfUnchanged(pendingValue, scheduleGeneration);
+}
+
+function listenForPageExit() {
+  if (pageExitListening || typeof window === 'undefined') return;
+  pageExitListening = true;
+  window.addEventListener('pagehide', onPageHidden);
+  document.addEventListener('visibilitychange', onPageHidden);
+}
+
+// Shown once per browser, the first time a secret is copied: the limit is a
+// property of a web page, so say it where the user relies on it.
+function hintOnce(timeoutMs) {
+  try {
+    if (localStorage.getItem(CLEAR_HINT_KEY)) return;
+    localStorage.setItem(CLEAR_HINT_KEY, '1');
+  } catch {
+    return;
+  }
+  toast(
+    `The clipboard is cleared after ${Math.round(timeoutMs / 1000)} seconds while this tab `
+    + 'stays open. Closing the tab first may leave the copied value on the clipboard.',
+    { id: 'clipboard-clear-hint', duration: 8000 },
+  );
+}
+
 /** Copy `text` and schedule its clear. Rejects if the copy itself fails. */
 export async function copySecret(text, options = {}) {
   await copyToClipboard(text);
-  scheduleClipboardClear(text, options);
+  if (scheduleClipboardClear(text, options)) {
+    hintOnce(getClipboardClearSettings(options.prefs).timeoutMs);
+  }
 }
 
 /**
