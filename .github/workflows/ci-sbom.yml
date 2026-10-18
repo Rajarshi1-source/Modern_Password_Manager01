@@ -5,6 +5,11 @@ on:
     branches: [ main ]
   pull_request:
 
+# Read-only default for the GITHUB_TOKEN. Every job below declares the
+# permissions it needs, so this only covers a job added without one.
+permissions:
+  contents: read
+
 jobs:
   build-and-sbom:
     runs-on: ubuntu-latest

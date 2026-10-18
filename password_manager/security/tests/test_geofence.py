@@ -540,3 +540,31 @@ class ClonedSessionDetectionTests(TestCase):
         )
         
         self.assertTrue(is_cloned)
+
+
+@override_settings(GEOIP_DB_PATH=None)
+class IpLocationLookupTests(TestCase):
+    """The client IP is interpolated into the ipinfo.io URL path."""
+
+    def setUp(self):
+        from security.services.impossible_travel_service import ImpossibleTravelService
+        self.service = ImpossibleTravelService()
+
+    @patch('requests.get')
+    def test_non_ip_value_never_reaches_the_url(self, mock_get):
+        """A value that is not an IP literal must not be sent anywhere."""
+        for bad in ('8.8.8.8/../../me', '8.8.8.8?token=x', 'evil.example', '1.2.3.4#x'):
+            self.assertEqual(self.service._get_location_from_ip(bad), {})
+        mock_get.assert_not_called()
+
+    @patch('requests.get')
+    def test_valid_ip_is_sent_in_canonical_form(self, mock_get):
+        mock_get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {'city': 'X', 'country': 'US', 'loc': '1.5,2.5'},
+        )
+        result = self.service._get_location_from_ip(' 2001:DB8::1 ')
+        self.assertEqual(
+            mock_get.call_args[0][0], 'https://ipinfo.io/2001:db8::1/json'
+        )
+        self.assertEqual(result['latitude'], 1.5)

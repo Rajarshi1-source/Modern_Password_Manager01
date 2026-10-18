@@ -23,9 +23,9 @@ on:
     - cron: '17 3 * * *'
   workflow_dispatch: {}
 
+# Read-only default; security-events: write is granted per job (SARIF upload).
 permissions:
   contents: read
-  security-events: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,6 +38,9 @@ jobs:
   semgrep:
     name: Semgrep SAST
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     # step-security/harden-runner is intentionally NOT added to this job:
     # it patches the runner's own network namespace and does not work
     # inside a `container:` job (this one runs in returntocorp/semgrep).
@@ -78,6 +81,9 @@ jobs:
   nuclei:
     name: Nuclei DAST
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     # The local boot builds the backend image (liboqs + ML layer): allow for it,
     # but never the 6h default if something hangs.
     timeout-minutes: 90

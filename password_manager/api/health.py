@@ -26,7 +26,9 @@ def health_check(request):
             cursor.fetchone()
         health_status['checks']['database'] = 'connected'
     except Exception as e:
-        health_status['checks']['database'] = f'error: {str(e)}'
+        # This endpoint is unauthenticated: the exception text can carry the
+        # DB host, user or database name, so it goes to the log, not the body.
+        health_status['checks']['database'] = 'error'
         health_status['status'] = 'unhealthy'
         logger.error(f"Database health check failed: {e}")
     
@@ -46,7 +48,7 @@ def health_check(request):
             health_status['checks']['cache'] = 'error: cache not working'
             health_status['status'] = 'unhealthy'
     except Exception as e:
-        health_status['checks']['cache'] = f'error: {str(e)}'
+        health_status['checks']['cache'] = 'error'
         health_status['status'] = 'unhealthy'
         logger.error(f"Cache health check failed: {e}")
     
