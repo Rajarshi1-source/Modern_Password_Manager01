@@ -5,6 +5,14 @@
 # Supports: Django REST API, Celery Workers, Daphne WebSockets, FHE Operations
 # =============================================================================
 
+# Post-quantum pins (see the crypto-builder stage and DEPENDENCY_POLICY.md →
+# "Post-quantum cryptography"). Declared before the first FROM so the
+# production stage's smoke test asserts the same versions the build used.
+ARG LIBOQS_REF=0.16.0
+ARG LIBOQS_COMMIT=5a1a854b0dc9f2141bdc771c555ee60c37950183
+ARG LIBOQSPY_REF=0.16.0.1
+ARG LIBOQSPY_COMMIT=62385cd99ababa2a4875257232c68dccda256e3b
+
 # -----------------------------------------------------------------------------
 # Stage 1: Crypto Builder - Compile liboqs and Python crypto libraries
 # -----------------------------------------------------------------------------
@@ -45,11 +53,14 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
 # Build and install liboqs (Open Quantum Safe C library)
 #
 # Pinning policy (see DEPENDENCY_POLICY.md → "Post-quantum cryptography"):
-#   liboqs C library  → 0.11.0   (this stage, SHA 6f30d7ef…)
-#   liboqs-python     → 0.10.0   (next stage,  SHA 02198f9c…)
+#   liboqs C library  → 0.16.0   (this stage, SHA 5a1a854b…)
+#   liboqs-python     → 0.16.0.1 (next stage,  SHA 62385cd9…)
 # Drift between the two halves manifests as runtime ABI breaks (the C
 # library's symbol layout shifts and the Python wrapper's ctypes bindings
-# silently mis-cast). Both pins must move together when bumped.
+# silently mis-cast: 0.16's OQS_KEM struct gained length_keypair_seed and
+# keypair_derand, which 0.10's wrapper does not know). Both pins must move
+# together when bumped, and the production stage's oqs_smoke.py fails the
+# build if they do not match.
 #
 # Belt-and-suspenders: we clone by tag (fast, --depth 1) AND assert the
 # commit SHA matches a known-good value before building. Git release
@@ -58,14 +69,19 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
 # to a mirror) the SHA assertion fails closed — the docker build aborts
 # rather than silently shipping a different commit. Per CodeRabbit
 # review of PR #274. SHAs verified via ``git ls-remote --tags`` against
-# the canonical github.com upstream on 2026-05-25.
+# the canonical github.com upstream on 2026-10-19 (0.16.0 is the latest
+# liboqs release; no 0.17.0 yet).
 #
 # OQS_MINIMAL_BUILD limits the compiled algorithms to what the Python
-# code actually instantiates (`oqs.KeyEncapsulation("Kyber{512,768,1024}")`).
-# Saber, NTRU, and Dilithium were enabled previously but have zero call
-# sites — they bloated the .so and expanded the attack surface for no
-# functional gain. Re-enable them by extending the semicolon-separated
-# list if a future feature introduces a new algorithm.
+# code actually instantiates: FIPS 203 ML-KEM-{512,768,1024} for all new
+# data, plus round-3 Kyber{512,768,1024}, kept so data written with
+# Kyber768 before the ML-KEM migration still decrypts (the two are not
+# interoperable) and for LatticeCryptoEngine configs naming kyber-*. No
+# signature scheme is compiled in, so the LMS/XMSS advisories against
+# 0.16.0 (CVE-2026-104254/-104255, fixed in 0.17.0) do not apply to this
+# build. Saber, NTRU, and Dilithium were enabled previously but have zero
+# call sites. Extend the list (and oqs_smoke.py) if a future feature
+# introduces a new algorithm.
 #
 # OQS_DIST_BUILD=ON + OQS_OPT_TARGET=auto give a "distribution build"
 # with runtime CPUID dispatch — production hosts on x86_64 with AVX2 or
@@ -75,8 +91,8 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
 # optimisation lever; see DEPENDENCY_POLICY.md for why kernel/FPGA/GPU
 # offload is explicitly out of scope.
 # -----------------------------------------------------------------------------
-ARG LIBOQS_REF=0.11.0
-ARG LIBOQS_COMMIT=6f30d7ef49ca590979d7a085cd662f00bb6855fe
+ARG LIBOQS_REF
+ARG LIBOQS_COMMIT
 WORKDIR /tmp
 RUN git clone --depth 1 --branch ${LIBOQS_REF} https://github.com/open-quantum-safe/liboqs.git && \
     actual=$(git -C liboqs rev-parse HEAD) && \
@@ -91,7 +107,7 @@ RUN cmake -GNinja .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=ON \
     -DOQS_USE_OPENSSL=ON \
-    -DOQS_MINIMAL_BUILD="KEM_kyber_512;KEM_kyber_768;KEM_kyber_1024" \
+    -DOQS_MINIMAL_BUILD="KEM_ml_kem_512;KEM_ml_kem_768;KEM_ml_kem_1024;KEM_kyber_512;KEM_kyber_768;KEM_kyber_1024" \
     -DOQS_DIST_BUILD=ON \
     -DOQS_OPT_TARGET=auto \
     && ninja \
@@ -104,19 +120,23 @@ ENV PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
 # -----------------------------------------------------------------------------
 # Install liboqs-python wrapper.
 #
-# Pinned to 0.10.0 to pair with liboqs 0.11.0 above. The previous build
-# cloned `main` HEAD, which produced reproducibility drift: the same
-# Dockerfile could yield different wrapper versions across builds, and
-# requirements-lock.txt's `liboqs-python==0.14.1` line lied about what
-# was actually installed. The branch pin makes the Docker build and the
-# lock file agree.
+# Pinned to 0.16.0.1 to pair with liboqs 0.16.0 above (0.16.0.1 also fixes
+# a command injection in the wrapper's automatic liboqs installation). The
+# build once cloned `main` HEAD, which produced reproducibility drift: the
+# same Dockerfile could yield different wrapper versions across builds, and
+# requirements-lock.txt's line lied about what was actually installed. The
+# tag pin makes the Docker build and the lock file agree.
+#
+# Installed with --target so the package's .dist-info travels with it into
+# the venv: 0.16 reads its own version from that metadata at import time,
+# and without it warns and skips its C/Python version check.
 #
 # SHA assertion mirrors the liboqs stage above — clone by tag, then
 # verify the commit hash hasn't drifted (per CodeRabbit review of PR
 # #274).
 # -----------------------------------------------------------------------------
-ARG LIBOQSPY_REF=0.10.0
-ARG LIBOQSPY_COMMIT=02198f9c3366cfafdea38a7830b82b9bd78bcb32
+ARG LIBOQSPY_REF
+ARG LIBOQSPY_COMMIT
 WORKDIR /tmp
 RUN git clone --depth 1 --branch ${LIBOQSPY_REF} https://github.com/open-quantum-safe/liboqs-python.git && \
     actual=$(git -C liboqs-python rev-parse HEAD) && \
@@ -126,7 +146,7 @@ RUN git clone --depth 1 --branch ${LIBOQSPY_REF} https://github.com/open-quantum
         exit 1 ; \
     fi
 WORKDIR /tmp/liboqs-python
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --no-deps --target /opt/oqs-python .
 WORKDIR /tmp
 RUN rm -rf liboqs-python
 
@@ -225,11 +245,11 @@ RUN pip install --prefer-binary --retries 5 -r requirements-ml.txt || \
 RUN pip install --prefer-binary --retries 5 \
     gunicorn daphne "uvicorn[standard]" redis django-redis
 
-# Copy OQS Python package from crypto-builder using a version-agnostic glob via shell
-RUN mkdir -p /tmp/oqs-staging
-COPY --from=crypto-builder /usr/local/lib/python3.12/site-packages/oqs /tmp/oqs-staging/oqs
+# Copy the liboqs-python package AND its .dist-info from crypto-builder into
+# the venv (see the --target install above).
+COPY --from=crypto-builder /opt/oqs-python /tmp/oqs-staging
 RUN PY_SITELIB=$(python -c "import sysconfig; print(sysconfig.get_path('purelib'))") && \
-    cp -r /tmp/oqs-staging/oqs "$PY_SITELIB/oqs" && \
+    cp -r /tmp/oqs-staging/. "$PY_SITELIB/" && \
     rm -rf /tmp/oqs-staging
 
 # -----------------------------------------------------------------------------
@@ -374,6 +394,17 @@ RUN find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o 
 
 # Update library cache after all native libs and venv are in place
 RUN ldconfig
+
+# Post-quantum smoke test, at build time, in the shipped venv: liboqs loads,
+# the C and Python halves are the pinned versions, exactly the
+# OQS_MINIMAL_BUILD KEMs are enabled, every one of them round-trips, and
+# Kyber768 and ML-KEM-768 do not interoperate. CI builds this image but
+# never runs it (PR #545), so this is where a broken pairing must fail.
+ARG LIBOQS_REF
+ARG LIBOQSPY_REF
+COPY docker/backend/oqs_smoke.py /tmp/oqs_smoke.py
+RUN /opt/venv/bin/python -I /tmp/oqs_smoke.py "${LIBOQS_REF}" "${LIBOQSPY_REF}" && \
+    rm -f /tmp/oqs_smoke.py
 
 # Set working directory
 WORKDIR ${APP_HOME}

@@ -84,14 +84,14 @@ jobs:
             smoke: true
             advisory: false
           # The lock files are resolved from a copy (resolve.txt) with the pins in
-          # `exclude` dropped: liboqs-python 0.10.0 does not exist on PyPI (only the
-          # 0.16.x line does). docker/backend/Dockerfile builds liboqs 0.11.0 +
-          # liboqs-python 0.10.0 from pinned git SHAs, so the lock line documents the
-          # image; changing it is a migration (see docs/pqc-hybrid-architecture-review.md),
-          # not a lock edit. The drop is printed in the log so it is never silent.
+          # `exclude` dropped. liboqs-python is no longer excluded: the image now
+          # pins 0.16.0.1, which is on PyPI, so the lock line resolves as written.
+          # docker/backend/Dockerfile still builds it (and liboqs 0.16.0) from pinned
+          # git SHAs; the lock line documents the image. The `exclude` mechanism
+          # stays for future pins that cannot resolve; any drop is printed in the log.
           - name: Lock file (requirements-lock.txt)
             lock_file: password_manager/requirements-lock.txt
-            exclude: liboqs-python
+            exclude: ''
             args: >-
               -r resolve.txt
               --extra-index-url https://download.pytorch.org/whl/cpu
@@ -99,7 +99,7 @@ jobs:
             advisory: true
           - name: Lock file (ml_dark_web/requirements-lock.txt)
             lock_file: password_manager/ml_dark_web/requirements-lock.txt
-            exclude: liboqs-python
+            exclude: ''
             args: >-
               -r resolve.txt
               --extra-index-url https://download.pytorch.org/whl/cpu

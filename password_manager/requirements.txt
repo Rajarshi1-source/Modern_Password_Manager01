@@ -205,9 +205,11 @@ qiskit-ibm-runtime>=0.20.0
 
 # Post-Quantum Cryptography
 # Note: liboqs-python requires liboqs C library to be compiled and installed.
-# In Docker, this is handled by the multi-stage Dockerfile.
-# For local development on Windows without Docker, the code will use simulated Kyber.
-# liboqs-python>=0.10.0  # Installed from source in Docker
+# In Docker, this is handled by the multi-stage Dockerfile (liboqs 0.16.0 +
+# liboqs-python 0.16.0.1, pinned together; ML-KEM-768 for new data, Kyber768
+# kept to decrypt older data). For local development without Docker, the code
+# uses a simulated KEM, and only when QUANTUM_CRYPTO['ALLOW_SIMULATION'] is on.
+# liboqs-python==0.16.0.1  # Installed from source in Docker; must match the C library
 
 # Pure Python Post-Quantum Crypto (fallback when liboqs unavailable)
 # pqcrypto  # Installed separately in Docker
@@ -338,8 +340,8 @@ diffprivlib>=0.6.4 # IBM's library for Differential Privacy (works on Python 3.1
 # ============================================================================
 # Quantum Entanglement-Inspired Key Distribution
 # ============================================================================
-# Post-Quantum Cryptography (Kyber/NTRU lattice-based)
-# liboqs-python>=0.10.0
+# Post-Quantum Cryptography (ML-KEM lattice-based; see the note above)
+# liboqs-python==0.16.0.1
 
 # Entropy Analysis
 # Note: a tighter lower bound appears again in the neuro-feedback block below;
