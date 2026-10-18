@@ -177,10 +177,10 @@ class ProductionKyber:
         # Determine which implementation to use
         if LIBOQS_AVAILABLE:
             self.implementation = 'liboqs'
-            logger.debug("Using liboqs implementation of %s", self.algorithm)
+            logger.debug("Using liboqs KEM implementation")
         elif PQCRYPTO_AVAILABLE:
             self.implementation = 'pqcrypto'
-            logger.debug("Using pqcrypto implementation of %s", self.algorithm)
+            logger.debug("Using pqcrypto KEM implementation")
         elif allow_simulation:
             self.implementation = 'simulation'
             if not _warnings_shown['simulation'] and not _SUPPRESS_CRYPTO_WARNINGS:

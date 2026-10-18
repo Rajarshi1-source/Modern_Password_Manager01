@@ -48,7 +48,7 @@ from .services.kyber_crypto import (
     get_crypto_status,
     hybrid_algorithm_for_kem,
     production_kyber,
-    require_supported_kem,
+    SUPPORTED_KEMS,
 )
 from .services.optimized_ntt import get_optimized_ntt
 from django.db.models import Max
@@ -315,12 +315,11 @@ async def encrypt_view(request):
 
         if public_key_b64:
             public_key = base64.b64decode(public_key_b64)
-            try:
-                kem = require_supported_kem(data.get('kem', DEFAULT_KEM))
-            except ValueError as e:
+            kem = data.get('kem', DEFAULT_KEM)
+            if kem not in SUPPORTED_KEMS:
                 return Response({
                     'status': 'error',
-                    'message': str(e)
+                    'message': f"Unsupported kem; expected one of {', '.join(SUPPORTED_KEMS)}"
                 }, status=status.HTTP_400_BAD_REQUEST)
         else:
             # Use user's cached or stored key
