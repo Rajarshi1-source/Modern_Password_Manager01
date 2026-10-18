@@ -8,7 +8,7 @@ vi.mock('../../services/preferencesService', () => ({
   default: { get: (_path, fallback) => fallback },
 }));
 
-vi.mock('react-hot-toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('react-hot-toast', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 import { toast } from 'react-hot-toast';
 import {
@@ -199,6 +199,82 @@ describe('a clear the browser refuses', () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(toast.error).not.toHaveBeenCalled();
     expect(clipboardAutoClearFailed()).toBe(false);
+  });
+});
+
+describe('leaving the page before the timeout', () => {
+  const prefs = prefsWith({ clipboardTimeout: 30 });
+  const setVisibility = (state) => {
+    Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    toast.error.mockClear();
+  });
+  afterEach(() => setVisibility('visible'));
+
+  it('closing the tab tries the clear at once and records it as not done', async () => {
+    await copySecret('the-password', { prefs });
+    window.dispatchEvent(new Event('pagehide'));
+    // Recorded synchronously: nothing after pagehide is guaranteed to run.
+    expect(clipboardAutoClearFailed()).toBe(true);
+    // If the page lives long enough for the attempt to finish, the record clears.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clipboardText).toBe('');
+    expect(clipboardAutoClearFailed()).toBe(false);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('switching away to paste does not clear, and the timer still does later', async () => {
+    await copySecret('the-password', { prefs });
+    setVisibility('hidden');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clipboardText).toBe('the-password');
+    expect(clipboardAutoClearFailed()).toBe(true); // in case the hidden tab is discarded
+
+    setVisibility('visible');
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(clipboardText).toBe('');
+    expect(clipboardAutoClearFailed()).toBe(false);
+  });
+
+  it('records nothing when no clear is pending', async () => {
+    await copySecret('the-password', { prefs });
+    await vi.advanceTimersByTimeAsync(30000);
+    window.dispatchEvent(new Event('pagehide'));
+    setVisibility('hidden');
+    expect(clipboardAutoClearFailed()).toBe(false);
+  });
+
+  it('a later clear that finds the secret already replaced resets the record', async () => {
+    await copySecret('the-password', { prefs });
+    setVisibility('hidden');
+    setVisibility('visible');
+    clipboardText = 'something the user copied later';
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(clipboardAutoClearFailed()).toBe(false);
+  });
+});
+
+describe('the first copy of a secret', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    toast.mockClear();
+  });
+
+  it('says once that clearing needs the tab to stay open', async () => {
+    const prefs = prefsWith({ clipboardTimeout: 15 });
+    await copySecret('a', { prefs });
+    await copySecret('b', { prefs });
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast.mock.calls[0][0]).toMatch(/15 seconds while this tab stays open/);
+  });
+
+  it('says nothing when auto-clear is off', async () => {
+    await copySecret('a', { prefs: prefsWith({ clearClipboard: false }) });
+    expect(toast).not.toHaveBeenCalled();
   });
 });
 

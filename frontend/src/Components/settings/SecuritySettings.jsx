@@ -301,10 +301,15 @@ const SecuritySettings = () => {
           <SettingInfo>
             <h3>Clear Clipboard Automatically</h3>
             <p>Remove copied passwords from clipboard after a short time</p>
+            <p>
+              Clearing runs in this tab: if you close or reload it before the
+              timeout, the copied password may stay on the clipboard.
+            </p>
             {clipboardAutoClearFailed() && (
               <p role="status">
-                Your browser blocked the last automatic clear, so a copied
-                password may stay on the clipboard until you copy something else.
+                The last automatic clear did not happen (the browser blocked it,
+                or the tab was closed first), so a copied password may still be
+                on the clipboard until you copy something else.
               </p>
             )}
           </SettingInfo>

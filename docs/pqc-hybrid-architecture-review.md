@@ -332,6 +332,13 @@ provide. Fix it in the frontend with the Playwright test in section 9.1.
   passkey-primary and layered recovery-key screens, and `CollectFragments`.
   `SealedAutofillFrame`'s fixed 20 s timer now follows the setting.
 - Non-secret copies (alias emails, URLs, certificates, error stacks) are unchanged.
+- Limit: the timer runs in the page, so closing or discarding the tab before it
+  fires can leave the secret on the clipboard (dedicated apps and extensions clear
+  from a process that outlives the window; a web page has none). `pagehide`
+  makes one best-effort clear, which browsers usually drop. Hiding or closing with
+  a clear pending is recorded synchronously and shown in Settings until a later
+  clear succeeds. Hiding alone never clears: that is the user switching away to
+  paste. Settings and a one-time hint on the first secret copy say so.
 - `VaultItemDetail` and `PasswordItem` are imported nowhere, so the "main copy
   action" named above is unreachable. The reachable vault dashboard
   (`VaultItemCard`) has no copy action.
