@@ -1,8 +1,10 @@
 """
 Production Post-Quantum Cryptography Service
 
-Implements CRYSTALS-Kyber-768 (NIST-approved) for quantum-resistant encryption
-of behavioral embeddings using hybrid Kyber + AES approach.
+Implements ML-KEM-768 (FIPS 203) for quantum-resistant encryption of
+behavioral embeddings using a hybrid KEM + AES approach. Embeddings written
+before the ML-KEM migration used round-3 Kyber768; their stored 'algorithm'
+says so, and decryption uses the KEM that label names.
 
 Note: In local development without Docker, the code uses AES-256-GCM fallback.
       In production (Docker), liboqs is compiled and installed for real PQC.
@@ -59,6 +61,21 @@ except (ImportError, Exception, SystemExit) as _exc:
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.backends import default_backend
 
+# liboqs KEM names. The two are NOT interoperable (FIPS 203 changed key
+# derivation and implicit rejection), and decapsulating with the wrong one
+# returns a wrong secret rather than raising.
+ML_KEM_768 = 'ML-KEM-768'
+KYBER_768 = 'Kyber768'  # legacy: decrypt only
+
+# Stored 'algorithm' label (also BehavioralCommitment.encryption_algorithm)
+# -> KEM. The Kyber768 label is what every pre-migration embedding carries.
+QUANTUM_ALGORITHMS = {
+    'ml-kem-768-aes256gcm': ML_KEM_768,
+    'kyber768-aes256gcm': KYBER_768,
+}
+STORED_ALGORITHM = 'ml-kem-768-aes256gcm'
+FALLBACK_ALGORITHM = 'fallback-aes256gcm'
+
 
 def simulation_allowed() -> bool:
     """
@@ -92,20 +109,21 @@ def _require_simulation_allowed(operation: str) -> None:
 
 class QuantumCryptoService:
     """
-    Production quantum-resistant encryption using CRYSTALS-Kyber-768
+    Production quantum-resistant encryption using ML-KEM-768 (FIPS 203)
     
     Hybrid approach for maximum security:
-    1. Kyber-768 for key encapsulation (post-quantum resistant)
+    1. ML-KEM-768 for key encapsulation (post-quantum resistant)
     2. AES-256-GCM for data encryption (classical, proven)
     
-    Key Sizes (Kyber-768 / NIST Level 3):
+    Key Sizes (ML-KEM-768 / NIST Level 3; same as Kyber768):
     - Public key: 1184 bytes
     - Private key: 2400 bytes
     - Ciphertext: 1088 bytes
     - Shared secret: 32 bytes
     """
     
-    ALGORITHM = 'Kyber768'  # NIST Level 3 security (equivalent to AES-192)
+    ALGORITHM = ML_KEM_768  # KEM for new data; NIST Level 3 (AES-192 equivalent)
+    STORED_ALGORITHM = STORED_ALGORITHM
     PUBLIC_KEY_SIZE = 1184
     PRIVATE_KEY_SIZE = 2400
     CIPHERTEXT_SIZE = 1088
@@ -127,19 +145,18 @@ class QuantumCryptoService:
     
     def generate_keypair(self) -> Tuple[bytes, bytes]:
         """
-        Generate CRYSTALS-Kyber-768 keypair
+        Generate an ML-KEM-768 keypair
         
         Returns:
             Tuple of (public_key, private_key) as bytes
         """
         if LIBOQS_AVAILABLE:
             try:
-                # Generate Kyber keypair
                 with oqs.KeyEncapsulation(self.ALGORITHM) as kem:
                     public_key = kem.generate_keypair()
                     private_key = kem.export_secret_key()
                 
-                logger.debug(f"Generated Kyber-768 keypair: pub={len(public_key)}B, priv={len(private_key)}B")
+                logger.debug(f"Generated {self.ALGORITHM} keypair: pub={len(public_key)}B, priv={len(private_key)}B")
                 return public_key, private_key
                 
             except Exception as e:
@@ -161,7 +178,7 @@ class QuantumCryptoService:
         
         Args:
             embedding: 128-dimensional behavioral DNA array
-            public_key: Kyber-768 public key (1184 bytes)
+            public_key: ML-KEM-768 public key (1184 bytes)
         
         Returns:
             Dict with:
@@ -208,7 +225,7 @@ class QuantumCryptoService:
                 'kyber_ciphertext': base64.b64encode(kyber_ciphertext).decode('utf-8'),
                 'aes_ciphertext': base64.b64encode(aes_ciphertext).decode('utf-8'),
                 'nonce': base64.b64encode(nonce).decode('utf-8'),
-                'algorithm': 'kyber768-aes256gcm',
+                'algorithm': self.STORED_ALGORITHM,
                 'version': '1.0'
             }
             
@@ -226,16 +243,21 @@ class QuantumCryptoService:
         
         Args:
             encrypted_data: Dict with kyber_ciphertext, aes_ciphertext, nonce
-            private_key: Kyber-768 private key (2400 bytes)
+            private_key: Private key (2400 bytes) of the KEM the blob records
         
         Returns:
             128-dimensional behavioral DNA array
         """
         # Dispatch on how the blob was written, not on what is installed now:
-        # a stored fallback blob must not be fed to Kyber, nor the reverse.
-        if not self.is_quantum_protected(encrypted_data):
+        # a stored fallback blob must not be fed to a KEM, nor the reverse,
+        # and a Kyber768 blob must not be decapsulated with ML-KEM-768.
+        algorithm = encrypted_data.get('algorithm', '')
+        if algorithm == FALLBACK_ALGORITHM:
             _require_simulation_allowed('decryption')
             return self._fallback_decrypt(encrypted_data, private_key)
+        if algorithm not in QUANTUM_ALGORITHMS:
+            raise ValueError(f"Unsupported behavioral-embedding algorithm {algorithm!r}")
+        kem_name = QUANTUM_ALGORITHMS[algorithm]
         if not LIBOQS_AVAILABLE:
             from django.core.exceptions import ImproperlyConfigured
             raise ImproperlyConfigured(
@@ -245,7 +267,7 @@ class QuantumCryptoService:
         try:
             # Step 1: Kyber decapsulation with the caller's private key
             kyber_ciphertext = base64.b64decode(encrypted_data['kyber_ciphertext'])
-            with oqs.KeyEncapsulation(self.ALGORITHM, private_key) as kem:
+            with oqs.KeyEncapsulation(kem_name, private_key) as kem:
                 shared_secret = kem.decap_secret(kyber_ciphertext)
                 
             logger.debug(f"Kyber decapsulation successful: ss={len(shared_secret)}B")
@@ -286,10 +308,9 @@ class QuantumCryptoService:
             encrypted_data: Encrypted data dict
         
         Returns:
-            True if using Kyber encryption
+            True if written with a post-quantum KEM (ML-KEM-768 or Kyber768)
         """
-        algorithm = encrypted_data.get('algorithm', '')
-        return algorithm.startswith('kyber')
+        return encrypted_data.get('algorithm', '') in QUANTUM_ALGORITHMS
     
     # ============================================================================
     # FALLBACK METHODS (when liboqs not available)
@@ -345,7 +366,7 @@ class QuantumCryptoService:
             'kyber_ciphertext': base64.b64encode(b'fallback').decode('utf-8'),
             'aes_ciphertext': base64.b64encode(aes_ciphertext).decode('utf-8'),
             'nonce': base64.b64encode(nonce).decode('utf-8'),
-            'algorithm': 'fallback-aes256gcm',
+            'algorithm': FALLBACK_ALGORITHM,
             'version': '1.0-fallback'
         }
     

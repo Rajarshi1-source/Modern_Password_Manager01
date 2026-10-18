@@ -18,6 +18,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 from django.core.exceptions import ImproperlyConfigured
 
+from ..services.kyber_crypto import (
+    DEFAULT_KEM,
+    KYBER_768,
+    SUPPORTED_KEMS,
+)
 from ..services.quantum_crypto_service import QuantumCryptoService, Kyber
 
 logger = logging.getLogger(__name__)
@@ -60,10 +65,15 @@ class PasskeyPrimaryRecoveryService:
         computed_hash = self.hash_recovery_key(recovery_key)
         return computed_hash == stored_hash
     
-    # Bump when the blob layout changes. Version 1 (before F13) never stored
-    # the Kyber private key, and encapsulated with a KEM that returned random
-    # bytes, so no version-1 blob can be decrypted by anyone.
-    BLOB_VERSION = 2
+    # Bump when the blob layout changes.
+    #   1: before F13. Never stored the private key, and encapsulated with a
+    #      KEM that returned random bytes: no version-1 blob can be decrypted.
+    #   2: round-3 Kyber768, implied by the version (v2 was only ever written
+    #      with Kyber768). Still decrypts; no longer written.
+    #   3: records its KEM in metadata['kem'] (ML-KEM-768 for new backups),
+    #      and binds that name into the private-key wrap AAD.
+    BLOB_VERSION = 3
+    LEGACY_BLOB_VERSIONS = {2: KYBER_768}
     _SK_WRAP_INFO = b'passkey-primary-recovery-kyber-sk-wrap-v2'
 
     def encrypt_passkey_credential(
@@ -74,11 +84,12 @@ class PasskeyPrimaryRecoveryService:
         """
         Encrypt passkey credential data using hybrid Kyber + AES-GCM encryption.
 
-        A fresh Kyber-768 keypair is generated per backup. Its private key is
-        stored in the metadata, AES-GCM-wrapped under a key derived from the
-        recovery key, so decryption uses exactly the private key that matches
-        the stored public key. (Kyber keygen cannot be derived from the
-        recovery key: the pinned liboqs has no seeded keygen for Kyber768.)
+        A fresh ML-KEM-768 keypair is generated per backup. Its private key
+        is stored in the metadata, AES-GCM-wrapped under a key derived from
+        the recovery key, so decryption uses exactly the private key that
+        matches the stored public key. (liboqs 0.16 can derive an ML-KEM
+        keypair from a seed, but Kyber768, pqcrypto and the simulation
+        cannot, so the blob keeps the wrapped key rather than depend on it.)
 
         Args:
             credential_data: Dictionary containing passkey credential details
@@ -88,9 +99,10 @@ class PasskeyPrimaryRecoveryService:
             Tuple of (encrypted_data, encryption_metadata). The Kyber public
             key is in encryption_metadata['kyber_public_key'] (base64).
         """
+        kem = DEFAULT_KEM
         try:
             user_kyber_public_key, user_kyber_private_key = (
-                self.quantum_crypto.generate_kyber_keypair()
+                self.quantum_crypto.generate_kyber_keypair(kem)
             )
 
             # Serialize credential data
@@ -108,11 +120,11 @@ class PasskeyPrimaryRecoveryService:
             wrapped_private_key = AESGCM(self._derive_sk_wrap_key(master_key)).encrypt(
                 sk_iv,
                 user_kyber_private_key,
-                self._sk_wrap_aad(user_kyber_public_key),
+                self._sk_wrap_aad(user_kyber_public_key, kem, self.BLOB_VERSION),
             )
 
-            # Use Kyber to establish a shared secret
-            kyber_ciphertext, kyber_shared_secret = Kyber.encapsulate(user_kyber_public_key)
+            # Use the KEM to establish a shared secret
+            kyber_ciphertext, kyber_shared_secret = Kyber.encapsulate(user_kyber_public_key, kem)
 
             # Combine master key with Kyber shared secret for additional security
             combined_key_material = master_key + kyber_shared_secret
@@ -143,7 +155,8 @@ class PasskeyPrimaryRecoveryService:
             # Prepare encryption metadata
             encryption_metadata = {
                 'version': self.BLOB_VERSION,
-                'algorithm': 'kyber768-aes256-gcm',
+                'kem': kem,
+                'algorithm': f'{kem.lower()}-aes256-gcm',
                 'salt': base64.b64encode(salt).decode('utf-8'),
                 'hkdf_salt': base64.b64encode(hkdf_salt).decode('utf-8'),
                 'iv': base64.b64encode(iv).decode('utf-8'),
@@ -183,15 +196,7 @@ class PasskeyPrimaryRecoveryService:
             Dictionary containing decrypted credential data
         """
         version = encryption_metadata.get('version')
-        if version != self.BLOB_VERSION:
-            # Only missing/older versions are the pre-fix blobs; a newer one
-            # must not be called undecryptable and revoked.
-            if version is None or (isinstance(version, int) and version < self.BLOB_VERSION):
-                raise ValueError(
-                    "This recovery backup predates the Kyber fix and was never "
-                    "decryptable. Revoke it and create a new backup."
-                )
-            raise ValueError(f"Unsupported recovery backup version: {version!r}")
+        kem = self._blob_kem(version, encryption_metadata)
 
         try:
             # Extract metadata
@@ -212,11 +217,11 @@ class PasskeyPrimaryRecoveryService:
             kyber_private_key = AESGCM(self._derive_sk_wrap_key(master_key)).decrypt(
                 sk_iv,
                 wrapped_private_key,
-                self._sk_wrap_aad(kyber_public_key),
+                self._sk_wrap_aad(kyber_public_key, kem, version),
             )
 
-            # Decapsulate Kyber shared secret
-            kyber_shared_secret = Kyber.decapsulate(kyber_private_key, kyber_ciphertext)
+            # Decapsulate with the KEM the blob was written with
+            kyber_shared_secret = Kyber.decapsulate(kyber_private_key, kyber_ciphertext, kem=kem)
 
             # Combine keys
             combined_key_material = master_key + kyber_shared_secret
@@ -267,11 +272,43 @@ class PasskeyPrimaryRecoveryService:
             backend=default_backend()
         ).derive(master_key)
 
+    @classmethod
+    def _blob_kem(cls, version, encryption_metadata: Dict) -> str:
+        """
+        The KEM a blob was written with, or ValueError if it cannot be opened.
+
+        Version 2 implies Kyber768. Version 3 records its KEM, which must be
+        one this backend can run; it is never inferred from key sizes.
+        """
+        if not isinstance(version, (int, type(None))) or isinstance(version, bool):
+            raise ValueError(f"Unsupported recovery backup version: {version!r}")
+        if version in cls.LEGACY_BLOB_VERSIONS:
+            return cls.LEGACY_BLOB_VERSIONS[version]
+        if version == cls.BLOB_VERSION:
+            kem = encryption_metadata.get('kem')
+            if kem not in SUPPORTED_KEMS:
+                raise ValueError(f"Unsupported recovery backup KEM: {kem!r}")
+            return kem
+        # Only missing/older versions are the pre-fix blobs; a newer one
+        # must not be called undecryptable and revoked.
+        if version is None or version < min(cls.LEGACY_BLOB_VERSIONS):
+            raise ValueError(
+                "This recovery backup predates the Kyber fix and was never "
+                "decryptable. Revoke it and create a new backup."
+            )
+        raise ValueError(f"Unsupported recovery backup version: {version!r}")
+
     @staticmethod
-    def _sk_wrap_aad(kyber_public_key: bytes) -> bytes:
+    def _sk_wrap_aad(kyber_public_key: bytes, kem: str, version: int) -> bytes:
         # Bind the wrapped private key to its public key, so a swapped
         # public key in the metadata fails here instead of at decapsulation.
-        return b'kyber768-sk|' + hashlib.sha256(kyber_public_key).digest()
+        # From version 3 the KEM name is bound too: a blob relabelled to
+        # another KEM fails to unwrap instead of decapsulating to a wrong
+        # secret. Version 2 keeps its original AAD (it was only Kyber768).
+        pk_hash = hashlib.sha256(kyber_public_key).digest()
+        if version == 2:
+            return b'kyber768-sk|' + pk_hash
+        return b'passkey-primary-sk|' + kem.encode('ascii') + b'|' + pk_hash
 
     def _derive_master_key_from_recovery_key(self, recovery_key: str, salt: bytes) -> bytes:
         """

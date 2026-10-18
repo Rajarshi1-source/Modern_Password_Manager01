@@ -3,7 +3,9 @@ Lattice-Based Cryptography Engine
 =================================
 
 Post-quantum cryptography implementation using lattice-based algorithms.
-Provides Kyber-1024 key encapsulation for quantum-resistant key exchange.
+Provides ML-KEM-1024 (FIPS 203) key encapsulation for quantum-resistant key
+exchange. The round-3 Kyber names stay selectable for configurations that set
+them explicitly; they are not interoperable with ML-KEM.
 
 This module simulates quantum-inspired entangled key generation using:
 - NTRU/Kyber lattice-based key encapsulation
@@ -34,7 +36,7 @@ logger = logging.getLogger(__name__)
 try:
     import oqs
     LIBOQS_AVAILABLE = True
-    logger.info("liboqs available - using real Kyber implementation")
+    logger.info("liboqs available - using real ML-KEM implementation")
 except (ImportError, Exception, SystemExit):
     LIBOQS_AVAILABLE = False
     logger.warning("liboqs not available - using simulated lattice crypto")
@@ -164,15 +166,27 @@ class LatticeCryptoEngine:
     Uses liboqs when available, falls back to simulation otherwise.
     """
     
-    SUPPORTED_ALGORITHMS = ['kyber-1024', 'kyber-768', 'kyber-512']
-    DEFAULT_ALGORITHM = 'kyber-1024'
-    
+    # Our names -> liboqs names. ML-KEM (FIPS 203) and round-3 Kyber are NOT
+    # interoperable: both sides of an exchange must use the same entry.
+    # Pairing keys are ephemeral (held only while a pairing completes), so
+    # nothing stored depends on the default.
+    LIBOQS_NAMES = {
+        'ml-kem-1024': 'ML-KEM-1024',
+        'ml-kem-768': 'ML-KEM-768',
+        'ml-kem-512': 'ML-KEM-512',
+        'kyber-1024': 'Kyber1024',
+        'kyber-768': 'Kyber768',
+        'kyber-512': 'Kyber512',
+    }
+    SUPPORTED_ALGORITHMS = list(LIBOQS_NAMES)
+    DEFAULT_ALGORITHM = 'ml-kem-1024'
+
     def __init__(self, algorithm: str = None):
         """
         Initialize the lattice crypto engine.
         
         Args:
-            algorithm: Lattice algorithm to use (default: kyber-1024)
+            algorithm: Lattice algorithm to use (default: ml-kem-1024)
         """
         self.algorithm = algorithm or self.DEFAULT_ALGORITHM
         self.liboqs_available = LIBOQS_AVAILABLE
@@ -225,6 +239,8 @@ class LatticeCryptoEngine:
             LatticeKeyPair with public and private keys
         """
         algo = algorithm or self.algorithm
+        if algo not in self.SUPPORTED_ALGORITHMS:
+            raise ValueError(f"Unsupported algorithm: {algo}")
         
         if self.liboqs_available:
             return self._generate_keypair_liboqs(algo)
@@ -233,14 +249,7 @@ class LatticeCryptoEngine:
     
     def _generate_keypair_liboqs(self, algorithm: str) -> LatticeKeyPair:
         """Generate keypair using liboqs."""
-        # Map our algorithm names to liboqs names
-        algo_map = {
-            'kyber-1024': 'Kyber1024',
-            'kyber-768': 'Kyber768',
-            'kyber-512': 'Kyber512',
-        }
-        
-        liboqs_algo = algo_map.get(algorithm, 'Kyber1024')
+        liboqs_algo = self.LIBOQS_NAMES[algorithm]
         
         with oqs.KeyEncapsulation(liboqs_algo) as kem:
             public_key = kem.generate_keypair()
@@ -282,13 +291,7 @@ class LatticeCryptoEngine:
     
     def _encapsulate_liboqs(self, public_key: bytes) -> Tuple[bytes, bytes]:
         """Encapsulate using liboqs."""
-        algo_map = {
-            'kyber-1024': 'Kyber1024',
-            'kyber-768': 'Kyber768',
-            'kyber-512': 'Kyber512',
-        }
-        
-        liboqs_algo = algo_map.get(self.algorithm, 'Kyber1024')
+        liboqs_algo = self.LIBOQS_NAMES[self.algorithm]
         
         with oqs.KeyEncapsulation(liboqs_algo) as kem:
             ciphertext, shared_secret = kem.encap_secret(public_key)
@@ -320,13 +323,7 @@ class LatticeCryptoEngine:
         ciphertext: bytes
     ) -> bytes:
         """Decapsulate using liboqs."""
-        algo_map = {
-            'kyber-1024': 'Kyber1024',
-            'kyber-768': 'Kyber768',
-            'kyber-512': 'Kyber512',
-        }
-        
-        liboqs_algo = algo_map.get(self.algorithm, 'Kyber1024')
+        liboqs_algo = self.LIBOQS_NAMES[self.algorithm]
         
         with oqs.KeyEncapsulation(liboqs_algo, private_key) as kem:
             shared_secret = kem.decap_secret(ciphertext)

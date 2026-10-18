@@ -19,11 +19,12 @@ Usage:
     
     cache = KyberCacheManager()
     
-    # Cache public key
-    cache.cache_public_key(user_id, public_key)
+    # Cache public key, with the KEM it belongs to
+    cache.cache_public_key(user_id, public_key, algorithm='ML-KEM-768')
     
-    # Get cached public key
+    # Get cached public key (and its KEM)
     public_key = cache.get_cached_public_key(user_id)
+    public_key, algorithm = cache.get_cached_public_key_entry(user_id)
     
     # Use hybrid mode with Redis
     cache = KyberCacheManager(use_redis=True)
@@ -186,7 +187,13 @@ class KyberCacheManager:
     LONG_TTL = 86400  # 24 hours for public keys
     
     # Cache key prefixes
-    PUBLIC_KEY_PREFIX = 'kyber:pubkey:'
+    #
+    # Public-key entries are stored as "<KEM>|<base64 key>": encapsulating to
+    # a key with the wrong KEM silently produces ciphertext its private key
+    # cannot open, so the KEM travels with the key. The prefix changed with
+    # that format (it was 'kyber:pubkey:'), so a pre-migration entry, a bare
+    # Kyber768 key, is never read as an ML-KEM one.
+    PUBLIC_KEY_PREFIX = 'kyber:kem-pubkey:'
     PRIVATE_KEY_PREFIX = 'kyber:privkey:'
     SESSION_KEY_PREFIX = 'kyber:session:'
     SHARED_SECRET_PREFIX = 'kyber:secret:'
@@ -387,7 +394,9 @@ class KyberCacheManager:
         self,
         user_id: int,
         public_key: bytes,
-        ttl: int = None
+        ttl: int = None,
+        *,
+        algorithm: str,
     ) -> bool:
         """
         Cache user's public key (multi-level).
@@ -396,8 +405,9 @@ class KyberCacheManager:
         
         Args:
             user_id: User ID
-            public_key: Kyber public key bytes
+            public_key: Public key bytes
             ttl: Time-to-live in seconds (default: LONG_TTL)
+            algorithm: The KEM the key belongs to (e.g. KyberKeyPair.algorithm)
             
         Returns:
             True if cached successfully
@@ -407,7 +417,7 @@ class KyberCacheManager:
         
         try:
             cache_key = self.get_public_key_cache_key(user_id)
-            encoded_key = base64.b64encode(public_key).decode('utf-8')
+            encoded_key = f"{algorithm}|{base64.b64encode(public_key).decode('utf-8')}"
             
             # L1 cache (always)
             self._l1_set(cache_key, encoded_key, ttl)
@@ -425,8 +435,13 @@ class KyberCacheManager:
             return False
     
     def get_cached_public_key(self, user_id: int) -> Optional[bytes]:
+        """Cached public key bytes, or None. See get_cached_public_key_entry."""
+        entry = self.get_cached_public_key_entry(user_id)
+        return entry[0] if entry else None
+
+    def get_cached_public_key_entry(self, user_id: int) -> Optional[Tuple[bytes, str]]:
         """
-        Get cached public key (multi-level lookup).
+        Get cached (public key, KEM) (multi-level lookup).
         
         Checks L1 (memory) first, then L2 (Redis/Django cache).
         Promotes from L2 to L1 on hit for better performance.
@@ -435,7 +450,7 @@ class KyberCacheManager:
             user_id: User ID
             
         Returns:
-            Public key bytes or None if not cached
+            (public key bytes, KEM name), or None if not cached
         """
         cache_key = self.get_public_key_cache_key(user_id)
         
@@ -453,7 +468,10 @@ class KyberCacheManager:
                 else:
                     return None
             
-            return base64.b64decode(encoded_key)
+            algorithm, _, key_b64 = encoded_key.partition('|')
+            if not key_b64:
+                return None
+            return base64.b64decode(key_b64, validate=True), algorithm
             
         except Exception as e:
             self._metrics['errors'] += 1
@@ -585,7 +603,9 @@ class KyberCacheManager:
         public_key: bytes,
         private_key: bytes,
         version: int = 1,
-        ttl: int = None
+        ttl: int = None,
+        *,
+        algorithm: str,
     ) -> bool:
         """
         Cache full keypair.
@@ -613,6 +633,7 @@ class KyberCacheManager:
                 'public_key': base64.b64encode(public_key).decode('utf-8'),
                 'private_key': base64.b64encode(private_key).decode('utf-8'),
                 'version': version,
+                'algorithm': algorithm,
                 'cached_at': time.time()
             }
             
@@ -620,7 +641,7 @@ class KyberCacheManager:
             self._l1_set(cache_key, keypair_data, ttl)
             
             # Also cache public key separately
-            self.cache_public_key(user_id, public_key, ttl)
+            self.cache_public_key(user_id, public_key, ttl, algorithm=algorithm)
             
             self._metrics['sets'] += 1
             return True

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = 'Upgrade existing behavioral commitments to quantum-resistant encryption (Kyber-768)'
+    help = 'Upgrade existing behavioral commitments to quantum-resistant encryption (ML-KEM-768)'
     
     def add_arguments(self, parser):
         parser.add_argument(
@@ -118,8 +118,8 @@ class Command(BaseCommand):
                     # Update with quantum encryption
                     commitment.quantum_encrypted_embedding = quantum_encrypted
                     commitment.kyber_public_key = public_key
-                    commitment.encryption_algorithm = 'kyber768-aes256gcm'
-                    commitment.is_quantum_protected = True
+                    commitment.encryption_algorithm = quantum_encrypted['algorithm']
+                    commitment.is_quantum_protected = quantum_crypto.is_quantum_protected(quantum_encrypted)
                     commitment.migrated_to_quantum = timezone.now()
                     commitment.encrypted_embedding = b''  # Clear legacy field
                     

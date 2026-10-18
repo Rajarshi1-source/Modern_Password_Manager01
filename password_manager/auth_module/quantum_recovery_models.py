@@ -44,7 +44,9 @@ class PasskeyRecoverySetup(models.Model):
     threshold_shards = models.IntegerField(default=3, validators=[MinValueValidator(2)])
     
     # Quantum-resistant encryption metadata
-    encryption_algorithm = models.CharField(max_length=50, default='CRYSTALS-Kyber-768')
+    # KEM of kyber_public_key/kyber_private_key_encrypted. Rows from before
+    # the ML-KEM migration say 'CRYSTALS-Kyber-768' (round-3 Kyber768).
+    encryption_algorithm = models.CharField(max_length=50, default='ML-KEM-768')
     kyber_public_key = models.BinaryField(help_text="Post-quantum public key")
     kyber_private_key_encrypted = models.BinaryField(help_text="Encrypted private key")
     
