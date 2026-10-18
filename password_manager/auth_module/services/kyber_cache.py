@@ -282,6 +282,23 @@ class KyberCacheManager:
     # ==========================================================================
     
     @staticmethod
+    def _encode_public_key_entry(public_key: bytes, algorithm: str) -> str:
+        """The one format every public-key cache writer stores."""
+        if not algorithm or '|' in algorithm:
+            raise ValueError(f"Invalid KEM name for the public-key cache: {algorithm!r}")
+        return f"{algorithm}|{base64.b64encode(public_key).decode('utf-8')}"
+
+    @staticmethod
+    def _decode_public_key_entry(entry) -> Optional[Tuple[bytes, str]]:
+        """(public key, KEM) from a cached entry, or None if it is not one."""
+        if not isinstance(entry, str):
+            return None
+        algorithm, sep, key_b64 = entry.partition('|')
+        if not sep or not algorithm or not key_b64:
+            return None
+        return base64.b64decode(key_b64, validate=True), algorithm
+
+    @staticmethod
     def get_public_key_cache_key(user_id: int) -> str:
         """Generate cache key for user's public key."""
         return f"{KyberCacheManager.PUBLIC_KEY_PREFIX}{user_id}"
@@ -417,7 +434,7 @@ class KyberCacheManager:
         
         try:
             cache_key = self.get_public_key_cache_key(user_id)
-            encoded_key = f"{algorithm}|{base64.b64encode(public_key).decode('utf-8')}"
+            encoded_key = self._encode_public_key_entry(public_key, algorithm)
             
             # L1 cache (always)
             self._l1_set(cache_key, encoded_key, ttl)
@@ -468,10 +485,7 @@ class KyberCacheManager:
                 else:
                     return None
             
-            algorithm, _, key_b64 = encoded_key.partition('|')
-            if not key_b64:
-                return None
-            return base64.b64decode(key_b64, validate=True), algorithm
+            return self._decode_public_key_entry(encoded_key)
             
         except Exception as e:
             self._metrics['errors'] += 1
@@ -664,7 +678,8 @@ class KyberCacheManager:
             version: Key version
             
         Returns:
-            Dictionary with 'public_key' and 'private_key' bytes, or None
+            Dictionary with 'public_key' and 'private_key' bytes and their
+            KEM ('algorithm'), or None
         """
         cache_key = self.get_keypair_cache_key(user_id, version)
         
@@ -676,6 +691,7 @@ class KyberCacheManager:
                     'public_key': base64.b64decode(keypair_data['public_key']),
                     'private_key': base64.b64decode(keypair_data['private_key']),
                     'version': keypair_data['version'],
+                    'algorithm': keypair_data['algorithm'],
                     'cached_at': keypair_data['cached_at']
                 }
             
@@ -775,15 +791,15 @@ class KyberCacheManager:
     def get_many_public_keys(
         self,
         user_ids: list
-    ) -> Dict[int, Optional[bytes]]:
+    ) -> Dict[int, Optional[Tuple[bytes, str]]]:
         """
         Get multiple public keys at once.
-        
+
         Args:
             user_ids: List of user IDs
-            
+
         Returns:
-            Dictionary mapping user_id to public key (or None)
+            Dictionary mapping user_id to (public key, KEM), or None
         """
         result = {}
         
@@ -799,8 +815,9 @@ class KyberCacheManager:
             
             for cache_key, encoded_key in cached_values.items():
                 user_id = cache_keys[cache_key]
-                if encoded_key:
-                    result[user_id] = base64.b64decode(encoded_key)
+                entry = self._decode_public_key_entry(encoded_key)
+                if entry:
+                    result[user_id] = entry
                     self._metrics['l2_hits'] += 1
                 else:
                     result[user_id] = None
@@ -821,14 +838,14 @@ class KyberCacheManager:
     
     def set_many_public_keys(
         self,
-        keys_dict: Dict[int, bytes],
+        keys_dict: Dict[int, Tuple[bytes, str]],
         ttl: int = None
     ) -> bool:
         """
         Cache multiple public keys at once.
-        
+
         Args:
-            keys_dict: Dictionary mapping user_id to public key bytes
+            keys_dict: Dictionary mapping user_id to (public key bytes, KEM)
             ttl: Time-to-live
             
         Returns:
@@ -839,8 +856,8 @@ class KyberCacheManager:
         
         try:
             cache_data = {
-                self.get_public_key_cache_key(uid): base64.b64encode(pk).decode('utf-8')
-                for uid, pk in keys_dict.items()
+                self.get_public_key_cache_key(uid): self._encode_public_key_entry(pk, algorithm)
+                for uid, (pk, algorithm) in keys_dict.items()
             }
             
             # Batch set to L2 cache
