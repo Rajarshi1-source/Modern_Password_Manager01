@@ -30,6 +30,7 @@ from .serializers import (
 )
 from .services import RecoveryOrchestrator, ChallengeGenerator, CommitmentService
 from password_manager.api_utils import success_response, error_response
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -503,7 +504,7 @@ def recovery_metrics_dashboard(request):
         # Get trending data
         trends = collector.get_trending_metrics(periods=7)
         
-        logger.info(f"Admin {request.user.username} accessed metrics dashboard")
+        logger.info(log_safe(f"Admin {request.user.username} accessed metrics dashboard"))
         
         return success_response(
             data={
@@ -619,7 +620,7 @@ def submit_recovery_feedback(request):
             feedback_text=request.data.get('feedback_text', '')
         )
         
-        logger.info(f"Feedback submitted for recovery {attempt_id}")
+        logger.info(log_safe(f"Feedback submitted for recovery {attempt_id}"))
         
         return success_response(
             data={'feedback_id': feedback.id},

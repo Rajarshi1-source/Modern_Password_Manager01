@@ -13,6 +13,7 @@ import hashlib
 import logging
 import time
 from shared.client_ip import get_client_ip
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +135,8 @@ class ProgressiveLockoutThrottle(BaseThrottle):
         if lockout_until and time.time() < lockout_until:
             remaining = int(lockout_until - time.time())
             logger.warning(
-                f"Recovery attempt blocked - IP locked out for {remaining}s more. "
-                f"Failures: {failures}. IP: {self._get_client_ip(request)}"
+                log_safe(f"Recovery attempt blocked - IP locked out for {remaining}s more. "
+                f"Failures: {failures}. IP: {self._get_client_ip(request)}")
             )
             self.wait = remaining
             return False
@@ -163,8 +164,8 @@ class ProgressiveLockoutThrottle(BaseThrottle):
         if lockout_duration > 0:
             lockout_data['lockout_until'] = time.time() + lockout_duration
             logger.warning(
-                f"Progressive lockout triggered: {failures} failures. "
-                f"Locked for {lockout_duration}s. IP: {self._get_client_ip(request)}"
+                log_safe(f"Progressive lockout triggered: {failures} failures. "
+                f"Locked for {lockout_duration}s. IP: {self._get_client_ip(request)}")
             )
         
         # Trigger security alert if threshold reached
@@ -180,7 +181,7 @@ class ProgressiveLockoutThrottle(BaseThrottle):
         """Record a successful recovery and reset lockout."""
         cache_key = self.get_cache_key(request)
         cache.delete(cache_key)
-        logger.info(f"Recovery lockout reset for IP: {self._get_client_ip(request)}")
+        logger.info(log_safe(f"Recovery lockout reset for IP: {self._get_client_ip(request)}"))
     
     def _trigger_security_alert(self, request, failures):
         """Trigger security alert for suspicious recovery attempts."""
@@ -188,8 +189,8 @@ class ProgressiveLockoutThrottle(BaseThrottle):
         user_agent = request.META.get('HTTP_USER_AGENT', 'unknown')
         
         logger.critical(
-            f"SECURITY ALERT: Multiple failed recovery attempts detected. "
-            f"IP: {ip}, Failures: {failures}, User-Agent: {user_agent}"
+            log_safe(f"SECURITY ALERT: Multiple failed recovery attempts detected. "
+            f"IP: {ip}, Failures: {failures}, User-Agent: {user_agent}")
         )
         
         # In production, you would:

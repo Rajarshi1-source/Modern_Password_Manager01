@@ -13,6 +13,7 @@ from .mfa_models import BiometricProfile, MFAPolicy, AuthenticationAttempt
 from .mfa_views import BiometricAuthenticator
 from two_factor.models import TOTPDevice
 from .services.authy_service import AuthyService
+from shared.log_safe import log_safe
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -217,7 +218,7 @@ class MFAIntegrationService:
                 )
                 
             except Exception as e:
-                logger.error(f"Error verifying {factor_type}: {e}")
+                logger.error(log_safe(f"Error verifying {factor_type}: {e}"))
                 verification_results[factor_type] = {'success': False, 'error': str(e)}
         
         # Check if requirements are met

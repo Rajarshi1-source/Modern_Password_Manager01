@@ -35,6 +35,7 @@ from ..predictive_intent_models import (
 from vault.models import EncryptedVaultItem
 from ..ml_models.intent_predictor import get_intent_predictor
 from ..ml_models.context_analyzer import get_context_analyzer
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -334,8 +335,8 @@ class PredictiveIntentService:
                 predictions.append(prediction)
         
         logger.info(
-            f"Generated {len(predictions)} predictions for user {user.id} "
-            f"on domain {current_domain}"
+            log_safe(f"Generated {len(predictions)} predictions for user {user.id} "
+            f"on domain {current_domain}")
         )
         
         return predictions
@@ -647,7 +648,7 @@ class PredictiveIntentService:
                 user=user,
             )
         except IntentPrediction.DoesNotExist:
-            logger.warning(f"Prediction {prediction_id} not found")
+            logger.warning(log_safe(f"Prediction {prediction_id} not found"))
             return None
         
         # Update prediction outcome
@@ -676,7 +677,7 @@ class PredictiveIntentService:
         )
         
         logger.info(
-            f"Recorded feedback for prediction {prediction_id}: {feedback_type}"
+            log_safe(f"Recorded feedback for prediction {prediction_id}: {feedback_type}")
         )
         
         return feedback

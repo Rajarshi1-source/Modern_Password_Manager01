@@ -10,6 +10,7 @@
  */
 
 import { authHeader } from '../utils/authHeader';
+import { logSafe } from '../utils/logSafe';
 
 class CognitiveAuthService {
   constructor() {
@@ -164,7 +165,7 @@ class CognitiveAuthService {
             if (handlers.onError) handlers.onError(data);
             break;
           default:
-            console.log('Unknown message type:', data.type);
+            console.log('Unknown message type:', logSafe(data.type));
         }
       };
 

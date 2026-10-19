@@ -17,6 +17,7 @@ import uuid
 
 from django.contrib.auth.models import User
 from django.utils import timezone
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class DecoyVaultService:
         Returns:
             Dict with 'items', 'folders', and 'realism_score'
         """
-        logger.info(f"Generating decoy vault for {user.username} ({threat_level})")
+        logger.info(log_safe(f"Generating decoy vault for {user.username} ({threat_level})"))
         
         # Determine item counts based on threat level
         item_counts = {

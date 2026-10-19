@@ -24,6 +24,7 @@ from smart_contracts.models.governance import (
 )
 from smart_contracts.models.escrow import EscrowAgreement, InheritancePlan
 from .condition_engine import ConditionEngine
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -81,7 +82,7 @@ class VaultService:
         elif condition_type in [ConditionType.DEAD_MANS_SWITCH]:
             self._setup_inheritance(vault, user, data)
 
-        logger.info(f"Created vault {vault.id} ({vault.condition_type}) for user {user.username}")
+        logger.info(log_safe(f"Created vault {vault.id} ({vault.condition_type}) for user {user.username}"))
         return vault
 
     def _setup_multi_sig(self, vault, data: Dict):
@@ -169,7 +170,7 @@ class VaultService:
         except InheritancePlan.DoesNotExist:
             pass
 
-        logger.info(f"Check-in for vault {vault.id} by {user.username}")
+        logger.info(log_safe(f"Check-in for vault {vault.id} by {user.username}"))
         return {
             'success': True,
             'last_check_in': vault.last_check_in.isoformat(),
@@ -194,7 +195,7 @@ class VaultService:
             vault.unlocked_at = timezone.now()
             vault.save(update_fields=['status', 'unlocked_at', 'updated_at'])
 
-            logger.info(f"Vault {vault.id} unlocked by {user.username}")
+            logger.info(log_safe(f"Vault {vault.id} unlocked by {user.username}"))
             return {
                 'unlocked': True,
                 'password_encrypted': vault.password_encrypted,
@@ -265,7 +266,7 @@ class VaultService:
                     vault.id, e,
                 )
 
-        logger.info(f"Vault {vault.id} revealed to user {user.username}")
+        logger.info(log_safe(f"Vault {vault.id} revealed to user {user.username}"))
         return {
             'unlocked': True,
             'password_encrypted': vault.password_encrypted,
@@ -324,7 +325,7 @@ class VaultService:
             approval.approved_at = timezone.now()
             approval.save()
 
-        logger.info(f"Multi-sig approval for vault {vault.id} by {user.username} ({group.approval_count}/{group.required_approvals})")
+        logger.info(log_safe(f"Multi-sig approval for vault {vault.id} by {user.username} ({group.approval_count}/{group.required_approvals})"))
         return {
             'approved': True,
             'current_approvals': group.approval_count,
@@ -353,7 +354,7 @@ class VaultService:
             approve=approve,
         )
 
-        logger.info(f"DAO vote for vault {vault.id} by {user.username}: {'approve' if approve else 'reject'}")
+        logger.info(log_safe(f"DAO vote for vault {vault.id} by {user.username}: {'approve' if approve else 'reject'}"))
         return {
             'voted': True,
             'choice': 'approve' if approve else 'reject',
@@ -381,7 +382,7 @@ class VaultService:
         vault.unlocked_at = timezone.now()
         vault.save(update_fields=['status', 'unlocked_at', 'updated_at'])
 
-        logger.info(f"Escrow released for vault {vault.id} by arbitrator {arbitrator.username}")
+        logger.info(log_safe(f"Escrow released for vault {vault.id} by arbitrator {arbitrator.username}"))
         return {
             'released': True,
             'released_at': escrow.released_at.isoformat(),
@@ -397,7 +398,7 @@ class VaultService:
         vault.status = VaultStatus.CANCELLED
         vault.save(update_fields=['status', 'updated_at'])
 
-        logger.info(f"Vault {vault.id} cancelled by {user.username}")
+        logger.info(log_safe(f"Vault {vault.id} cancelled by {user.username}"))
         return {'cancelled': True}
 
     # =========================================================================

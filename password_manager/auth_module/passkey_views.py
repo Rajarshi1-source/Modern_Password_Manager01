@@ -103,6 +103,7 @@ server = Fido2Server(
 
 # Import custom throttling classes
 from password_manager.throttling import PasskeyThrottle
+from shared.log_safe import log_safe
 
 @api_view(['POST'])
 @throttle_classes([PasskeyThrottle])
@@ -249,7 +250,7 @@ def webauthn_complete_registration(request):
             # created_at is set automatically by auto_now_add
         )
         
-        logger.info(f"Passkey registered successfully for user {user.username} (device: {device_type})")
+        logger.info(log_safe(f"Passkey registered successfully for user {user.username} (device: {device_type})"))
         
         # Clear session data
         if 'registration_challenge' in request.session:
@@ -430,8 +431,8 @@ def webauthn_complete_authentication(request):
         passkey.last_used_at = timezone.now()
         passkey.save()
         
-        logger.info(f"Passkey authentication successful for user {user.username} "
-                   f"(device: {passkey.device_type})")
+        logger.info(log_safe(f"Passkey authentication successful for user {user.username} "
+                   f"(device: {passkey.device_type})"))
         
         # Log in the user (for session-based auth)
         login(request, user)
@@ -513,14 +514,14 @@ def delete_passkey(request, passkey_id):
         device_type = passkey.device_type
         passkey.delete()
         
-        logger.info(f"Passkey deleted for user {request.user.username} (device: {device_type})")
+        logger.info(log_safe(f"Passkey deleted for user {request.user.username} (device: {device_type})"))
         
         return JsonResponse({
             'success': True,
             'message': 'Passkey deleted successfully'
         })
     except UserPasskey.DoesNotExist:
-        logger.warning(f"Attempted to delete non-existent passkey {passkey_id} by user {request.user.username}")
+        logger.warning(log_safe(f"Attempted to delete non-existent passkey {passkey_id} by user {request.user.username}"))
         return JsonResponse({
             'success': False,
             'error': 'Passkey not found'

@@ -29,6 +29,7 @@ from .recovery_throttling import (
 )
 from .recovery_monitoring import metrics_collector
 from shared.client_ip import get_client_ip
+from shared.log_safe import log_safe
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -132,7 +133,7 @@ def setup_primary_passkey_recovery(request):
                 is_active=True
             )
             
-            logger.info(f"Primary passkey recovery backup created for user {user.username}, backup ID: {backup.id}")
+            logger.info(log_safe(f"Primary passkey recovery backup created for user {user.username}, backup ID: {backup.id}"))
             
             return Response({
                 "message": "Primary passkey recovery set up successfully",
@@ -144,7 +145,7 @@ def setup_primary_passkey_recovery(request):
             }, status=status.HTTP_201_CREATED)
     
     except Exception as e:
-        logger.error(f"Error setting up primary passkey recovery for user {user.username}: {e}", exc_info=True)
+        logger.error(log_safe(f"Error setting up primary passkey recovery for user {user.username}: {e}"), exc_info=True)
         return Response(
             {"error": "Failed to set up recovery. Please try again."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -214,7 +215,7 @@ def initiate_primary_passkey_recovery(request):
         
         if not user:
             # Don't reveal if user exists
-            logger.warning(f"Recovery initiated for non-existent user: {username_or_email}")
+            logger.warning(log_safe(f"Recovery initiated for non-existent user: {username_or_email}"))
             return Response({
                 "message": "If an account exists, you will be prompted for your recovery key.",
                 "has_backups": False,
@@ -539,7 +540,7 @@ def revoke_recovery_backup(request, backup_id):
                 new_backup_created=create_new
             )
             
-            logger.info(f"Recovery backup {backup_id} revoked by user {user.username}")
+            logger.info(log_safe(f"Recovery backup {backup_id} revoked by user {user.username}"))
             
             response_data = {
                 "message": "Recovery backup revoked successfully",
@@ -558,7 +559,7 @@ def revoke_recovery_backup(request, backup_id):
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
-        logger.error(f"Error revoking recovery backup {backup_id}: {e}", exc_info=True)
+        logger.error(log_safe(f"Error revoking recovery backup {backup_id}: {e}"), exc_info=True)
         return Response(
             {"error": "Failed to revoke backup"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -642,7 +643,7 @@ def get_recovery_status(request):
         }, status=status.HTTP_200_OK)
     
     except Exception as e:
-        logger.error(f"Error getting recovery status for user {user.username}: {e}", exc_info=True)
+        logger.error(log_safe(f"Error getting recovery status for user {user.username}: {e}"), exc_info=True)
         return Response(
             {"error": "Failed to get recovery status"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

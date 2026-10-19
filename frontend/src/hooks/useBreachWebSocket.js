@@ -15,6 +15,7 @@ import axios from 'axios';
 import NetworkQualityEstimator from '../utils/NetworkQualityEstimator';
 import OfflineQueueManager from '../utils/OfflineQueueManager';
 import { getWsTicket } from '../services/wsTicket';
+import { logSafe } from '../utils/logSafe';
 
 export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange) => {
   // Connection state
@@ -317,7 +318,7 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
           
           // Handle connection confirmation
           if (data.type === 'connection_established') {
-            console.log('[WebSocket] ✓ Connection established:', data.message);
+            console.log('[WebSocket] ✓ Connection established:', logSafe(data.message));
           }
         } catch (error) {
           console.error('[WebSocket] ❌ Error parsing message:', error);

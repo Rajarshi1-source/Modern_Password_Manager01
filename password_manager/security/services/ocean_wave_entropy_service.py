@@ -49,6 +49,7 @@ from security.services.noaa_api_client import (
     extract_entropy_bytes_from_reading,
     combine_readings_entropy,
 )
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +277,7 @@ class EntropyExtractor:
         
         # If not enough bytes, we need more readings
         if len(raw_bytes) < target_bytes:
-            logger.warning(f"Only extracted {len(raw_bytes)} bytes, need {target_bytes}")
+            logger.warning(log_safe(f"Only extracted {len(raw_bytes)} bytes, need {target_bytes}"))
         
         # Hash condition to target size using BLAKE3
         # This ensures uniform distribution and exact output size

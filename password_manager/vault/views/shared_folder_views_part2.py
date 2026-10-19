@@ -17,6 +17,7 @@ from vault.models import (
     SharedFolderKey
 )
 import logging
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -564,7 +565,7 @@ def rotate_folder_key(request, folder_id):
                         rotated_at=timezone.now()
                     )
                 except User.DoesNotExist:
-                    logger.warning(f"User {user_id} not found during key rotation")
+                    logger.warning(log_safe(f"User {user_id} not found during key rotation"))
             
             # Update re-encrypted items
             for item_id, re_encrypted_data in re_encrypted_items.items():
@@ -576,7 +577,7 @@ def rotate_folder_key(request, folder_id):
                     item.encrypted_folder_key = re_encrypted_data
                     item.save()
                 except SharedVaultItem.DoesNotExist:
-                    logger.warning(f"Item {item_id} not found during key rotation")
+                    logger.warning(log_safe(f"Item {item_id} not found during key rotation"))
             
             # Log activity
             SharedFolderActivity.objects.create(

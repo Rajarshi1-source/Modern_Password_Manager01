@@ -22,6 +22,7 @@ from .serializers import (
 )
 from .services.claude_service import ClaudeService, ClaudeServiceError
 from .services.query_analyzer_service import QueryAnalyzerService
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +234,7 @@ def send_message(request, session_id):
         
     except ClaudeServiceError:
         logger.exception(
-            "Claude service error for user %s", request.user.username
+            "Claude service error for user %s", log_safe(request.user.username)
         )
 
         # Store a generic system message; the raw exception text can

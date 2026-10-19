@@ -25,6 +25,7 @@ from .models import (
     PerformancePrediction
 )
 from .performance_middleware import SystemResourceMonitor, PerformanceMetricsCollector
+from shared.log_safe import log_safe
 
 
 @api_view(['GET'])
@@ -408,10 +409,10 @@ def frontend_performance_report(request):
         user = request.user if request.user.is_authenticated else None
         
         # Log frontend metrics for analysis
-        logger.info(f"Frontend performance report received from user {user or 'anonymous'}")
-        logger.info(f"Vault unlock avg: {data.get('vaultUnlock', {}).get('average', 0)}ms")
-        logger.info(f"API request avg: {data.get('apiRequests', {}).get('average', 0)}ms")
-        logger.info(f"Error count: {data.get('errors', {}).get('count', 0)}")
+        logger.info(log_safe(f"Frontend performance report received from user {user or 'anonymous'}"))
+        logger.info(log_safe(f"Vault unlock avg: {data.get('vaultUnlock', {}).get('average', 0)}ms"))
+        logger.info(log_safe(f"API request avg: {data.get('apiRequests', {}).get('average', 0)}ms"))
+        logger.info(log_safe(f"Error count: {data.get('errors', {}).get('count', 0)}"))
         
         # Could store in database if needed for long-term analysis
         # For now, just acknowledge receipt

@@ -25,6 +25,7 @@ from shared.utils import get_client_ip
 from ..models import HoneypotAccessEvent, HoneypotAccessType, HoneypotCredential
 from .alerting import fire_alerts
 from .honeypot_service import HoneypotService
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ class HoneypotAccessInterceptor:
 
         logger.warning(
             "Honeypot hit: hp=%s user=%s type=%s ip=%s",
-            honeypot.id, honeypot.user_id, access_type, event.ip,
+            honeypot.id, honeypot.user_id, log_safe(access_type), log_safe(event.ip),
         )
 
         if access_type == HoneypotAccessType.LIST_VIEW:

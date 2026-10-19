@@ -26,6 +26,7 @@ from .tasks import (
 # segfault that PR #241 fixed in `tasks.py`. Import the helpers inside
 # the view bodies that actually use them instead.
 from vault.models import BreachAlert
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -551,7 +552,7 @@ def mark_alert_read(request, alert_id):
             }
         )
         
-        logger.info(f"Alert {alert_id} marked as read by user {request.user.id}")
+        logger.info(log_safe(f"Alert {alert_id} marked as read by user {request.user.id}"))
         
         return Response({
             'success': True,

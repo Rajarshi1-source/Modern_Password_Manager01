@@ -12,6 +12,7 @@
 
 import { authHeader } from '../utils/authHeader';
 import { getWsTicket } from './wsTicket';
+import { logSafe } from '../utils/logSafe';
 
 const API_BASE = '/api/liveness';
 
@@ -287,7 +288,7 @@ class BiometricLivenessService {
     if (!pending) {
       // A conflicted frame with nothing outstanding: lossy by design, the next
       // one is milliseconds away.
-      console.warn('Liveness transient error (ignored):', data.message);
+      console.warn('Liveness transient error (ignored):', logSafe(data.message));
       return;
     }
     // A socket multiplexes frames and control ops, so a session_busy is only
@@ -295,7 +296,7 @@ class BiometricLivenessService {
     // when talking to a server older than this field; retrying then is still
     // safe (the ops are idempotent) so we fall back rather than stall.
     if (data.op !== undefined && data.op !== pending.payload.type) {
-      console.warn('Liveness transient error for', data.op, '(ignored)');
+      console.warn('Liveness transient error for', logSafe(data.op), '(ignored)');
       return;
     }
     if (pending.attempts >= ONE_SHOT_RETRY_LIMIT) {

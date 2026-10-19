@@ -29,6 +29,7 @@ import jwt
 from jwt.exceptions import InvalidTokenError as JWTError, ExpiredSignatureError, InvalidSignatureError
 
 from shared.circuit_breaker import oidc_breaker, CircuitBreakerOpen
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -435,11 +436,11 @@ class OIDCService:
             # Provider returned an HTTP error. 4xx (e.g. invalid_grant) is a
             # client error; 5xx is an outage. Preserve the status for the caller.
             upstream_status = e.response.status_code if e.response is not None else None
-            logger.error(f"Token exchange failed for {provider_name}: {e}")
+            logger.error(log_safe(f"Token exchange failed for {provider_name}: {e}"))
             raise OIDCProviderError(f"Token exchange failed: {e}", status_code=upstream_status)
         except requests.RequestException as e:
             # Network/timeout failure — no HTTP status, treated as transient.
-            logger.error(f"Token exchange failed for {provider_name}: {e}")
+            logger.error(log_safe(f"Token exchange failed for {provider_name}: {e}"))
             raise OIDCProviderError(f"Token exchange failed: {e}")
     
     def validate_id_token(

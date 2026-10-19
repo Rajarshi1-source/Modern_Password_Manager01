@@ -52,6 +52,7 @@ from .services.kyber_crypto import (
 )
 from .services.optimized_ntt import get_optimized_ntt
 from django.db.models import Max
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ def get_user_keypair(user, version: int = None, create_if_missing: bool = False)
                 security_level=3
             )
             
-            logger.info(f"Created new Kyber keypair v{keypair.key_version} for {user.username}")
+            logger.info(log_safe(f"Created new Kyber keypair v{keypair.key_version} for {user.username}"))
         
         return keypair
         

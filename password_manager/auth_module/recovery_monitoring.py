@@ -15,6 +15,7 @@ from django.core.cache import cache
 from django.db.models import Count, Avg, Q
 from django.utils import timezone
 from django.conf import settings
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ class RecoveryMetricsCollector:
         
         if not success:
             logger.warning(
-                f"Key verification failed: user_id={user_id}, ip={ip_address}"
+                log_safe(f"Key verification failed: user_id={user_id}, ip={ip_address}")
             )
     
     def record_guardian_response(

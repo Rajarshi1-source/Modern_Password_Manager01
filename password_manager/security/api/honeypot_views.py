@@ -31,6 +31,7 @@ from ..models import (
     HoneypotBreachEvent,
     CredentialRotationLog,
 )
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -524,7 +525,7 @@ class HoneypotWebhookView(APIView):
         # Verify webhook signature
         signature = request.headers.get('X-Webhook-Signature', '')
         if not self._verify_signature(request.body, signature, provider):
-            logger.warning(f"Invalid webhook signature from {provider}")
+            logger.warning(log_safe(f"Invalid webhook signature from {provider}"))
             return Response(
                 {'error': 'Invalid signature'},
                 status=status.HTTP_401_UNAUTHORIZED
@@ -557,7 +558,7 @@ class HoneypotWebhookView(APIView):
             )
             
             if activity:
-                logger.info(f"Webhook processed: {honeypot_address}")
+                logger.info(log_safe(f"Webhook processed: {honeypot_address}"))
                 return Response({
                     'status': 'processed',
                     'breach_detected': breach_detected,
@@ -668,7 +669,7 @@ class BulkCreateHoneypotsView(APIView):
                     'honeypot_address': honeypot.honeypot_address,
                 })
             except Exception:
-                logger.exception("Honeypot creation failed for service %s", service_name)
+                logger.exception("Honeypot creation failed for service %s", log_safe(service_name))
                 results['failed'].append({
                     'service_name': service_name,
                     'error': 'An unexpected error occurred.',

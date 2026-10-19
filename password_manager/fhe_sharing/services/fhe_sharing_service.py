@@ -29,6 +29,7 @@ from .pre_service import (
     is_available as pre_backend_available,
 )
 from .policy_fhe_service import get_policy_fhe_service
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -257,9 +258,9 @@ class HomomorphicSharingService:
 
         elapsed = int((time.time() - start_time) * 1000)
         logger.info(
-            f"[FHE Sharing] Share created: {owner.username} → "
+            log_safe(f"[FHE Sharing] Share created: {owner.username} → "
             f"{recipient.username} (item {str(vault_item.id)[:8]}, "
-            f"{elapsed}ms)"
+            f"{elapsed}ms)")
         )
 
         return share
@@ -414,8 +415,8 @@ class HomomorphicSharingService:
 
         logger.info(
             "[FHE Sharing] umbral-v1 share created: %s -> %s (item %s, %dms)",
-            owner.username,
-            recipient.username,
+            log_safe(owner.username),
+            log_safe(recipient.username),
             str(vault_item.id)[:8],
             int((time.time() - start_time) * 1000),
         )
@@ -738,8 +739,8 @@ class HomomorphicSharingService:
         )
 
         logger.info(
-            f"[FHE Sharing] Share revoked: {str(share.id)[:8]} "
-            f"by {revoking_user.username}"
+            log_safe(f"[FHE Sharing] Share revoked: {str(share.id)[:8]} "
+            f"by {revoking_user.username}")
         )
 
         return share
@@ -813,8 +814,8 @@ class HomomorphicSharingService:
         )
 
         logger.info(
-            f"[FHE Sharing] Share group created: {name} "
-            f"by {owner.username}"
+            log_safe(f"[FHE Sharing] Share group created: {name} "
+            f"by {owner.username}")
         )
 
         return group

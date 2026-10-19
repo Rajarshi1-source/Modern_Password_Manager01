@@ -7,6 +7,7 @@
 
 import axios from 'axios';
 import { getWsTicket } from './wsTicket';
+import { logSafe } from '../utils/logSafe';
 
 const API_URL = import.meta.env.VITE_API_URL ||
   (import.meta.env.PROD ? 'https://api.securevault.com' : '');
@@ -318,14 +319,14 @@ class AdversarialService {
         break;
 
       case 'error':
-        console.error('WebSocket error message:', data.message);
+        console.error('WebSocket error message:', logSafe(data.message));
         if (this.wsCallbacks.onError) {
           this.wsCallbacks.onError(data.message);
         }
         break;
 
       default:
-        console.log('Unknown WebSocket message type:', type);
+        console.log('Unknown WebSocket message type:', logSafe(type));
     }
   }
 

@@ -16,6 +16,7 @@ from django.utils import timezone
 from django.conf import settings
 
 from security.models.duress_models import EvidencePackage
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class EvidencePreservationService:
         Returns:
             The created EvidencePackage
         """
-        logger.info(f"Creating evidence package for user {user.username}")
+        logger.info(log_safe(f"Creating evidence package for user {user.username}"))
         
         # Collect evidence components
         behavioral_snapshot = self._capture_behavioral_data(request_context)
@@ -276,7 +277,7 @@ class EvidencePreservationService:
         Returns:
             Dict with exportable evidence data
         """
-        logger.info(f"Exporting package {package.id} for legal use by {requesting_user}")
+        logger.info(log_safe(f"Exporting package {package.id} for legal use by {requesting_user}"))
         
         # Log the export
         package.add_custody_entry(

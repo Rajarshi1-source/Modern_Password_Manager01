@@ -17,6 +17,7 @@ from .services.blockchain_anchor_service import BlockchainAnchorService
 from behavioral_recovery.models import BehavioralCommitment
 
 import logging
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ def verify_commitment(request, commitment_id):
         })
         
     except Exception as e:
-        logger.exception(f"Error verifying commitment {commitment_id}: {e}")
+        logger.exception(log_safe(f"Error verifying commitment {commitment_id}: {e}"))
         return Response({
             'error': 'internal_error',
             'verified': False

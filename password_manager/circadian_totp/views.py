@@ -24,6 +24,7 @@ from .serializers import (
     SleepIngestSerializer,
     WearableLinkSerializer,
 )
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +60,13 @@ def wearable_connect(request, provider: str):
     try:
         url, state = services.wearable_authorize_url(request.user, provider)
     except ValueError:
-        logger.exception("wearable_authorize_url rejected provider=%s", provider)
+        logger.exception("wearable_authorize_url rejected provider=%s", log_safe(provider))
         return Response(
             {"error": "invalid_request"},
             status=status.HTTP_400_BAD_REQUEST,
         )
     except NotImplementedError:
-        logger.exception("wearable_authorize_url unsupported provider=%s", provider)
+        logger.exception("wearable_authorize_url unsupported provider=%s", log_safe(provider))
         return Response(
             {"error": "not_implemented"},
             status=status.HTTP_501_NOT_IMPLEMENTED,
@@ -91,7 +92,7 @@ def wearable_callback(request, provider: str):
     try:
         link = services.wearable_exchange_code(request.user, provider, code, state)
     except ValueError:
-        logger.exception("wearable_exchange_code rejected provider=%s", provider)
+        logger.exception("wearable_exchange_code rejected provider=%s", log_safe(provider))
         return Response(
             {"error": "invalid_request"},
             status=status.HTTP_400_BAD_REQUEST,
@@ -115,7 +116,7 @@ def wearable_ingest(request, provider: str):
             request.user, provider, serializer.validated_data["observations"]
         )
     except ValueError:
-        logger.exception("ingest_sleep_observations rejected provider=%s", provider)
+        logger.exception("ingest_sleep_observations rejected provider=%s", log_safe(provider))
         return Response(
             {"error": "invalid_request"},
             status=status.HTTP_400_BAD_REQUEST,

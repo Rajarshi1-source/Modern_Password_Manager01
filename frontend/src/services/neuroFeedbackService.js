@@ -9,6 +9,7 @@
  */
 
 import { getWsTicket } from './wsTicket';
+import { logSafe } from '../utils/logSafe';
 
 const API_BASE = '/api/neuro-feedback';
 
@@ -401,7 +402,7 @@ class NeuroFeedbackService {
         this._emit('error', payload);
         break;
       default:
-        console.log('Unknown WebSocket message type:', type);
+        console.log('Unknown WebSocket message type:', logSafe(type));
     }
   }
 }

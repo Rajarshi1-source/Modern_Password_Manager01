@@ -25,6 +25,7 @@ from security.models.duress_models import (
     EvidencePackage,
     TrustedAuthority,
 )
+from shared.log_safe import log_safe
 
 # Use argon2 for secure password hashing
 try:
@@ -79,7 +80,7 @@ class DuressCodeService:
             }
         )
         if created:
-            logger.info(f"Created duress configuration for user {user.username}")
+            logger.info(log_safe(f"Created duress configuration for user {user.username}"))
         return config
     
     def update_config(
@@ -101,7 +102,7 @@ class DuressCodeService:
                 setattr(config, field, value)
         
         config.save()
-        logger.info(f"Updated duress configuration for user {user.username}")
+        logger.info(log_safe(f"Updated duress configuration for user {user.username}"))
         return config
     
     # =========================================================================
@@ -165,7 +166,7 @@ class DuressCodeService:
             config.save(update_fields=['is_enabled'])
         
         logger.info(
-            f"Created duress code ({threat_level}) for user {user.username}"
+            log_safe(f"Created duress code ({threat_level}) for user {user.username}")
         )
         
         return duress_code
@@ -453,8 +454,8 @@ class DuressCodeService:
             Dict with activation results
         """
         logger.warning(
-            f"Duress mode activated for user {user.username} "
-            f"(level: {duress_code.threat_level}, test: {is_test})"
+            log_safe(f"Duress mode activated for user {user.username} "
+            f"(level: {duress_code.threat_level}, test: {is_test})")
         )
         
         actions = duress_code.action_config or duress_code.get_default_actions()
@@ -497,8 +498,8 @@ class DuressCodeService:
                     logger.warning(
                         "Hidden-vault decoy retrieval failed for user %s: %s; "
                         "falling back to legacy decoy vault.",
-                        user.username,
-                        exc,
+                        log_safe(user.username),
+                        log_safe(exc),
                     )
                     decoy = None
             if decoy is None:
@@ -587,7 +588,7 @@ class DuressCodeService:
             realism_score=decoy_data.get('realism_score', 0.8),
         )
         
-        logger.info(f"Created decoy vault ({threat_level}) for user {user.username}")
+        logger.info(log_safe(f"Created decoy vault ({threat_level}) for user {user.username}"))
         return self._format_decoy_vault(decoy)
     
     def _refresh_decoy_vault(self, decoy: DecoyVault) -> Dict[str, Any]:
@@ -661,9 +662,9 @@ class DuressCodeService:
         except Exception as exc:
             logger.info(
                 "HiddenVault decode failed for user %s (code %s): %s",
-                user.username,
+                log_safe(user.username),
                 duress_code.id,
-                exc,
+                log_safe(exc),
             )
             return None
 
