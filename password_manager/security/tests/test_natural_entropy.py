@@ -300,6 +300,32 @@ class TestLightningEntropyProvider(TestCase):
         self.assertIsInstance(info, dict)
 
 
+def _fixed_earthquakes(*args, **kwargs):
+    """Deterministic USGS feed: the live one is sometimes empty for the
+    window the provider asks for, which made these tests fail at random."""
+    from security.services.natural_entropy_providers import Earthquake
+    base = datetime.utcnow() - timedelta(hours=2)  # naive, like the USGS client's
+    return [
+        Earthquake(
+            timestamp=base + timedelta(minutes=17 * i),
+            latitude=-30.0 + 7.3 * i,
+            longitude=140.0 - 11.1 * i,
+            depth_km=5.0 + 3.7 * i,
+            magnitude=2.6 + 0.4 * i,
+            magnitude_type='ml',
+            place=f'test region {i}',
+            event_id=f'test{i}',
+        )
+        for i in range(5)
+    ]
+
+
+_PATCH_USGS_FEED = patch(
+    'security.services.natural_entropy_providers.USGSSeismicClient.get_recent_earthquakes',
+    side_effect=_fixed_earthquakes,
+)
+
+
 # =============================================================================
 # SeismicEntropyProvider Tests
 # =============================================================================
@@ -315,7 +341,8 @@ class TestSeismicEntropyProvider(TestCase):
         
         self.assertIsNotNone(provider)
     
-    def test_fetch_entropy(self):
+    @_PATCH_USGS_FEED
+    def test_fetch_entropy(self, _feed):
         """Test fetching entropy from seismic data."""
         from security.services.natural_entropy_providers import SeismicEntropyProvider
         
@@ -528,7 +555,8 @@ class TestEntropyQuality(TestCase):
         unique_bytes = len(set(entropy))
         self.assertGreater(unique_bytes, 15)
     
-    def test_combined_entropy_quality(self):
+    @_PATCH_USGS_FEED
+    def test_combined_entropy_quality(self, _feed):
         """Test combined entropy from multiple sources."""
         from security.services.natural_entropy_providers import (
             LightningEntropyProvider,
