@@ -312,7 +312,13 @@ async function storeAuthToken(token) {
 
 // Message Handler
 self.addEventListener('message', (event) => {
-  console.log('[Service Worker] Message received:', event.data);
+  // Only pages of this origin may drive the worker (STORE_TOKEN writes the
+  // auth token). Browsers only route same-origin clients here, but the
+  // check keeps that guarantee explicit.
+  if (event.origin !== self.location.origin) return;
+  if (!event.data || typeof event.data !== 'object') return;
+  // Log the type only: a STORE_TOKEN message carries the auth token.
+  console.log('[Service Worker] Message received:', String(event.data.type).replace(/\n/g, ''));
 
   if (event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();

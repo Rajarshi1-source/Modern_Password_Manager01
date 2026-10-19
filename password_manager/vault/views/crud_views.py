@@ -131,9 +131,12 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 data={"items": items},
                 message="Items retrieved successfully"
             )
-        except Exception as e:
+        except Exception:
+            # Exception text can carry SQL, paths or other users' identifiers;
+            # it goes to the log, the client gets a fixed message.
+            logger.exception("Vault retrieve items failed")
             return error_response(
-                message=f"Failed to retrieve items: {str(e)}",
+                message="Failed to retrieve items.",
                 code="retrieval_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
@@ -227,9 +230,12 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 message="Item created successfully",
                 status_code=status.HTTP_201_CREATED
             )
-        except Exception as e:
+        except Exception:
+            # Exception text can carry SQL, paths or other users' identifiers;
+            # it goes to the log, the client gets a fixed message.
+            logger.exception("Vault create item failed")
             return error_response(
-                message=f"Failed to create item: {str(e)}",
+                message="Failed to create item.",
                 code="creation_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
@@ -269,9 +275,12 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 data=serializer.data,
                 message="Item updated successfully"
             )
-        except Exception as e:
+        except Exception:
+            # Exception text can carry SQL, paths or other users' identifiers;
+            # it goes to the log, the client gets a fixed message.
+            logger.exception("Vault update item failed")
             return error_response(
-                message=f"Failed to update item: {str(e)}",
+                message="Failed to update item.",
                 code="update_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
@@ -310,9 +319,12 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 message="Item deleted successfully",
                 status_code=status.HTTP_204_NO_CONTENT
             )
-        except Exception as e:
+        except Exception:
+            # Exception text can carry SQL, paths or other users' identifiers;
+            # it goes to the log, the client gets a fixed message.
+            logger.exception("Vault delete item failed")
             return error_response(
-                message=f"Failed to delete item: {str(e)}",
+                message="Failed to delete item.",
                 code="deletion_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
@@ -467,9 +479,12 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                     'sync_version': salt_row.sync_version,
                 }, message="Sync completed successfully")
                 
-        except Exception as e:
+        except Exception:
+            # Exception text can carry SQL, paths or other users' identifiers;
+            # it goes to the log, the client gets a fixed message.
+            logger.exception("Vault sync failed")
             return error_response(
-                message=f"Sync failed: {str(e)}",
+                message="Sync failed.",
                 code="sync_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
