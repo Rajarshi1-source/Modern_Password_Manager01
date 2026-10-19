@@ -52,6 +52,7 @@ test.describe('FHE Share sealed autofill canary', () => {
         return await new Promise((resolve) => {
           const token = 'canary-' + Math.random().toString(36).slice(2);
           const handler = (ev) => {
+            if (ev.origin !== window.location.origin) return;
             const d = ev.data;
             if (!d || d.type !== 'fhe_share:autofill_ack' || d.token !== token) return;
             window.removeEventListener('message', handler);

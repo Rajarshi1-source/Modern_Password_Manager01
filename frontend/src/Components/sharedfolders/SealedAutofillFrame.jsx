@@ -86,14 +86,18 @@ function htmlEscape(s) {
     .replace(/'/g, '&#39;');
 }
 
-function buildSrcDoc(password, nonce) {
+function buildSrcDoc(password, nonce, parentOrigin) {
   // The srcdoc runs inside a sandboxed iframe WITHOUT
   // `allow-same-origin`, so even though it is same-origin by URL
   // it is treated as a unique opaque origin and cannot read any
   // parent state. It exposes `{type: 'copy', nonce}` as the only
-  // message it will respond to.
+  // message it will respond to, and only from its parent window.
   const safePw = htmlEscape(password);
   const safeNonce = htmlEscape(nonce);
+  // Replies go to the parent's origin only (an opaque-origin frame can
+  // still name its parent's origin as targetOrigin). JSON-encoded, and
+  // '<' escaped so the value cannot close the <script> element.
+  const safeParentOrigin = JSON.stringify(String(parentOrigin)).replace(/</g, '\\u003c');
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     body { margin: 0; font-family: system-ui, sans-serif; font-size: 13px; }
     .pw-field { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; background: #fff; color: #333; letter-spacing: 2px; box-sizing: border-box; }
@@ -105,6 +109,7 @@ function buildSrcDoc(password, nonce) {
         var used = false;
         function zero(){ try { pw.value = ''; } catch(_){} }
         window.addEventListener('message', function(ev){
+          if (ev.source !== parent) return;
           var d = ev.data || {};
           if (d.nonce !== '${safeNonce}') return;
           if (used) return;
@@ -118,7 +123,7 @@ function buildSrcDoc(password, nonce) {
             pw.type = 'password';
             // Only a successful copy uses up the frame; a failed one may retry.
             if (ok) { used = true; setTimeout(zero, 100); }
-            parent.postMessage({ type: 'fhe_share:iframe_copied', nonce: '${safeNonce}', ok: ok }, '*');
+            parent.postMessage({ type: 'fhe_share:iframe_copied', nonce: '${safeNonce}', ok: ok }, ${safeParentOrigin});
           } else if (d.type === 'reveal') {
             pw.type = 'text';
           } else if (d.type === 'hide') {
@@ -140,13 +145,19 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
     (window.crypto || window.msCrypto).getRandomValues(arr);
     return Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
   }, []);
-  const srcDoc = useMemo(() => buildSrcDoc(password || '', nonce), [password, nonce]);
+  const srcDoc = useMemo(
+    () => buildSrcDoc(password || '', nonce, window.location.origin),
+    [password, nonce],
+  );
   const [copied, setCopied] = useState(false);
   const [clearInSeconds, setClearInSeconds] = useState(null);
   const [secondsLeft, setSecondsLeft] = useState(30);
 
   useEffect(() => {
     const onMsg = (ev) => {
+      // Only our own sandboxed frame may report a copy. Its origin is the
+      // opaque "null", so the sender is checked by window identity instead.
+      if (!iframeRef.current || ev.source !== iframeRef.current.contentWindow) return;
       const d = ev.data;
       if (!d || d.nonce !== nonce) return;
       if (d.type === 'fhe_share:iframe_copied') {
