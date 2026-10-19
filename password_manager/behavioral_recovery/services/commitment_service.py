@@ -13,6 +13,7 @@ from django.utils import timezone
 from ..models import BehavioralCommitment
 from cryptography.fernet import Fernet
 import base64
+from shared.log_safe import log_safe
 
 # Import quantum crypto service (Phase 2A)
 try:
@@ -111,7 +112,7 @@ class CommitmentService:
         Returns:
             List of created BehavioralCommitment objects
         """
-        logger.info(f"Creating behavioral commitments for user: {user.username}")
+        logger.info(log_safe(f"Creating behavioral commitments for user: {user.username}"))
         
         # Validate profile quality
         quality = self.assess_profile_quality(behavioral_profile)
@@ -171,7 +172,7 @@ class CommitmentService:
             )
             commitments.append(commitment)
         
-        logger.info(f"Created {len(commitments)} behavioral commitments for {user.username}")
+        logger.info(log_safe(f"Created {len(commitments)} behavioral commitments for {user.username}"))
         return commitments
     
     def _create_commitment(self, user, challenge_type, behavioral_data, unlock_conditions):

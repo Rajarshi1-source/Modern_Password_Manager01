@@ -20,6 +20,7 @@ from django.utils import timezone
 from security.models.core import SecurityAlert
 
 from ..models import HoneypotAccessEvent, HoneypotCredential
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ def fire_alerts(event: HoneypotAccessEvent) -> None:
             fn(owner, payload)
         except Exception as exc:  # pragma: no cover — network dependent
             errors[channel] = str(exc)
-            logger.warning("Honeypot alert via %s failed: %s", channel, exc)
+            logger.warning("Honeypot alert via %s failed: %s", log_safe(channel), log_safe(exc))
 
     event.alert_sent = not errors or 'security_alert' not in errors
     event.alert_errors = errors

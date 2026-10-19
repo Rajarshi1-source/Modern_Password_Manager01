@@ -22,6 +22,7 @@ from django.utils import timezone
 from django.db import transaction
 
 from ..models import EEGDevice, NeuroFeedbackSettings
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ class EEGDeviceService:
             existing.firmware_version = firmware_version
             existing.status = 'paired'
             existing.save()
-            logger.info(f"Updated existing device: {device_id}")
+            logger.info(log_safe(f"Updated existing device: {device_id}"))
             return existing
         
         # Create new device
@@ -136,7 +137,7 @@ class EEGDeviceService:
             status='paired',
         )
         
-        logger.info(f"Registered new EEG device: {device_name} ({device_type})")
+        logger.info(log_safe(f"Registered new EEG device: {device_name} ({device_type})"))
         return device
     
     def unregister_device(self, device_id: uuid.UUID) -> bool:

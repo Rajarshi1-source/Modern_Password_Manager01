@@ -14,6 +14,7 @@ Usage:
 from django.utils import timezone
 from django.conf import settings
 import logging
+from shared.log_safe import log_safe
 
 # Check if ab_testing app exists
 try:
@@ -321,7 +322,7 @@ def get_experiment_results(experiment_name):
         return results
         
     except Experiment.DoesNotExist:
-        logger.warning(f"Experiment not found: {experiment_name}")
+        logger.warning(log_safe(f"Experiment not found: {experiment_name}"))
         return None
     except Exception as e:
         logger.error(f"Error getting experiment results: {e}")

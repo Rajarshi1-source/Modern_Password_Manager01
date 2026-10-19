@@ -46,6 +46,7 @@ from .entropy_monitor import (
     AnomalyReport,
     entropy_monitor,
 )
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -711,7 +712,7 @@ class QuantumEntanglementService:
         # Auto-revoke if configured and critical anomaly
         if report.has_anomaly and report.severity == 'critical':
             if self.config.get('AUTO_REVOKE_ON_ANOMALY', True):
-                logger.warning(f"Auto-revoking pair {pair_id} due to critical anomaly")
+                logger.warning(log_safe(f"Auto-revoking pair {pair_id} due to critical anomaly"))
                 self.revoke_instantly(
                     pair_id=pair_id,
                     reason=f"Auto-revoked: {report.anomaly_type}"
@@ -801,7 +802,7 @@ class QuantumEntanglementService:
                 }
             )
         
-        logger.warning(f"REVOKED pair {pair_id}: {reason}")
+        logger.warning(log_safe(f"REVOKED pair {pair_id}: {reason}"))
         
         return RevocationResult(
             success=True,

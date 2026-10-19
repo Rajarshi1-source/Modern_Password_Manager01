@@ -21,6 +21,7 @@ from security.models.duress_models import (
     EvidencePackage,
     DuressEvent,
 )
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ class SilentAlarmService:
         Returns:
             True if at least one alert was sent successfully
         """
-        logger.info(f"Sending silent alarms for user {user.username} (level: {threat_level})")
+        logger.info(log_safe(f"Sending silent alarms for user {user.username} (level: {threat_level})"))
         
         # Get authorities configured for this threat level
         authorities = TrustedAuthority.objects.filter(
@@ -81,7 +82,7 @@ class SilentAlarmService:
         ]
         
         if not matching_authorities:
-            logger.warning(f"No authorities configured for threat level {threat_level}")
+            logger.warning(log_safe(f"No authorities configured for threat level {threat_level}"))
             return False
         
         # Build alert payload

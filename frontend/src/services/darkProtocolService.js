@@ -28,6 +28,7 @@
  */
 import { authHeader } from '../utils/authHeader';
 import { getWsTicket } from './wsTicket';
+import { logSafe } from '../utils/logSafe';
 
 // JSON + auth headers shared by every dark-protocol fetch call.
 const authHeaders = () => ({
@@ -396,7 +397,7 @@ export const disconnectWebSocket = () => {
 const handleWebSocketMessage = (data) => {
   switch (data.type) {
     case 'connected':
-      console.log('Session connected:', data.session_id);
+      console.log('Session connected:', logSafe(data.session_id));
       break;
       
     case 'cover':
@@ -421,7 +422,7 @@ const handleWebSocketMessage = (data) => {
       break;
       
     default:
-      console.log('Unknown message type:', data.type);
+      console.log('Unknown message type:', logSafe(data.type));
   }
   
   notifyListeners(data);

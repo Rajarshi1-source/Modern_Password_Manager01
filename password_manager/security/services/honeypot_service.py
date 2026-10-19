@@ -26,6 +26,7 @@ from ..models import (
     CredentialRotationLog,
 )
 from .honeypot_email_provider import HoneypotEmailProvider
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class HoneypotEmailService:
             }
         )
         if created:
-            logger.info(f"Created honeypot config for user {user.username}")
+            logger.info(log_safe(f"Created honeypot config for user {user.username}"))
         return config
     
     def update_config(self, user, **kwargs) -> HoneypotConfiguration:
@@ -81,7 +82,7 @@ class HoneypotEmailService:
                 setattr(config, key, value)
         
         config.save()
-        logger.info(f"Updated honeypot config for user {user.username}")
+        logger.info(log_safe(f"Updated honeypot config for user {user.username}"))
         return config
     
     # =========================================================================
@@ -151,8 +152,8 @@ class HoneypotEmailService:
             )
             
             logger.info(
-                f"Created honeypot for {service_name}: {alias_email} "
-                f"(user: {user.username})"
+                log_safe(f"Created honeypot for {service_name}: {alias_email} "
+                f"(user: {user.username})")
             )
             
             return honeypot
@@ -211,7 +212,7 @@ class HoneypotEmailService:
             honeypot.status = 'disabled'
             honeypot.save()
             
-            logger.info(f"Deleted honeypot {honeypot.id} for {honeypot.service_name}")
+            logger.info(log_safe(f"Deleted honeypot {honeypot.id} for {honeypot.service_name}"))
             return True
             
         except Exception as e:
@@ -255,7 +256,7 @@ class HoneypotEmailService:
                 is_active=True
             )
         except HoneypotEmail.DoesNotExist:
-            logger.warning(f"Email to unknown honeypot: {honeypot_address}")
+            logger.warning(log_safe(f"Email to unknown honeypot: {honeypot_address}"))
             return None, False
         
         # Determine activity type
@@ -377,8 +378,8 @@ class HoneypotEmailService:
             breach_detected = True
             confidence = 0.95
             logger.warning(
-                f"Breach detected via spam: {honeypot.service_name} "
-                f"(user: {honeypot.user.username})"
+                log_safe(f"Breach detected via spam: {honeypot.service_name} "
+                f"(user: {honeypot.user.username})")
             )
         
         # Medium confidence: any activity on fresh honeypot
@@ -442,8 +443,8 @@ class HoneypotEmailService:
         )
         
         logger.warning(
-            f"Breach event created: {breach.service_name} "
-            f"(severity: {severity}, confidence: {confidence})"
+            log_safe(f"Breach event created: {breach.service_name} "
+            f"(severity: {severity}, confidence: {confidence})")
         )
         
         # Send breach notification
@@ -518,8 +519,8 @@ class HoneypotEmailService:
         )
         
         logger.info(
-            f"Credential rotation initiated for {breach.service_name} "
-            f"(trigger: {trigger})"
+            log_safe(f"Credential rotation initiated for {breach.service_name} "
+            f"(trigger: {trigger})")
         )
         
         return rotation
@@ -648,7 +649,7 @@ SecureVault Security Team
                 recipient_list=[recipient],
                 fail_silently=False
             )
-            logger.info(f"Breach notification sent for {breach.service_name}")
+            logger.info(log_safe(f"Breach notification sent for {breach.service_name}"))
         except Exception as e:
             logger.error(f"Failed to send breach notification: {e}")
     

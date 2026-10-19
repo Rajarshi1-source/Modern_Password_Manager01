@@ -13,6 +13,7 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +241,7 @@ def correlate_with_hibp(breach_id: str):
         # This is a simplified correlation based on service name matching
         # In production, you'd use the full HIBP API
         
-        logger.info(f"Correlating breach {breach_id} with HIBP for {service_domain}")
+        logger.info(log_safe(f"Correlating breach {breach_id} with HIBP for {service_domain}"))
         
         return {
             'breach_id': breach_id,

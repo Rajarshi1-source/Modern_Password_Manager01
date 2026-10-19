@@ -20,6 +20,7 @@ from .services.authy_service import authy_service
 from django.contrib.auth.models import User
 import logging
 import os
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ class GoogleLogin(SocialLoginView):
             
             if email:
                 # Trigger Authy fallback mechanism
-                logger.info(f"OAuth failed for {email}, initiating Authy fallback")
+                logger.info(log_safe(f"OAuth failed for {email}, initiating Authy fallback"))
                 return Response({
                     'success': False,
                     'message': 'OAuth authentication failed',
@@ -199,7 +200,7 @@ class GitHubLogin(SocialLoginView):
             
             if email:
                 # Trigger Authy fallback mechanism
-                logger.info(f"OAuth failed for {email}, initiating Authy fallback")
+                logger.info(log_safe(f"OAuth failed for {email}, initiating Authy fallback"))
                 return Response({
                     'success': False,
                     'message': 'OAuth authentication failed',
@@ -254,7 +255,7 @@ class AppleLogin(SocialLoginView):
             
             if email:
                 # Trigger Authy fallback mechanism
-                logger.info(f"OAuth failed for {email}, initiating Authy fallback")
+                logger.info(log_safe(f"OAuth failed for {email}, initiating Authy fallback"))
                 return Response({
                     'success': False,
                     'message': 'OAuth authentication failed',
@@ -283,7 +284,7 @@ def oauth_callback(request):
     frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
     
     if error:
-        logger.error(f"OAuth error for provider {provider}: {error}")
+        logger.error(log_safe(f"OAuth error for provider {provider}: {error}"))
         return redirect(f"{frontend_url}/login?error=oauth_failed")
     
     # Get the user from the session
@@ -336,7 +337,7 @@ def oauth_fallback_authy(request):
             request.session['authy_id'] = authy_id
             request.session['pending_user_id'] = user.id
             
-            logger.info(f"Authy fallback initiated for user {email}")
+            logger.info(log_safe(f"Authy fallback initiated for user {email}"))
             
             return Response({
                 'success': True,

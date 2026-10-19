@@ -27,6 +27,7 @@ from .mfa_models import (
     AuthenticationAttempt, ContinuousAuthSession,
     AdaptiveMFALog
 )
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ def register_face(request):
             image_data = base64.b64decode(face_image_b64)
             face_image = decode_face_image(image_data)
         except Exception:
-            logger.exception("Face image decode failed for user %s", user.username)
+            logger.exception("Face image decode failed for user %s", log_safe(user.username))
             return Response({
                 'success': False,
                 'message': 'Invalid image data provided.'
@@ -204,7 +205,7 @@ def register_voice(request):
             audio_data = base64.b64decode(voice_audio_b64)
             voice_features = decode_voice_audio(audio_data)
         except Exception:
-            logger.exception("Voice audio decode failed for user %s", user.username)
+            logger.exception("Voice audio decode failed for user %s", log_safe(user.username))
             return Response({
                 'success': False,
                 'message': 'Invalid audio data provided.'
@@ -309,7 +310,7 @@ def authenticate_biometric(request):
                     'message': 'Invalid biometric type'
                 }, status=status.HTTP_400_BAD_REQUEST)
         except Exception:
-            logger.exception("Biometric decode failed for user %s", username)
+            logger.exception("Biometric decode failed for user %s", log_safe(username))
             return Response({
                 'authenticated': False,
                 'message': 'Invalid biometric data provided.'

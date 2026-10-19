@@ -15,6 +15,7 @@ import secrets
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple
 from django.conf import settings
+from shared.log_safe import log_safe
 
 try:
     import httpx
@@ -300,7 +301,7 @@ class CustomSMTPProvider(EmailProviderBase):
         alias_email = f"{local_part}@{self.domain}"
         alias_id = hashlib.sha256(alias_email.encode()).hexdigest()[:16]
         
-        logger.info(f"Created custom honeypot email: {alias_email}")
+        logger.info(log_safe(f"Created custom honeypot email: {alias_email}"))
         return (alias_email, alias_id)
     
     def delete_alias(self, provider_alias_id: str) -> bool:

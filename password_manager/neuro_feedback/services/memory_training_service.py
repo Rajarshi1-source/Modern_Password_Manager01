@@ -30,6 +30,7 @@ from ..models import (
     NeuroFeedbackSettings,
 )
 from .brainwave_analyzer import BrainwaveMetrics, BrainState
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -141,8 +142,8 @@ class MemoryTrainingService:
             )
         
         logger.info(
-            f"Created training program for {len(password)}-char password "
-            f"({len(chunks)} chunks) for user {self.user.username}"
+            log_safe(f"Created training program for {len(password)}-char password "
+            f"({len(chunks)} chunks) for user {self.user.username}")
         )
         
         return program

@@ -26,6 +26,7 @@ import httpx
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -452,8 +453,8 @@ class EpigeneticEvolutionManager:
             caller_dna_connection.refresh_from_db()
 
         logger.info(
-            f"Password evolution triggered for {user.username}: "
-            f"gen {old_generation} → {new_generation}"
+            log_safe(f"Password evolution triggered for {user.username}: "
+            f"gen {old_generation} → {new_generation}")
         )
 
         return True, f"Evolution triggered: generation {old_generation} → {new_generation}"

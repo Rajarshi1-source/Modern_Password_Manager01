@@ -43,6 +43,7 @@ from ..models import (
     SleepObservation,
     WearableLink,
 )
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,7 @@ def ingest_sleep_observations(user, provider: str, observations: list) -> int:
             logger.exception(
                 "Failed to persist sleep observation for user=%s provider=%s",
                 getattr(user, "id", None),
-                provider,
+                log_safe(provider),
             )
     return created_count
 

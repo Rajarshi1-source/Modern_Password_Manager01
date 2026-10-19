@@ -10,6 +10,7 @@ from urllib.parse import quote
 import requests
 
 from shared.circuit_breaker import hibp_breaker, CircuitBreakerOpen
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ def check_password_prefix(prefix: str) -> Dict[str, int] | object:
             try:
                 result[suffix.strip().upper()] = int(count_str.strip())
             except ValueError:
-                logger.warning("Unexpected HIBP line format: %r", line)
+                logger.warning("Unexpected HIBP line format: %r", log_safe(line))
 
         hibp_breaker.on_success()
         return result
@@ -134,7 +135,7 @@ def check_password_prefix(prefix: str) -> Dict[str, int] | object:
         return _BREACH_UNKNOWN
     except requests.exceptions.Timeout:
         hibp_breaker.on_failure()
-        logger.error("HIBP API timed out for prefix %s***", prefix[:2])
+        logger.error("HIBP API timed out for prefix %s***", log_safe(prefix[:2]))
         return _BREACH_UNKNOWN
     except requests.exceptions.RequestException as e:
         hibp_breaker.on_failure(e)
@@ -256,7 +257,7 @@ def get_breached_sites_for_email(
         except requests.exceptions.Timeout:
             logger.error(
                 "HIBP email check timed out for domain %s",
-                email.split("@", 1)[-1],
+                log_safe(email.split("@", 1)[-1]),
             )
             return []
         except requests.exceptions.RequestException as e:

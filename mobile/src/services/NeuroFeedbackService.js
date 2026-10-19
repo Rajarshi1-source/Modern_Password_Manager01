@@ -9,6 +9,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { logSafe } from '../utils/logSafe';
 // Note: BleManager from react-native-ble-plx would be imported in production
 // import { BleManager } from 'react-native-ble-plx';
 
@@ -337,7 +338,7 @@ class NeuroFeedbackService {
         this._emit('error', payload);
         break;
       default:
-        console.log('Unknown message type:', type);
+        console.log('Unknown message type:', logSafe(type));
     }
   }
 

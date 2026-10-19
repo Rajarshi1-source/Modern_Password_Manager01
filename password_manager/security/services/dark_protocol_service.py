@@ -47,6 +47,7 @@ from ..models.dark_protocol_models import (
     NetworkHealth,
     DarkProtocolConfig,
 )
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -483,11 +484,11 @@ class DarkProtocolService:
                 is_active=True,
             ).update(is_active=False)
             
-            logger.info(f"Terminated session {session_id[:8]}...")
+            logger.info(log_safe(f"Terminated session {session_id[:8]}..."))
             return True
             
         except GarlicSession.DoesNotExist:
-            logger.warning(f"Session {session_id[:8]}... not found")
+            logger.warning(log_safe(f"Session {session_id[:8]}... not found"))
             return False
         except Exception as e:
             logger.error(f"Error terminating session: {e}")
@@ -742,7 +743,7 @@ class DarkProtocolService:
             # The vault URL names moved. Surfacing this as a refusal rather
             # than a 500 keeps the failure legible, and it is a deploy-time
             # defect that the routing test pins.
-            logger.exception("Vault route missing for operation %s", operation)
+            logger.exception("Vault route missing for operation %s", log_safe(operation))
             return VaultOperationResult(
                 success=False,
                 operation_id=operation_id,
@@ -750,7 +751,7 @@ class DarkProtocolService:
                 error_message='Vault route unavailable',
             )
         except Exception:
-            logger.exception("Anonymous vault operation failed: %s", operation)
+            logger.exception("Anonymous vault operation failed: %s", log_safe(operation))
             return VaultOperationResult(
                 success=False,
                 operation_id=operation_id,

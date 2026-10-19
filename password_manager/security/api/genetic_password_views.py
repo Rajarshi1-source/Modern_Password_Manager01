@@ -52,6 +52,7 @@ from ..services.dna_provider_service import (
     ManualUploadProvider,
 )
 from ..services.epigenetic_service import get_evolution_manager
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +273,7 @@ def initiate_connection(request):
             logger.warning(
                 "OAuth initiation rejected: redirect_uri=%r not in "
                 "GENETIC_OAUTH_REDIRECT_URIS allowlist (%d entries).",
-                redirect_uri, len(allowed),
+                log_safe(redirect_uri), len(allowed),
             )
             return Response({
                 'success': False,
@@ -446,7 +447,7 @@ def oauth_callback(request):
             user_agent=request.META.get('HTTP_USER_AGENT', ''),
         )
         
-        logger.info(f"DNA connection established for {request.user.username}: {provider_type}")
+        logger.info(log_safe(f"DNA connection established for {request.user.username}: {provider_type}"))
         
         return Response({
             'success': True,
@@ -553,8 +554,8 @@ def upload_dna_file(request):
         
         # Log upload (but NOT the data)
         logger.info(
-            f"DNA file uploaded for {request.user.username}: "
-            f"{filename} ({format_detected}), {genetic_seed.snp_count} SNPs"
+            log_safe(f"DNA file uploaded for {request.user.username}: "
+            f"{filename} ({format_detected}), {genetic_seed.snp_count} SNPs")
         )
         
         # IMPORTANT: Raw SNP data is NOT stored
@@ -1065,7 +1066,7 @@ def disconnect_dna(request):
             }, status=status.HTTP_404_NOT_FOUND)
         
         # Log the disconnection
-        logger.info(f"DNA connection deactivated for {request.user.username}")
+        logger.info(log_safe(f"DNA connection deactivated for {request.user.username}"))
 
         # Soft-delete: mark inactive so certificates still link correctly
         connection.is_active = False

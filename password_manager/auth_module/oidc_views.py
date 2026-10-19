@@ -31,6 +31,7 @@ from .services.oidc_service import (
     OIDCValidationError,
     get_oidc_service,
 )
+from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -271,7 +272,7 @@ def oidc_callback(request):
 
     if error:
         error_description = request.GET.get('error_description', 'Authentication failed')
-        logger.error(f"OIDC callback error: {error} - {error_description}")
+        logger.error(log_safe(f"OIDC callback error: {error} - {error_description}"))
         return _callback_redirect('oidc_error', 'Authentication failed')
 
     if not code or not state:

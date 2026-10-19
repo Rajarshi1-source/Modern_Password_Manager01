@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from functools import lru_cache
 from enum import Enum
+from shared.log_safe import log_safe
 
 # HTTP client
 try:
@@ -596,7 +597,7 @@ class NOAABuoyClient:
             reading, cached_at = self._cache[buoy_id]
             age = (datetime.utcnow() - cached_at).total_seconds()
             if age < self.CACHE_TTL_SECONDS:
-                logger.debug(f"Cache hit for buoy {buoy_id} (age: {age:.0f}s)")
+                logger.debug(log_safe(f"Cache hit for buoy {buoy_id} (age: {age:.0f}s)"))
                 return reading
         return None
     
@@ -627,7 +628,7 @@ class NOAABuoyClient:
         
         # Check rate limit
         if not force_refresh and not self._check_rate_limit(buoy_id):
-            logger.debug(f"Rate limited for buoy {buoy_id}, returning cached")
+            logger.debug(log_safe(f"Rate limited for buoy {buoy_id}, returning cached"))
             return self._get_cached(buoy_id)
         
         try:
@@ -638,7 +639,7 @@ class NOAABuoyClient:
             response = await client.get(url)
             
             if response.status_code != 200:
-                logger.warning(f"Buoy {buoy_id} fetch failed: HTTP {response.status_code}")
+                logger.warning(log_safe(f"Buoy {buoy_id} fetch failed: HTTP {response.status_code}"))
                 return None
             
             # Parse response
@@ -651,12 +652,12 @@ class NOAABuoyClient:
             
             if reading:
                 self._cache_reading(buoy_id, reading)
-                logger.info(f"Fetched buoy {buoy_id}: {reading.entropy_value_count} entropy values")
+                logger.info(log_safe(f"Fetched buoy {buoy_id}: {reading.entropy_value_count} entropy values"))
             
             return reading
             
         except Exception as e:
-            logger.error(f"Failed to fetch buoy {buoy_id}: {e}")
+            logger.error(log_safe(f"Failed to fetch buoy {buoy_id}: {e}"))
             return None
     
     def _parse_realtime2(self, buoy_id: str, text: str) -> Optional[BuoyReading]:
@@ -674,7 +675,7 @@ class NOAABuoyClient:
         data_lines = [l for l in lines if not l.startswith('#') and l.strip()]
         
         if not data_lines:
-            logger.warning(f"No data lines found for buoy {buoy_id}")
+            logger.warning(log_safe(f"No data lines found for buoy {buoy_id}"))
             return None
         
         # Get most recent reading (first data line)
@@ -724,7 +725,7 @@ class NOAABuoyClient:
             return reading
             
         except (IndexError, ValueError) as e:
-            logger.error(f"Failed to parse buoy {buoy_id} data: {e}")
+            logger.error(log_safe(f"Failed to parse buoy {buoy_id} data: {e}"))
             return None
     
     async def fetch_multiple_buoys(
