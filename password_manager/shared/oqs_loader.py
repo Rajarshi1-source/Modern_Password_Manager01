@@ -18,6 +18,7 @@ import os
 import platform
 from pathlib import Path
 
+
 def _wrapper_candidates():
     """
     The paths liboqs-python 0.16.0.1 tries, in its order (``_load_liboqs`` /

@@ -115,8 +115,7 @@ class Command(BaseCommand):
                         # Non-PQ fallback (liboqs missing): not an upgrade,
                         # and the legacy field must not be cleared for it.
                         self.stdout.write(self.style.WARNING(
-                            f"
-⚠️  Skipping {commitment.commitment_id}: liboqs unavailable "
+                            f"\n⚠️  Skipping {commitment.commitment_id}: liboqs unavailable "
                             f"({quantum_encrypted.get('algorithm')})"
                         ))
                         failed += 1
