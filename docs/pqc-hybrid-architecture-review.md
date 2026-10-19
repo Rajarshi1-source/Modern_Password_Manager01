@@ -134,6 +134,16 @@ manager" framing in the pasted summary; the project's own README is the authorit
 
 ### 2.5 Recommendation for the bump
 
+> **Historical (done 2026-10-19, branch `chore/liboqs-0.16-ml-kem`).** The bump
+> happened as a migration: both pins moved together with fresh SHAs, and the image
+> build now runs `docker/backend/oqs_smoke.py`, which checks the two versions and
+> round-trips every KEM (that replaces steps 2 and 3). The lock line is now
+> `liboqs-python==0.16.0.1`, and the compatibility workflow no longer drops it. The
+> Dependabot `ignore` entry was **kept on purpose**, not removed as step 4 said: the
+> lock line still documents a git-built image, so a Dependabot bump of that line
+> alone would desynchronize it. The current procedure is in `DEPENDENCY_POLICY.md`.
+> The text below is the recommendation as written before the migration.
+
 Do **not** bump now. Do it as a deliberate, staged migration after the fixes in
 section 6 (P0/P1), following `DEPENDENCY_POLICY.md`:
 
