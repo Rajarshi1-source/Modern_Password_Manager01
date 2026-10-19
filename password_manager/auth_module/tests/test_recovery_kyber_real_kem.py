@@ -540,3 +540,14 @@ class PqcryptoSelectionTests(SimpleTestCase):
             self.assertEqual(kc.ProductionKyber(algorithm='Kyber768').implementation, 'pqcrypto')
             with self.assertRaises(RuntimeError):
                 kc.ProductionKyber(allow_simulation=False)
+
+    @ALLOW_SIM
+    def test_blob_reports_the_implementation_that_encapsulated(self):
+        # pqcrypto has only ML-KEM-768, so a Kyber768 encapsulation falls back
+        # to simulation: the blob must not claim real PQC.
+        with patch.multiple(kc, LIBOQS_AVAILABLE=False, PQCRYPTO_AVAILABLE=True,
+                            _PQCRYPTO_KEMS={'ML-KEM-768': MagicMock()}):
+            hybrid = kc.HybridKyberEncryption(allow_simulation=True)
+            self.assertTrue(hybrid.is_real_pqc)
+            blob = hybrid.encrypt(b'secret', b'P' * 1184, kem='Kyber768')
+        self.assertFalse(blob['is_real_pqc'])

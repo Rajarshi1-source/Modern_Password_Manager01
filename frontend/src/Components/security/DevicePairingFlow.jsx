@@ -323,7 +323,8 @@ const DevicePairingFlow = ({ onComplete, onCancel }) => {
                             <div className="success-details">
                                 <div className="detail-item">
                                     <span className="label">Algorithm:</span>
-                                    <span className="value">Kyber-1024 (Post-Quantum)</span>
+                                    {/* The session's KEM (default ml-kem-1024), not a fixed label */}
+                                    <span className="value">{(pairingSession?.kem || 'unknown').toUpperCase()} (Post-Quantum)</span>
                                 </div>
                                 <div className="detail-item">
                                     <span className="label">Entropy:</span>
