@@ -45,7 +45,10 @@ class Command(BaseCommand):
         self.stdout.write('=' * 70)
         
         # Get commitments to upgrade
-        queryset = BehavioralCommitment.objects.filter(is_quantum_protected=False)
+        # Legacy base64 rows only (see async_migrate_commitments_to_quantum).
+        queryset = BehavioralCommitment.objects.filter(
+            is_quantum_protected=False, encryption_algorithm='base64',
+        )
         
         if user_id:
             queryset = queryset.filter(user_id=user_id)

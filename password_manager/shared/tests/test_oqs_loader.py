@@ -5,7 +5,9 @@ library is missing, because its import would then download and build liboqs
 """
 import importlib.abc
 import sys
+import tempfile
 import types
+from pathlib import Path
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
@@ -21,6 +23,14 @@ class _RecordOqsImports(importlib.abc.MetaPathFinder):
         if name == 'oqs':
             self.attempts += 1
         return None
+
+
+def _no_find_library():
+    return patch.object(oqs_loader.ctypes.util, 'find_library', return_value=None)
+
+
+def _install_path(path):
+    return patch.dict('os.environ', {'OQS_INSTALL_PATH': str(path)})
 
 
 class OqsLoaderTests(SimpleTestCase):
@@ -51,17 +61,18 @@ class OqsLoaderTests(SimpleTestCase):
     def test_only_the_wrappers_install_dir_is_searched(self):
         # With OQS_INSTALL_PATH set, liboqs-python does NOT look in $HOME/_oqs,
         # so neither may the loader.
-        from pathlib import Path
-        with patch.object(oqs_loader.ctypes.util, 'find_library', return_value=None),                 patch.dict('os.environ', {'OQS_INSTALL_PATH': '/opt/custom-oqs'}),                 patch.object(oqs_loader.Path, 'home', return_value=Path('/home/app')):
+        with _no_find_library(), _install_path('/opt/custom-oqs'), \
+                patch.object(oqs_loader.Path, 'home', return_value=Path('/home/app')):
             candidates = oqs_loader._wrapper_candidates()
         self.assertTrue(candidates)
-        self.assertTrue(all(Path(c).parts[:3] == Path('/opt/custom-oqs').parts[:3] for c in candidates))
+        root = Path('/opt/custom-oqs').parts[:3]
+        self.assertTrue(all(Path(c).parts[:3] == root for c in candidates))
         self.assertFalse(any('_oqs' in c for c in candidates))
 
     def test_versioned_soname_is_not_a_wrapper_path(self):
         if oqs_loader.platform.system() in ('Windows', 'Darwin'):
             self.skipTest('Linux naming')
-        with patch.object(oqs_loader.ctypes.util, 'find_library', return_value=None),                 patch.dict('os.environ', {'OQS_INSTALL_PATH': '/x'}):
+        with _no_find_library(), _install_path('/x'):
             self.assertNotIn('/x/lib/liboqs.so.9', oqs_loader._wrapper_candidates())
 
     def test_find_library_results_come_first_in_the_wrappers_order(self):
@@ -71,17 +82,16 @@ class OqsLoaderTests(SimpleTestCase):
         self.assertEqual(candidates[:2], ['liboqs-result', 'oqs-result'])
 
     def test_a_present_but_unloadable_library_does_not_count(self):
-        import tempfile
-        from pathlib import Path
         sub, name = self._system_file()
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, sub).mkdir()
             Path(tmp, sub, name).write_bytes(b'not a shared library')
-            with patch.object(oqs_loader.ctypes.util, 'find_library', return_value=None),                     patch.dict('os.environ', {'OQS_INSTALL_PATH': tmp}):
+            with _no_find_library(), _install_path(tmp):
                 self.assertIsNone(oqs_loader.find_liboqs())
                 with self.assertRaises(ImportError):
                     oqs_loader.import_oqs()
 
     def test_the_first_loadable_candidate_is_returned(self):
-        with patch.object(oqs_loader, '_wrapper_candidates', return_value=['a', 'b', 'c']),                 patch.object(oqs_loader, '_loadable', side_effect=lambda p: p in ('b', 'c')):
+        with patch.object(oqs_loader, '_wrapper_candidates', return_value=['a', 'b', 'c']), \
+                patch.object(oqs_loader, '_loadable', side_effect=lambda p: p in ('b', 'c')):
             self.assertEqual(oqs_loader.find_liboqs(), 'b')
