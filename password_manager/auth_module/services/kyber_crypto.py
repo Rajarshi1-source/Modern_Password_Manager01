@@ -440,8 +440,11 @@ class HybridKyberEncryption:
         Returns:
             Dictionary containing all encrypted components
         """
-        # Step 1: KEM encapsulation
-        kyber_ciphertext, shared_secret = self._kem(kem).encapsulate(recipient_public_key)
+        # Step 1: KEM encapsulation. The instance that encapsulates also
+        # reports is_real_pqc: another KEM's instance may use a different
+        # implementation (e.g. pqcrypto for ML-KEM, simulation for Kyber768).
+        kem_impl = self._kem(kem)
+        kyber_ciphertext, shared_secret = kem_impl.encapsulate(recipient_public_key)
 
         # Step 2: Derive AES key using HKDF
         hkdf = HKDF(
@@ -465,7 +468,7 @@ class HybridKyberEncryption:
             'aad_hash': hashlib.sha256(associated_data).hexdigest() if associated_data else None,
             'algorithm': hybrid_algorithm_for_kem(kem),
             'version': '2.0',
-            'is_real_pqc': self.is_real_pqc
+            'is_real_pqc': kem_impl.is_real_pqc
         }
 
     def decrypt(
