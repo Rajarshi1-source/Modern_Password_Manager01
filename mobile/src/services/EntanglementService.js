@@ -65,9 +65,11 @@ class EntanglementService {
    * @param {string} sessionId - Pairing session ID
    * @param {string} verificationCode - 6-digit code
    * @param {string} publicKeyBase64 - Base64 encoded lattice public key
+   * @param {string} kem - The session's KEM (initiate response `kem`); the key
+   *   must be for that KEM, and the server rejects any other
    * @returns {Promise<Object>} Completed pairing result
    */
-  async verifyPairing(sessionId, verificationCode, publicKeyBase64) {
+  async verifyPairing(sessionId, verificationCode, publicKeyBase64, kem) {
     const headers = await this.getHeaders();
     
     const response = await fetch(`${this.baseUrl}/verify/`, {
@@ -77,6 +79,7 @@ class EntanglementService {
         session_id: sessionId,
         verification_code: verificationCode,
         device_b_public_key: publicKeyBase64,
+        kem,
       }),
     });
 

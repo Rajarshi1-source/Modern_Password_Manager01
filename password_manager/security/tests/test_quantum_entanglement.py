@@ -92,6 +92,14 @@ class LatticeCryptoEngineUnitTests(TestCase):
         with patch.multiple(lce, create=True, LIBOQS_AVAILABLE=True, oqs=oqs):
             with self.assertRaises(ValueError):
                 lce.LatticeCryptoEngine().generate_lattice_keypair('kyber-2048')
+            # A supported override for ANOTHER KEM is refused: encapsulation
+            # would still use the engine's KEM, and the sizes match.
+            with self.assertRaisesRegex(ValueError, 'get_lattice_engine'):
+                lce.LatticeCryptoEngine().generate_lattice_keypair('kyber-1024')
+            self.assertEqual(
+                lce.LatticeCryptoEngine('kyber-1024').generate_lattice_keypair().algorithm,
+                'kyber-1024',
+            )
 
     def test_liboqs_never_sees_a_wrong_length_input(self):
         """liboqs-python zero-pads short inputs silently; refuse them."""
@@ -1153,7 +1161,7 @@ class EntanglementFunctionalTests(TransactionTestCase):
         result = self.service.complete_pairing(
             session_id=session.session_id,
             verification_code=session.verification_code,
-            device_b_public_key=secrets.token_bytes(1568),
+            device_b_public_key=self.service.lattice.generate_lattice_keypair().public_key,
             kem=session.kem,
         )
         self.assertEqual(result['kem'], session.kem)
@@ -1180,9 +1188,10 @@ class EntanglementFunctionalTests(TransactionTestCase):
         self.assertIsNotNone(session.session_id)
         self.assertEqual(len(session.verification_code), 6)
         
-        # Step 2: Complete pairing
-        fake_public_key = secrets.token_bytes(1568)
-        
+        # Step 2: Complete pairing, with a public key from the session's KEM
+        # (native ML-KEM rejects non-canonical random bytes at encapsulation).
+        fake_public_key = self.service.lattice.generate_lattice_keypair().public_key
+
         result = self.service.complete_pairing(
             session_id=session.session_id,
             verification_code=session.verification_code,
@@ -1621,7 +1630,8 @@ class EntanglementE2ETests(TransactionTestCase):
         
         # 2. User enters code on laptop to verify
         # (In real flow, laptop would have its own public key)
-        fake_pk = secrets.token_bytes(1568)
+        from security.services.lattice_crypto_engine import get_lattice_engine
+        fake_pk = get_lattice_engine(response.data['kem']).generate_lattice_keypair().public_key
         import base64
         
         response = self.client.post(

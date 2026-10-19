@@ -80,8 +80,13 @@ def async_migrate_commitments_to_quantum(batch_size=50):
     
     try:
         # Get batch of non-quantum commitments
+        # Only legacy base64 rows: this task base64-decodes encrypted_embedding.
+        # Fallback rows (DEBUG/tests, 'fallback-aes256gcm') store b'' there,
+        # would fail to parse on every run, and could fill the batch so later
+        # legacy rows were never reached.
         old_commitments = BehavioralCommitment.objects.filter(
-            is_quantum_protected=False
+            is_quantum_protected=False,
+            encryption_algorithm='base64',
         )[:batch_size]
         
         if not old_commitments.exists():

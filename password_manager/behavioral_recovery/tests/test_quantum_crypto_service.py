@@ -437,3 +437,20 @@ class MigrationTaskSkipsFallbackTests(TestCase):
         commitment.refresh_from_db()
         self.assertTrue(commitment.is_quantum_protected)
         self.assertEqual(commitment.encryption_algorithm, 'ml-kem-768-aes256gcm')
+
+    @DENY_SIM
+    def test_fallback_rows_do_not_take_the_batch(self):
+        """Fallback rows store b'' in encrypted_embedding; they are not base64
+        rows and must not crowd legacy rows out of a batch."""
+        from behavioral_recovery.models import BehavioralCommitment
+        from behavioral_recovery.tasks import async_migrate_commitments_to_quantum
+        legacy = self._commitment()
+        BehavioralCommitment.objects.create(
+            user=legacy.user, challenge_type='mouse', unlock_conditions={},
+            encrypted_embedding=b'', encryption_algorithm='fallback-aes256gcm',
+        )
+        oqs, kem = fake_oqs()
+        with real_liboqs(oqs), patch.object(qcs, '_global_quantum_crypto', None):
+            self.assertEqual(async_migrate_commitments_to_quantum(batch_size=1), 1)
+        legacy.refresh_from_db()
+        self.assertTrue(legacy.is_quantum_protected)

@@ -150,6 +150,9 @@ const DevicePairingFlow = ({ onComplete, onCancel }) => {
                     session_id: pairingSession.session_id,
                     verification_code: inputCode,
                     device_b_public_key: dummyPublicKey,
+                    // Device B's key must be for the session's KEM; the
+                    // server rejects any other.
+                    kem: pairingSession.kem,
                 }),
             });
 

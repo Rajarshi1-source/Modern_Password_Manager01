@@ -526,3 +526,17 @@ class PasskeyRecoveryKeyVerificationTests(SimpleTestCase):
         self.assertTrue(backup.verify_recovery_key(key.lower()))
         self.assertFalse(backup.verify_recovery_key(service.generate_recovery_key()))
         self.assertFalse(backup.verify_recovery_key(None))
+
+
+class PqcryptoSelectionTests(SimpleTestCase):
+    """pqcrypto is used only for a KEM it actually provides."""
+
+    def test_pqcrypto_without_ml_kem_is_not_selected_for_ml_kem(self):
+        with patch.multiple(kc, LIBOQS_AVAILABLE=False, PQCRYPTO_AVAILABLE=True,
+                            _PQCRYPTO_KEMS={'Kyber768': MagicMock()}):
+            ml_kem = kc.ProductionKyber(allow_simulation=True)
+            self.assertEqual(ml_kem.implementation, 'simulation')
+            self.assertFalse(ml_kem.is_real_pqc)
+            self.assertEqual(kc.ProductionKyber(algorithm='Kyber768').implementation, 'pqcrypto')
+            with self.assertRaises(RuntimeError):
+                kc.ProductionKyber(allow_simulation=False)

@@ -255,6 +255,14 @@ class LatticeCryptoEngine:
         algo = algorithm or self.algorithm
         if algo not in self.SUPPORTED_ALGORITHMS:
             raise ValueError(f"Unsupported algorithm: {algo}")
+        if algo != self.algorithm:
+            # encapsulate_key/decapsulate_key use self.algorithm; a keypair
+            # for another KEM of the same size would pass their length checks
+            # and produce ciphertexts its private key cannot open. Use
+            # get_lattice_engine(algo) for a different KEM.
+            raise ValueError(
+                f"Engine is {self.algorithm}; use get_lattice_engine({algo!r}) for {algo}"
+            )
         
         if self.liboqs_available:
             return self._generate_keypair_liboqs(algo)

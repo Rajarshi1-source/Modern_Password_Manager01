@@ -197,7 +197,10 @@ class ProductionKyber:
         if LIBOQS_AVAILABLE:
             self.implementation = 'liboqs'
             logger.debug("Using liboqs KEM implementation")
-        elif PQCRYPTO_AVAILABLE:
+        elif PQCRYPTO_AVAILABLE and self.algorithm in _PQCRYPTO_KEMS:
+            # Only if this pqcrypto build has the requested KEM (current
+            # releases ship ml_kem_768 but not kyber768, older ones the
+            # reverse); otherwise fall through as if pqcrypto were absent.
             self.implementation = 'pqcrypto'
             logger.debug("Using pqcrypto KEM implementation")
         elif allow_simulation:
