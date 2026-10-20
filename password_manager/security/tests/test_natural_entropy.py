@@ -494,7 +494,8 @@ class TestNaturalEntropyAPI(APITestCase):
         
         self.assertIn(response.status_code, [200, 401, 403, 404])
     
-    def test_get_seismic_activity(self):
+    @_PATCH_USGS_FEED
+    def test_get_seismic_activity(self, _feed):
         """Test GET /api/security/natural-entropy/seismic/"""
         response = self.client.get('/api/security/natural-entropy/seismic/')
         
@@ -545,7 +546,8 @@ class TestEntropyQuality(TestCase):
         unique_bytes = len(set(entropy))
         self.assertGreater(unique_bytes, 20)
     
-    def test_seismic_entropy_quality(self):
+    @_PATCH_USGS_FEED
+    def test_seismic_entropy_quality(self, _feed):
         """Test seismic entropy quality is acceptable."""
         from security.services.natural_entropy_providers import SeismicEntropyProvider
         
@@ -638,7 +640,8 @@ class TestNaturalEntropyIntegration(TestCase):
         self.assertEqual(len(password), 16)
         self.assertRegex(password, r'[A-Za-z0-9!@#$%]+')
     
-    def test_multiple_source_password_generation(self):
+    @_PATCH_USGS_FEED
+    def test_multiple_source_password_generation(self, _feed):
         """Test password from multiple natural sources."""
         from security.services.natural_entropy_providers import (
             LightningEntropyProvider,
@@ -763,7 +766,8 @@ class TestEdgeCases(TestCase):
 class TestEntropySourceComparison(TestCase):
     """Compare entropy quality across different sources."""
     
-    def test_compare_entropy_distribution(self):
+    @_PATCH_USGS_FEED
+    def test_compare_entropy_distribution(self, _feed):
         """Compare byte distribution across sources."""
         from security.services.natural_entropy_providers import (
             LightningEntropyProvider,
