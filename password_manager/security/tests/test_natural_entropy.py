@@ -352,7 +352,8 @@ class TestSeismicEntropyProvider(TestCase):
         self.assertIsInstance(entropy, bytes)
         self.assertGreaterEqual(len(entropy), 32)
     
-    def test_is_available(self):
+    @_PATCH_USGS_FEED
+    def test_is_available(self, _feed):
         """Test availability check."""
         from security.services.natural_entropy_providers import SeismicEntropyProvider
         
@@ -455,7 +456,8 @@ class TestNaturalEntropyAPI(APITestCase):
         )
         self.client.force_authenticate(user=self.user)
     
-    def test_generate_natural_password(self):
+    @_PATCH_USGS_FEED
+    def test_generate_natural_password(self, _feed):
         """Test POST /api/security/natural-entropy/generate/"""
         response = self.client.post(
             '/api/security/natural-entropy/generate/',

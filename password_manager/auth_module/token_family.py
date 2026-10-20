@@ -64,7 +64,9 @@ def enforce_token_family_limit(user) -> int:
     max_size = get_family_max_size()
 
     with transaction.atomic():
-        # Row lock (a no-op on SQLite, which serializes writers anyway).
+        # Row lock. SQLite ignores select_for_update(): there a concurrent
+        # pass can fail with "database is locked" when bulk_create upgrades
+        # its read to a write, and the login serializer logs and skips it.
         get_user_model().objects.select_for_update().filter(pk=user.pk).exists()
 
         live_ids = list(
