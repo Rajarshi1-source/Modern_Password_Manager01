@@ -74,6 +74,6 @@ cryptography>=48.0.1 # not directly required, pinned to avoid GHSA-537c-gmf6-5cc
 setuptools>=78.1.1 # not directly required, pinned by Snyk to avoid a vulnerability
 
 # Security overrides for transitive dependencies (Dependabot)
-nltk>=3.10.3  # GHSA-x99w-6fgc-pmfw (CVE-2026-79657) allowlisted-pickle RCE plus the 3.10.x pathsec/ReDoS batch, fixed 3.10.3; supersedes the 3.9.4 GHSA-gfwx-w7gr-fvh7/GHSA-jm6w-m3j8-898g floor
+nltk>=3.10.3  # GHSA-x99w-6fgc-pmfw (CVE-2026-79657) allowlisted-pickle RCE plus the 3.10.x pathsec/ReDoS batch, fixed 3.10.3; supersedes the 3.9.4 GHSA-gfwx-w7gr-fvh7/GHSA-jm6w-m3j8-898g floor. ACCEPTED RISK, no fix exists: GHSA-8mgp-746c-j5xp (CVE-2026-81726, PYSEC-2026-3740) affects all nltk <=3.10.3 (model-artifact APIs TransitionParser.train/parse, AveragedPerceptron.save/load, PerceptronTagger.save_to_json, save_maxent_params bypass pathsec on caller-controlled paths). Not reachable here: no project code imports nltk; it is installed only as a dependency of `safety`, which calls nltk.edit_distance() and none of those APIs, and nothing enables nltk pathsec or passes it a path. Re-check if code starts using nltk; raise this floor when a patched release ships.
 twisted>=26.4.0  # GHSA-grgv-6hw6-v9g4 (CVE-2026-42304) DNS compression DoS
 ujson>=5.13.0  # GHSA-c38f-wx89-p2xg (CVE-2026-44660) memory leak in ujson.dump()
