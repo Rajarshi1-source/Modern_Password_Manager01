@@ -304,7 +304,9 @@ def _fixed_earthquakes(*args, **kwargs):
     """Deterministic USGS feed: the live one is sometimes empty for the
     window the provider asks for, which made these tests fail at random."""
     from security.services.natural_entropy_providers import Earthquake
-    base = datetime.utcnow() - timedelta(hours=2)  # naive, like the USGS client's
+    # Fixed and naive (like the USGS client's), so the entropy bytes are the
+    # same every run; the patch ignores the provider's 24-hour window.
+    base = datetime(2026, 1, 15, 12, 0)
     return [
         Earthquake(
             timestamp=base + timedelta(minutes=17 * i),
