@@ -399,9 +399,11 @@ function setupApplicationEvents() {
       return;
     }
     
+    // Handlers first: the preload calls secure-storage:available as soon as
+    // the page loads, and an invoke with no handler yet fails.
+    setupIpcHandlers();
     createMainWindow();
     createApplicationMenu();
-    setupIpcHandlers();
     setupAutoUpdater();
     
     isAppReady = true;
