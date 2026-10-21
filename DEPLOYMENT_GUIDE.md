@@ -57,7 +57,7 @@ redis-cli
 
 # Frontend
 node 22.13+
-npm 10+
+npm 10+ (11.10+ in contracts/, which enforces a 7-day min-release-age)
 
 # Deployment
 docker & docker-compose
