@@ -283,6 +283,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # libxml2 (#1515), libsystemd0 (#1489/#1501), libcap2 (#1439),
 # libkrb5 (#1680-#1687), libc6/glibc (#1656-#1659),
 # zlib1g (#1548), util-linux (#1544/#1547), tar (#1541).
+# libxcb1/libgl1/libglib2.0-0: OpenCV runtime. mediapipe depends on
+# opencv-contrib-python (the GUI build), whose cv2 needs them even headless;
+# without them `import cv2` and mediapipe fail with "libxcb.so.1: cannot open
+# shared object file" and the biometric/liveness paths silently fall back.
 RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
     libpq5 \
     netcat-openbsd \
@@ -304,6 +308,9 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
     zlib1g \
     util-linux \
     tar \
+    libxcb1 \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
