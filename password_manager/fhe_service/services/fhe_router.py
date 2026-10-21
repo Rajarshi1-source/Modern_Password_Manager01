@@ -316,8 +316,9 @@ class FHEOperationRouter:
         
         Services fall back to plaintext per call (e.g. on an exception), and
         mark those results: EncryptedValue.metadata['fhe'] is False, and
-        SEALCiphertext uses scheme 'fallback'. A result with no ciphertext
-        part at all is not FHE either.
+        SEALCiphertext uses scheme 'fallback'. A dict carrying a boolean
+        ``fhe`` key states its own provenance (paths that decrypt before
+        returning). A result with no ciphertext part at all is not FHE.
         """
         found = []
         
@@ -328,6 +329,9 @@ class FHEOperationRouter:
                 found.append(value.scheme != 'fallback'
                              and not value.metadata.get('fallback'))
             elif isinstance(value, dict):
+                if isinstance(value.get('fhe'), bool):
+                    found.append(value['fhe'])
+                    return
                 for v in value.values():
                     walk(v)
             elif isinstance(value, (list, tuple)):
@@ -418,7 +422,15 @@ class FHEOperationRouter:
                     vault_cts,
                     threshold=data.get('threshold', 0.8)
                 )
-                return {'matches': results}
+                # The scores are decrypted here, so no ciphertext survives
+                # into the result for _result_is_fhe to inspect. Record the
+                # provenance explicitly: FHE only if the comparisons ran on
+                # the live backend over real ciphertexts.
+                return {
+                    'matches': results,
+                    'fhe': bool(service.is_available)
+                    and self._result_is_fhe([query_ct] + list(vault_cts)),
+                }
         
         elif op_type == OperationType.BREACH_DETECTION:
             # Encrypt features for breach detection
