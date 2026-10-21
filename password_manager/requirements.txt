@@ -211,8 +211,9 @@ qiskit-ibm-runtime>=0.20.0
 # uses a simulated KEM, and only when QUANTUM_CRYPTO['ALLOW_SIMULATION'] is on.
 # liboqs-python==0.16.0.1  # Installed from source in Docker; must match the C library
 
-# Pure Python Post-Quantum Crypto (fallback when liboqs unavailable)
-# pqcrypto  # Installed separately in Docker
+# Pure Python Post-Quantum Crypto: pqcrypto is not installed anywhere
+# (no code imports it; the Docker step that pip-installed it never reached
+# the shipped image and has been removed).
 
 # Blockchain Anchoring
 web3>=7.0.0
@@ -221,10 +222,12 @@ eth-account>=0.13.0
 # Social Mesh Recovery (Shamir's Secret Sharing)
 secretsharing>=0.2.6
 
-# Fully Homomorphic Encryption (FHE) - Platform-specific (Linux x86_64 only)
-# Note: concrete-python only works on Linux x86_64.
-# For other platforms, the code uses fallback encryption mode.
-# concrete-python>=2.5.0  # Installed separately in Docker
+# Fully Homomorphic Encryption (FHE): concrete-python is NOT installed, in
+# Docker or here, so fhe_service's ConcreteService runs its plaintext
+# fallback. Every current release (2.9-2.11, the only cp312 wheels) pins
+# numpy<2, which would downgrade the ML stack (numpy 2.2 -> 1.26, OpenCV
+# 5 -> 4.11, pandas 2 -> 3), and imports pkg_resources (setuptools<81, below
+# the >=83 floor above). See docker/backend/Dockerfile.
 
 # ============================================================================
 # Notifications & Communication

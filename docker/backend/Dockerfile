@@ -1,7 +1,7 @@
 # =============================================================================
 # Backend Dockerfile - Django Password Manager API
 # =============================================================================
-# Multi-stage build with Post-Quantum Crypto (liboqs), pqcrypto, and FHE support
+# Multi-stage build with Post-Quantum Crypto (liboqs)
 # Supports: Django REST API, Celery Workers, Daphne WebSockets, FHE Operations
 # =============================================================================
 
@@ -150,15 +150,15 @@ RUN pip install --no-cache-dir --no-deps --target /opt/oqs-python .
 WORKDIR /tmp
 RUN rm -rf liboqs-python
 
-# Install pqcrypto (pure Python post-quantum crypto)
-RUN pip install --no-cache-dir pqcrypto || echo "pqcrypto installation optional"
-
-# Install concrete-python (FHE library) - may fail on some platforms.
-# This is the single authoritative install point for concrete-python; do NOT
-# duplicate it in the deps-builder stage to avoid pulling the same multi-GB
-# package twice (which previously caused "No space left on device" on GHA
-# runners).
-RUN pip install --no-cache-dir concrete-python==2.5.0 || echo "concrete-python installation optional (Linux x86_64 only)"
+# pqcrypto and concrete-python (FHE) used to be pip-installed here. Both
+# went into this stage's system Python, which the production stage never
+# copies (it takes only /opt/oqs-python and the liboqs .so files), so neither
+# ever reached the shipped image. concrete-python==2.5.0 also has no cp312
+# wheel, and the `|| echo` hid that failure on every build. No code imports
+# pqcrypto. The FHE service already falls back to plaintext scoring when
+# `concrete.fhe` is missing. Shipping real FHE is tracked separately: every
+# current concrete-python (2.9-2.11) requires numpy<2, needs setuptools<81
+# for pkg_resources, and needs a linker at runtime to compile circuits.
 
 # -----------------------------------------------------------------------------
 # Stage 2: Dependencies Builder - Install Python dependencies
