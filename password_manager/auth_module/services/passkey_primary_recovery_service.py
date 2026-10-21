@@ -89,7 +89,7 @@ class PasskeyPrimaryRecoveryService:
         is stored in the metadata, AES-GCM-wrapped under a key derived from
         the recovery key, so decryption uses exactly the private key that
         matches the stored public key. (liboqs 0.16 can derive an ML-KEM
-        keypair from a seed, but Kyber768, pqcrypto and the simulation
+        keypair from a seed, but Kyber768 and the simulation
         cannot, so the blob keeps the wrapped key rather than depend on it.)
 
         Args:

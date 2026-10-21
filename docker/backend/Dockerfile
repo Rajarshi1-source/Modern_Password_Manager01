@@ -154,8 +154,9 @@ RUN rm -rf liboqs-python
 # went into this stage's system Python, which the production stage never
 # copies (it takes only /opt/oqs-python and the liboqs .so files), so neither
 # ever reached the shipped image. concrete-python==2.5.0 also has no cp312
-# wheel, and the `|| echo` hid that failure on every build. No code imports
-# pqcrypto. The FHE service already falls back to plaintext scoring when
+# wheel, and the `|| echo` hid that failure on every build. kyber_crypto's
+# pqcrypto fallback (dead in the image for that reason) has been removed, so
+# liboqs is the only real KEM backend. The FHE service falls back to plaintext scoring when
 # `concrete.fhe` is missing. Shipping real FHE is tracked separately: every
 # current concrete-python (2.9-2.11) requires numpy<2, needs setuptools<81
 # for pkg_resources, and needs a linker at runtime to compile circuits.

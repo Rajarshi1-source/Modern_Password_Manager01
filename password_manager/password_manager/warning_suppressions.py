@@ -3,7 +3,8 @@ Warning Suppressions for Development Environment
 
 This module suppresses common development warnings that don't affect functionality.
 These warnings are expected in local development environments where certain
-production-only libraries (liboqs, pqcrypto, concrete-python) aren't installed.
+libraries aren't installed (liboqs, which only the Docker image builds, and
+concrete-python, which is not installed anywhere).
 
 Usage:
     Add to the top of settings.py:
@@ -44,8 +45,8 @@ IN_DOCKER = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', 
 
 if DEBUG_MODE and not IN_DOCKER:
     # In local development without Docker, suppress crypto library warnings
-    # These are expected because liboqs, pqcrypto, and concrete-python
-    # require Linux-specific compilation that's handled in Docker
+    # These are expected because liboqs needs the C library the Docker image
+    # compiles, and concrete-python is not installed at all
     
     # Create a custom filter for crypto-related warnings
     class CryptoLibraryWarningFilter(logging.Filter):
@@ -53,7 +54,6 @@ if DEBUG_MODE and not IN_DOCKER:
         
         SUPPRESSED_MESSAGES = [
             'liboqs-python not available',
-            'pqcrypto not available',
             'concrete-python not available',
             'Using SIMULATED Kyber',
             'Using fallback encryption',

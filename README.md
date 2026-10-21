@@ -3025,45 +3025,41 @@ async _combineSharedSecrets(kyberSecret, x25519Secret) {
 ```
 
 ```python
-# Backend: kyber_crypto.py - Production Kyber Implementation
+# Backend: kyber_crypto.py (excerpt). liboqs is the only real backend;
+# without it a simulated KEM runs only if QUANTUM_CRYPTO['ALLOW_SIMULATION'].
 class ProductionKyber:
-    """
-    Production-ready CRYSTALS-Kyber implementation.
-    Uses liboqs-python or pqcrypto for real post-quantum cryptography.
-    """
-    
-    # Key sizes for CRYSTALS-Kyber-768 (NIST Level 3)
+    """FIPS 203 ML-KEM-768 by default; Kyber768 kept to decrypt older data."""
+
+    # Identical for ML-KEM-768 and Kyber768 (NIST Level 3), but the two
+    # are NOT interoperable: every stored artefact records its KEM.
     PUBLIC_KEY_SIZE = 1184
     PRIVATE_KEY_SIZE = 2400
     CIPHERTEXT_SIZE = 1088
     SHARED_SECRET_SIZE = 32
-    
+
     def generate_keypair(self) -> Tuple[bytes, bytes]:
-        """Generate CRYSTALS-Kyber-768 keypair."""
         if self.implementation == 'liboqs':
-            kem = oqs.KeyEncapsulation("Kyber768")
-            public_key = kem.generate_keypair()
-            private_key = kem.export_secret_key()
-            return public_key, private_key
-        elif self.implementation == 'pqcrypto':
-            return pqcrypto_kyber.generate_keypair()
-    
+            with oqs.KeyEncapsulation(self.algorithm) as kem:
+                return kem.generate_keypair(), kem.export_secret_key()
+        _require_simulation_allowed()
+        return self._generate_keypair_simulation()
+
     def encapsulate(self, public_key: bytes) -> Tuple[bytes, bytes]:
-        """Encapsulate a shared secret using recipient's public key."""
+        public_key = require_kem_length('public key', public_key,
+                                        self.PUBLIC_KEY_SIZE, self.algorithm)
         if self.implementation == 'liboqs':
-            kem = oqs.KeyEncapsulation("Kyber768")
-            ciphertext, shared_secret = kem.encap_secret(public_key)
-            return ciphertext, shared_secret
-        elif self.implementation == 'pqcrypto':
-            return pqcrypto_kyber.encrypt(public_key)
-    
+            with oqs.KeyEncapsulation(self.algorithm) as kem:
+                return kem.encap_secret(public_key)
+        _require_simulation_allowed()
+        return self._encapsulate_simulation(public_key)
+
     def decapsulate(self, ciphertext: bytes, private_key: bytes) -> bytes:
-        """Decapsulate shared secret using private key."""
+        # (length checks as above)
         if self.implementation == 'liboqs':
-            kem = oqs.KeyEncapsulation("Kyber768", private_key)
-            return kem.decap_secret(ciphertext)
-        elif self.implementation == 'pqcrypto':
-            return pqcrypto_kyber.decrypt(private_key, ciphertext)
+            with oqs.KeyEncapsulation(self.algorithm, private_key) as kem:
+                return kem.decap_secret(ciphertext)
+        _require_simulation_allowed()
+        return self._decapsulate_simulation(ciphertext, private_key)
 ```
 
 ---
