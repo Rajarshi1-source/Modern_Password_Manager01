@@ -365,7 +365,9 @@ class MLSecurityService {
             return {
                 success: true,
                 ...result,
-                fheEnabled: true,
+                // checkPasswordStrength falls back to a local estimate on any
+                // server error, so FHE is claimed only when the server says so.
+                fheEnabled: result.fheUsed === true,
             };
         } catch (error) {
             console.warn('FHE strength check failed, falling back to standard:', error);
