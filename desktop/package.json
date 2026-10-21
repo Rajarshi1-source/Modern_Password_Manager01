@@ -22,7 +22,6 @@
   "author": "Password Manager Team",
   "license": "MIT",
   "dependencies": {
-    "electron": "^39.8.1",
     "electron-store": "^8.1.0",
     "axios": "^1.5.0",
     "electron-updater": "^6.1.4"
@@ -31,7 +30,7 @@
     "node-dpapi": "^1.0.0"
   },
   "devDependencies": {
-    "electron": "^39.8.1",
+    "electron": "^44.9.0",
     "electron-builder": "^24.6.4",
     "electron-rebuild": "^3.2.9"
   },
@@ -42,6 +41,7 @@
       "output": "dist"
     },
     "files": [
+      "main.js",
       "src/**/*",
       "node_modules/**/*",
       "package.json"
