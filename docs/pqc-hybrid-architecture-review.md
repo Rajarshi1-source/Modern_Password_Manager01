@@ -164,7 +164,7 @@ told to leave it alone.
 
 | Component | File | What it is |
 |---|---|---|
-| `ProductionKyber` + `HybridEncryption` | `auth_module/services/kyber_crypto.py` | Kyber768 KEM (liboqs, else `pqcrypto`, else **simulated**) + HKDF-SHA256 (`info=b'kyber-hybrid-encryption-v1'`) + AES-256-GCM, 96-bit random nonce, optional AAD hash. A KEM-DEM construction; **no X25519**. |
+| `ProductionKyber` + `HybridEncryption` | `auth_module/services/kyber_crypto.py` | ML-KEM-768 KEM, Kyber768 for legacy decrypt (liboqs, else **simulated** when allowed; the `pqcrypto` fallback was removed in PR #558) + HKDF-SHA256 (`info=b'kyber-hybrid-encryption-v1'`) + AES-256-GCM, 96-bit random nonce, optional AAD hash. A KEM-DEM construction; **no X25519**. |
 | Kyber API | `auth_module/kyber_views.py`, `models.py` (`algorithm` default `'Kyber768'`, optional `x25519_*` columns) | Endpoints for keygen/encrypt/decrypt; the algorithm is stored per key, which is what makes a versioned migration possible. |
 | Other Kyber users | `auth_module/services/quantum_crypto_service.py` (was an **unconditional simulation**; since 2026-10-12 it delegates to `ProductionKyber`, see F13), `security/services/lattice_crypto_engine.py` (liboqs, `Kyber512/768/1024`) | Three independent Kyber consumers, three different code paths. |
 | Behavioral recovery | `behavioral_recovery/services/quantum_crypto_service.py` | See F1–F3. |

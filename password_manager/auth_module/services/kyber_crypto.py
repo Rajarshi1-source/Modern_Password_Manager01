@@ -4,9 +4,11 @@ Production-Ready Post-Quantum KEM Integration (FIPS 203 ML-KEM-768)
 This module provides real post-quantum cryptography using ML-KEM-768
 (FIPS 203). Round-3 Kyber768 is kept only to decrypt data written before the
 ML-KEM migration: see ``KYBER_768`` below.
-Without liboqs (or pqcrypto) it can fall back to a simulated KEM, but only
-when QUANTUM_CRYPTO['ALLOW_SIMULATION'] is True; otherwise every operation
-raises ImproperlyConfigured.
+liboqs is the only real backend. Without it the module can fall back to a
+simulated KEM, but only when QUANTUM_CRYPTO['ALLOW_SIMULATION'] is True;
+otherwise every operation raises ImproperlyConfigured. (A pqcrypto fallback
+used to sit in between; it was never installed in the shipped image, so it
+was removed rather than kept as an untested second KEM backend.)
 
 Security Level: NIST Level 3 (ML-KEM-768)
 
@@ -18,7 +20,6 @@ import os
 import logging
 import hashlib
 import base64
-import importlib
 from typing import Tuple, Optional
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import hashes
@@ -28,7 +29,7 @@ from cryptography.hazmat.backends import default_backend
 logger = logging.getLogger(__name__)
 
 # Track if warnings have been shown (to avoid spam during startup)
-_warnings_shown = {'liboqs': False, 'pqcrypto': False, 'simulation': False}
+_warnings_shown = {'liboqs': False, 'simulation': False}
 
 # Check if we're in development mode
 _DEBUG_MODE = os.environ.get('DEBUG', 'True').lower() == 'true'
@@ -125,25 +126,6 @@ except (ImportError, Exception, SystemExit):
         if not _DEBUG_MODE:
             logger.warning("[WARNING] liboqs-python not available - using simulated Kyber (NOT for production)")
 
-# Try pqcrypto as alternative. Current pqcrypto releases ship ml_kem_768 and
-# no kyber768; older ones are the reverse. Keep whichever is present.
-PQCRYPTO_AVAILABLE = False
-_PQCRYPTO_KEMS = {}
-
-if not LIBOQS_AVAILABLE:
-    for _kem_name, _module_name in ((ML_KEM_768, 'ml_kem_768'), (KYBER_768, 'kyber768')):
-        try:
-            _PQCRYPTO_KEMS[_kem_name] = importlib.import_module(f'pqcrypto.kem.{_module_name}')
-        except ImportError:
-            pass
-    PQCRYPTO_AVAILABLE = bool(_PQCRYPTO_KEMS)
-    if PQCRYPTO_AVAILABLE:
-        logger.info("pqcrypto loaded - KEMs: %s", ', '.join(_PQCRYPTO_KEMS))
-    elif not _warnings_shown['pqcrypto'] and not _SUPPRESS_CRYPTO_WARNINGS:
-        _warnings_shown['pqcrypto'] = True
-        if not _DEBUG_MODE:
-            logger.warning("[WARNING] pqcrypto not available - using simulated Kyber (NOT for production)")
-
 
 def _require_simulation_allowed() -> None:
     """
@@ -158,7 +140,7 @@ def _require_simulation_allowed() -> None:
     if not getattr(settings, 'QUANTUM_CRYPTO', {}).get('ALLOW_SIMULATION', False):
         from django.core.exceptions import ImproperlyConfigured
         raise ImproperlyConfigured(
-            "Refusing simulated Kyber: neither liboqs nor pqcrypto is available "
+            "Refusing simulated Kyber: liboqs is not available "
             "and QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False. The simulation is "
             "NOT post-quantum (or even a real KEM) and must never run in production."
         )
@@ -167,7 +149,7 @@ def _require_simulation_allowed() -> None:
 class ProductionKyber:
     """
     Production-ready post-quantum KEM (ML-KEM-768 by default).
-    Uses liboqs-python or pqcrypto for real post-quantum cryptography.
+    Uses liboqs-python for real post-quantum cryptography.
     Falls back to simulation only in development mode.
 
     One instance runs one KEM (``algorithm``). Decrypting a stored artefact
@@ -197,12 +179,6 @@ class ProductionKyber:
         if LIBOQS_AVAILABLE:
             self.implementation = 'liboqs'
             logger.debug("Using liboqs KEM implementation")
-        elif PQCRYPTO_AVAILABLE and self.algorithm in _PQCRYPTO_KEMS:
-            # Only if this pqcrypto build has the requested KEM (current
-            # releases ship ml_kem_768 but not kyber768, older ones the
-            # reverse); otherwise fall through as if pqcrypto were absent.
-            self.implementation = 'pqcrypto'
-            logger.debug("Using pqcrypto KEM implementation")
         elif allow_simulation:
             self.implementation = 'simulation'
             if not _warnings_shown['simulation'] and not _SUPPRESS_CRYPTO_WARNINGS:
@@ -211,15 +187,15 @@ class ProductionKyber:
                     logger.warning("Using SIMULATED Kyber - NOT SECURE FOR PRODUCTION")
         else:
             raise RuntimeError(
-                "No post-quantum cryptography library available. "
-                "Please install liboqs-python or pqcrypto: "
-                "pip install liboqs-python or pip install pqcrypto"
+                "No post-quantum cryptography library available: liboqs-python "
+                "(with the liboqs C library) is required. The backend image "
+                "builds both; see docker/backend/Dockerfile."
             )
 
     @property
     def is_real_pqc(self) -> bool:
         """Check if using real post-quantum cryptography."""
-        return self.implementation in ('liboqs', 'pqcrypto')
+        return self.implementation == 'liboqs'
 
     def generate_keypair(self) -> Tuple[bytes, bytes]:
         """
@@ -239,8 +215,6 @@ class ProductionKyber:
             )
         if self.implementation == 'liboqs':
             return self._generate_keypair_liboqs()
-        elif self.implementation == 'pqcrypto':
-            return self._generate_keypair_pqcrypto()
         else:
             _require_simulation_allowed()
             return self._generate_keypair_simulation()
@@ -258,8 +232,6 @@ class ProductionKyber:
         public_key = require_kem_length('public key', public_key, self.PUBLIC_KEY_SIZE, self.algorithm)
         if self.implementation == 'liboqs':
             return self._encapsulate_liboqs(public_key)
-        elif self.implementation == 'pqcrypto':
-            return self._encapsulate_pqcrypto(public_key)
         else:
             _require_simulation_allowed()
             return self._encapsulate_simulation(public_key)
@@ -279,8 +251,6 @@ class ProductionKyber:
         private_key = require_kem_length('private key', private_key, self.PRIVATE_KEY_SIZE, self.algorithm)
         if self.implementation == 'liboqs':
             return self._decapsulate_liboqs(ciphertext, private_key)
-        elif self.implementation == 'pqcrypto':
-            return self._decapsulate_pqcrypto(ciphertext, private_key)
         else:
             _require_simulation_allowed()
             return self._decapsulate_simulation(ciphertext, private_key)
@@ -309,32 +279,6 @@ class ProductionKyber:
         """Decapsulate using liboqs."""
         with oqs.KeyEncapsulation(self.algorithm, private_key) as kem:
             shared_secret = kem.decap_secret(ciphertext)
-        return shared_secret
-
-    # ==================== pqcrypto Implementation ====================
-
-    def _pqcrypto_kem(self):
-        try:
-            return _PQCRYPTO_KEMS[self.algorithm]
-        except KeyError:
-            raise RuntimeError(
-                f"The installed pqcrypto has no {self.algorithm} "
-                f"(it provides: {', '.join(_PQCRYPTO_KEMS) or 'none'})."
-            ) from None
-
-    def _generate_keypair_pqcrypto(self) -> Tuple[bytes, bytes]:
-        """Generate keypair using pqcrypto."""
-        public_key, private_key = self._pqcrypto_kem().generate_keypair()
-        return public_key, private_key
-
-    def _encapsulate_pqcrypto(self, public_key: bytes) -> Tuple[bytes, bytes]:
-        """Encapsulate using pqcrypto."""
-        ciphertext, shared_secret = self._pqcrypto_kem().encrypt(public_key)
-        return ciphertext, shared_secret
-
-    def _decapsulate_pqcrypto(self, ciphertext: bytes, private_key: bytes) -> bytes:
-        """Decapsulate using pqcrypto."""
-        shared_secret = self._pqcrypto_kem().decrypt(private_key, ciphertext)
         return shared_secret
 
     # ==================== Simulation Implementation ====================
@@ -441,8 +385,8 @@ class HybridKyberEncryption:
             Dictionary containing all encrypted components
         """
         # Step 1: KEM encapsulation. The instance that encapsulates also
-        # reports is_real_pqc: another KEM's instance may use a different
-        # implementation (e.g. pqcrypto for ML-KEM, simulation for Kyber768).
+        # reports is_real_pqc, so the blob describes the implementation that
+        # actually produced its shared secret, not some other KEM's instance.
         kem_impl = self._kem(kem)
         kyber_ciphertext, shared_secret = kem_impl.encapsulate(recipient_public_key)
 
@@ -531,7 +475,6 @@ def get_crypto_status() -> dict:
     """Get status of cryptographic implementations."""
     return {
         'liboqs_available': LIBOQS_AVAILABLE,
-        'pqcrypto_available': PQCRYPTO_AVAILABLE,
         'using_real_pqc': production_kyber.is_real_pqc,
         'implementation': production_kyber.implementation,
         'algorithm': production_kyber.algorithm,
@@ -540,6 +483,6 @@ def get_crypto_status() -> dict:
         'warnings': [] if production_kyber.is_real_pqc else [
             'Using SIMULATED post-quantum cryptography',
             'NOT SECURE FOR PRODUCTION USE',
-            'Install liboqs-python or pqcrypto for real PQC'
+            'Install liboqs-python (with the liboqs C library) for real PQC'
         ]
     }

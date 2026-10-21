@@ -96,12 +96,12 @@ class _FakeKeyEncapsulation:
 def fake_liboqs():
     oqs = MagicMock(name='oqs')
     oqs.KeyEncapsulation.side_effect = _FakeKeyEncapsulation
-    patcher = patch.multiple(kc, LIBOQS_AVAILABLE=True, PQCRYPTO_AVAILABLE=False, oqs=oqs)
+    patcher = patch.multiple(kc, LIBOQS_AVAILABLE=True, oqs=oqs)
     return oqs, patcher
 
 
 def simulated_kem():
-    return patch.multiple(kc, LIBOQS_AVAILABLE=False, PQCRYPTO_AVAILABLE=False)
+    return patch.multiple(kc, LIBOQS_AVAILABLE=False)
 
 
 def secret_keys_used_for_decapsulation(oqs):
@@ -528,26 +528,37 @@ class PasskeyRecoveryKeyVerificationTests(SimpleTestCase):
         self.assertFalse(backup.verify_recovery_key(None))
 
 
-class PqcryptoSelectionTests(SimpleTestCase):
-    """pqcrypto is used only for a KEM it actually provides."""
+class PqcryptoIsNotABackendTests(SimpleTestCase):
+    """liboqs is the only real KEM backend; an installed pqcrypto is ignored."""
 
-    def test_pqcrypto_without_ml_kem_is_not_selected_for_ml_kem(self):
-        with patch.multiple(kc, LIBOQS_AVAILABLE=False, PQCRYPTO_AVAILABLE=True,
-                            _PQCRYPTO_KEMS={'Kyber768': MagicMock()}):
-            ml_kem = kc.ProductionKyber(allow_simulation=True)
-            self.assertEqual(ml_kem.implementation, 'simulation')
-            self.assertFalse(ml_kem.is_real_pqc)
-            self.assertEqual(kc.ProductionKyber(algorithm='Kyber768').implementation, 'pqcrypto')
+    def test_installed_pqcrypto_is_never_selected(self):
+        fake_kem = MagicMock(name='pqcrypto.kem.ml_kem_768')
+        fake_modules = {
+            'pqcrypto': MagicMock(name='pqcrypto'),
+            'pqcrypto.kem': MagicMock(name='pqcrypto.kem'),
+            'pqcrypto.kem.ml_kem_768': fake_kem,
+            'pqcrypto.kem.kyber768': fake_kem,
+        }
+        self.assertFalse(hasattr(kc, 'PQCRYPTO_AVAILABLE'))
+        with patch.dict('sys.modules', fake_modules), simulated_kem():
+            for algorithm in (kc.ML_KEM_768, kc.KYBER_768):
+                kem = kc.ProductionKyber(allow_simulation=True, algorithm=algorithm)
+                self.assertEqual(kem.implementation, 'simulation')
+                self.assertFalse(kem.is_real_pqc)
             with self.assertRaises(RuntimeError):
                 kc.ProductionKyber(allow_simulation=False)
+            self.assertNotIn('pqcrypto_available', kc.get_crypto_status())
+        fake_kem.generate_keypair.assert_not_called()
+        fake_kem.encrypt.assert_not_called()
 
     @ALLOW_SIM
     def test_blob_reports_the_implementation_that_encapsulated(self):
-        # pqcrypto has only ML-KEM-768, so a Kyber768 encapsulation falls back
-        # to simulation: the blob must not claim real PQC.
-        with patch.multiple(kc, LIBOQS_AVAILABLE=False, PQCRYPTO_AVAILABLE=True,
-                            _PQCRYPTO_KEMS={'ML-KEM-768': MagicMock()}):
-            hybrid = kc.HybridKyberEncryption(allow_simulation=True)
-            self.assertTrue(hybrid.is_real_pqc)
-            blob = hybrid.encrypt(b'secret', b'P' * 1184, kem='Kyber768')
-        self.assertFalse(blob['is_real_pqc'])
+        _oqs, liboqs = fake_liboqs()
+        with liboqs:
+            real = kc.HybridKyberEncryption(allow_simulation=True)
+            pk, _sk = real.kyber.generate_keypair()
+            self.assertTrue(real.encrypt(b'secret', pk)['is_real_pqc'])
+        with simulated_kem():
+            simulated = kc.HybridKyberEncryption(allow_simulation=True)
+            self.assertFalse(simulated.is_real_pqc)
+            self.assertFalse(simulated.encrypt(b'secret', b'P' * 1184)['is_real_pqc'])

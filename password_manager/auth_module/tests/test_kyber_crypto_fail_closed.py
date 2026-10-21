@@ -13,7 +13,7 @@ import auth_module.services.kyber_crypto as kc
 
 
 def simulated_kem():
-    return patch.multiple(kc, LIBOQS_AVAILABLE=False, PQCRYPTO_AVAILABLE=False)
+    return patch.multiple(kc, LIBOQS_AVAILABLE=False)
 
 
 class SimulatedKyberFailClosedTests(SimpleTestCase):
