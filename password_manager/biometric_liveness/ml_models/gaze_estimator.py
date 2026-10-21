@@ -21,34 +21,36 @@ class GazeEstimator:
     """
     
     def __init__(self, model_path: Optional[str] = None, device: str = 'cpu'):
-        """Initialize gaze estimator."""
+        """
+        Initialize gaze estimator.
+        
+        ``model_path`` is reserved and unused: landmarks come from the shared
+        FaceLandmarker (face_landmarker.py), configured in settings.
+        """
         self.model_path = model_path
         self.device = device
         self._initialized = False
-        self._face_mesh = None
+        self._available = False
         
         logger.info(f"GazeEstimator initialized (device={device})")
     
     def _load_model(self):
-        """Lazy load the gaze model."""
+        """Resolve the shared MediaPipe Tasks FaceLandmarker (lazy, once)."""
         if self._initialized:
             return
         
-        try:
-            import mediapipe as mp
-            from mediapipe.python.solutions import face_mesh
-            self._face_mesh = face_mesh.FaceMesh(
-                static_image_mode=False,
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            self._initialized = True
-            logger.info("GazeEstimator model loaded")
-        except ImportError:
-            logger.warning("MediaPipe not available")
-            self._initialized = True
+        from .face_landmarker import get_face_landmarker
+        self._available = get_face_landmarker() is not None
+        self._initialized = True
+        if self._available:
+            logger.info("GazeEstimator using MediaPipe Tasks FaceLandmarker")
+        else:
+            logger.info("GazeEstimator: no FaceLandmarker; gaze unavailable")
+    
+    def is_available(self) -> bool:
+        """True when a real landmark source is loaded."""
+        self._load_model()
+        return self._available
     
     def estimate(
         self, 
@@ -110,16 +112,21 @@ class GazeEstimator:
         }
     
     def _extract_landmarks(self, image: np.ndarray) -> Optional[np.ndarray]:
-        """Extract facial landmarks."""
-        if self._face_mesh is None:
+        """
+        Extract the (478, 3) facial landmarks via the shared FaceLandmarker.
+        
+        Indices 468-477 are the iris ring, as with the legacy refine_landmarks
+        FaceMesh.
+        """
+        if not self._available:
             return None
         
-        results = self._face_mesh.process(image)
-        
-        if results.multi_face_landmarks:
-            landmarks = results.multi_face_landmarks[0]
-            return np.array([[lm.x, lm.y, lm.z] for lm in landmarks.landmark])
-        return None
+        from .face_landmarker import detect_face
+        detection = detect_face(image)
+        if detection is None:
+            return None
+        landmarks, _blendshapes = detection
+        return landmarks
     
     def _extract_eye_regions(
         self, 
