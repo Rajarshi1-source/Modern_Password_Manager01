@@ -1,7 +1,10 @@
 version: 2
 # Weekly version updates. Minor/patch bumps are grouped into one PR per
-# ecosystem/directory; majors arrive one per PR. Nothing here enables
-# auto-merge: every PR still needs CI and a human merge.
+# ecosystem/directory; majors arrive one per PR. Exception: the pip
+# crypto-stack group has no update-types filter, so its packages' majors
+# (cryptography, pyOpenSSL, fido2, PyJWT) can arrive together in one PR,
+# on purpose, since they cap each other. Nothing here enables auto-merge:
+# every PR still needs CI and a human merge.
 updates:
   # Smart contracts (npm)
   - package-ecosystem: "npm"
