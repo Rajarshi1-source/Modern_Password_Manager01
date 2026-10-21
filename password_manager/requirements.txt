@@ -73,7 +73,7 @@ sqlparse==0.6.0
 
 # HTTP & Networking
 requests==2.33.0
-certifi>=2026.4.22
+certifi>=2026.10.19
 charset-normalizer==3.4.1
 idna==3.18
 urllib3==2.8.0
