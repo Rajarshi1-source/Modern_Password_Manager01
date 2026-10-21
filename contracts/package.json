@@ -11,7 +11,8 @@
   "license": "ISC",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.13.0",
+    "npm": ">=11.10.0"
   },
   "devDependencies": {
     "@chainlink/contracts": "^1.3.0",
