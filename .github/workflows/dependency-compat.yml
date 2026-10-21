@@ -69,7 +69,8 @@ jobs:
         include:
           # Exactly what docker/backend/Dockerfile installs, resolved together.
           # ADVISORY until proven: nobody has ever resolved core + ml jointly (the
-          # Dockerfile installs them separately and swallows ML failures), so a
+          # Dockerfile installed them separately and, before PR #558, swallowed
+          # ML failures), so a
           # real pre-existing conflict could surface on the first run. Flip
           # `advisory` to false once it has run green for a few weeks.
           - name: Shipped image (core + ml)
