@@ -240,8 +240,12 @@ COPY password_manager/requirements-ml.txt .
 RUN pip install --upgrade "pip>=25.0" "setuptools>=78.1.1,<82" "wheel>=0.46.2" && \
     pip install --prefer-binary --retries 5 -r requirements-core.txt
 
-RUN pip install --prefer-binary --retries 5 -r requirements-ml.txt || \
-    echo "::warning title=ML dependencies skipped::pip failed on requirements-ml.txt, so this image has NO ML layer. Possible causes include disk exhaustion, an unsupported platform, dependency conflicts, or package-index/build errors. Check the Dependency Compatibility workflow (Shipped image leg) for resolver conflicts; it resolves core + ml together."
+# Mandatory: the backend cannot start without this layer. auth_module/urls.py
+# imports mfa_views, which imports numpy at module level, and numpy (like
+# OpenCV/Pillow/SciPy) comes only from requirements-ml.txt. A core-only image
+# fails URLconf loading on every request, so a failed ML install must fail
+# the build instead of shipping that image (it used to be `|| echo` warned).
+RUN pip install --prefer-binary --retries 5 -r requirements-ml.txt
 
 RUN pip install --prefer-binary --retries 5 \
     gunicorn daphne "uvicorn[standard]" redis django-redis

@@ -1,11 +1,12 @@
 # ============================================================================
 # Password Manager - Machine Learning & Heavy Scientific Dependencies
 # ============================================================================
-# Heavy ML/AI/CV deps split from requirements.txt to keep the core image
-# buildable on space-constrained CI runners (~14 GB free disk on GitHub
-# hosted runners). These are installed in a separate Docker layer that may
-# be skipped on space-constrained runners — the application has fallback
-# code paths when these libraries are unavailable.
+# Heavy ML/AI/CV deps split from requirements.txt into their own Docker
+# layer (docker/backend/Dockerfile) so the core layer caches separately.
+# The layer is NOT optional: numpy, OpenCV, Pillow and SciPy come only from
+# here, and the backend's URLconf imports numpy at module level, so a
+# core-only image cannot start. The Dockerfile fails the build if this
+# install fails.
 # ============================================================================
 
 # Use CPU-only PyTorch wheels to avoid pulling multi-GB CUDA packages on
