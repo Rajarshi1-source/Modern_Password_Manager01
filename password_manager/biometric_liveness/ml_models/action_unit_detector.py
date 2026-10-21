@@ -48,40 +48,35 @@ class ActionUnitDetector:
         Initialize AU detector.
         
         Args:
-            model_path: Path to trained model weights
+            model_path: Reserved for a trained AU model; unused. Landmarks come
+                from the shared FaceLandmarker (face_landmarker.py), whose
+                ``face_landmarker.task`` asset is configured in settings.
             device: 'cpu' or 'cuda'
         """
         self.model_path = model_path
         self.device = device
-        self._model = None
+        self._available = False
         self._initialized = False
         
         logger.info(f"ActionUnitDetector initialized (device={device})")
     
     def _load_model(self):
-        """Lazy load the detection model."""
+        """Resolve the shared MediaPipe Tasks FaceLandmarker (lazy, once)."""
         if self._initialized:
             return
         
-        try:
-            # Would load PyTorch/TensorFlow model here
-            # For now, using MediaPipe as fallback
-            import mediapipe as mp
-            from mediapipe.python.solutions import face_mesh
-            self._face_mesh = face_mesh.FaceMesh(
-                static_image_mode=False,
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            self._initialized = True
-            logger.info("ActionUnitDetector model loaded (MediaPipe backend)")
-        except ImportError:
-            logger.warning("MediaPipe not available, using fallback")
-            self._initialized = True
-        except Exception as e:
-            logger.error(f"Failed to load AU model: {e}")
+        from .face_landmarker import get_face_landmarker
+        self._available = get_face_landmarker() is not None
+        self._initialized = True
+        if self._available:
+            logger.info("ActionUnitDetector using MediaPipe Tasks FaceLandmarker")
+        else:
+            logger.info("ActionUnitDetector: no FaceLandmarker; AUs report inactive")
+    
+    def is_available(self) -> bool:
+        """True when a real landmark source is loaded."""
+        self._load_model()
+        return self._available
     
     def detect(self, face_image: np.ndarray) -> Dict[str, float]:
         """
@@ -113,16 +108,21 @@ class ActionUnitDetector:
             return {au: 0.0 for au in self.AU_LABELS}
     
     def _extract_landmarks(self, image: np.ndarray) -> Optional[np.ndarray]:
-        """Extract facial landmarks using MediaPipe."""
-        if not hasattr(self, '_face_mesh') or self._face_mesh is None:
+        """
+        Extract the (478, 3) facial landmarks via the shared FaceLandmarker.
+        
+        Same 468 face + 10 iris topology as the legacy refine_landmarks
+        FaceMesh, so the indices below are unchanged.
+        """
+        if not self._available:
             return None
         
-        results = self._face_mesh.process(image)
-        
-        if results.multi_face_landmarks:
-            landmarks = results.multi_face_landmarks[0]
-            return np.array([[lm.x, lm.y, lm.z] for lm in landmarks.landmark])
-        return None
+        from .face_landmarker import detect_face
+        detection = detect_face(image)
+        if detection is None:
+            return None
+        landmarks, _blendshapes = detection
+        return landmarks
     
     def _compute_aus_from_landmarks(self, landmarks: np.ndarray) -> Dict[str, float]:
         """Compute AU intensities from facial landmarks."""

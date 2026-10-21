@@ -292,6 +292,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # opencv-contrib-python (the GUI build), whose cv2 needs them even headless;
 # without them `import cv2` and mediapipe fail with "libxcb.so.1: cannot open
 # shared object file" and the biometric/liveness paths silently fall back.
+# libegl1/libgles2: mediapipe >= 1.0 Tasks (FaceLandmarker) dlopens
+# tasks/c/libmediapipe.so, which links libEGL.so.1 and libGLESv2.so.2;
+# without them every landmark-based liveness modality stays unavailable.
 RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
     libpq5 \
     netcat-openbsd \
@@ -316,6 +319,8 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
     libxcb1 \
     libgl1 \
     libglib2.0-0 \
+    libegl1 \
+    libgles2 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

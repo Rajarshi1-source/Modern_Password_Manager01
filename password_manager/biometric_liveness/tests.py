@@ -17,11 +17,11 @@ import numpy as np
 import uuid
 from collections import deque
 
-try:
-    from mediapipe.python.solutions import face_mesh as _mp_face_mesh
-    _HAS_MP_PYTHON = True
-except (ImportError, AttributeError):
-    _HAS_MP_PYTHON = False
+import tempfile
+from contextlib import contextmanager
+from types import SimpleNamespace
+
+from django.conf import settings
 
 from .models import (
     LivenessProfile, LivenessSession, LivenessChallenge,
@@ -44,6 +44,50 @@ User = get_user_model()
 def mock_celery_delay(*args, **kwargs):
     """Mock for Celery task.delay() to avoid Redis."""
     return MagicMock(id='mock-task-id')
+
+
+def _fake_landmarks(n=478):
+    """A deterministic (n, 3) landmark set with distinct, in-frame points."""
+    rng = np.random.default_rng(7)
+    return rng.uniform(0.2, 0.8, size=(n, 3))
+
+
+@contextmanager
+def _tasks_landmarker(landmarks=None):
+    """
+    Provision the shared MediaPipe Tasks FaceLandmarker for one test.
+
+    Configures a model path that exists on disk and stubs only the native
+    ``FaceLandmarker.create_from_options`` (the real ``face_landmarker.task``
+    asset is not in the repo). Everything else is the real Tasks API:
+    ``BaseOptions``, ``FaceLandmarkerOptions`` and ``mp.Image`` are built by
+    face_landmarker.py exactly as in production. Yields the stub detector;
+    its ``detect`` returns ``landmarks`` as the single face, or no face.
+    """
+    from mediapipe.tasks.python import vision
+    from .ml_models import face_landmarker
+
+    faces = []
+    if landmarks is not None:
+        faces = [[SimpleNamespace(x=x, y=y, z=z) for x, y, z in landmarks]]
+    detector = MagicMock()
+    detector.detect.return_value = SimpleNamespace(
+        face_landmarks=faces, face_blendshapes=[])
+    config = dict(getattr(settings, 'BIOMETRIC_LIVENESS', {}))
+    with tempfile.TemporaryDirectory() as tmp:
+        model = os.path.join(tmp, 'face_landmarker.task')
+        open(model, 'wb').close()
+        config.update(FACE_LANDMARKER_MODEL=model, FACE_LANDMARKER_POOL=1)
+        face_landmarker._reset_for_tests()
+        try:
+            with override_settings(BIOMETRIC_LIVENESS=config),                     patch.object(vision.FaceLandmarker, 'create_from_options',
+                                 return_value=detector) as create:
+                yield detector
+                options = create.call_args[0][0]
+                assert isinstance(options, vision.FaceLandmarkerOptions)
+                assert options.base_options.model_asset_path == model
+        finally:
+            face_landmarker._reset_for_tests()
 
 
 @patch('ml_dark_web.tasks.monitor_user_credentials.delay', mock_celery_delay)
@@ -123,19 +167,27 @@ class MicroExpressionAnalyzerTests(TestCase):
         self.assertEqual(self.analyzer._calculate_asymmetry({}), 0.0)
         self.assertEqual(self.analyzer._calculate_asymmetry({1: 0.5}), 0.0)
     
-    @unittest.skipUnless(_HAS_MP_PYTHON, "mediapipe.python.solutions not available")
-    @patch('mediapipe.python.solutions.face_mesh.FaceMesh')
-    def test_extract_landmarks(self, mock_face_mesh):
-        """Test landmark extraction from image."""
-        mock_instance = MagicMock()
-        mock_face_mesh.return_value = mock_instance
-        mock_instance.process.return_value = MagicMock(multi_face_landmarks=None)
-        
+    def test_extract_landmarks(self):
+        """No face in the frame -> None, through the Tasks FaceLandmarker."""
+        import mediapipe as mp
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        result = self.analyzer.extract_landmarks(frame)
+        with _tasks_landmarker(landmarks=None) as detector:
+            result = self.analyzer.extract_landmarks(frame)
         
         # Should return None if no face detected
         self.assertIsNone(result)
+        # The frame really went through the Tasks API as an mp.Image.
+        image = detector.detect.call_args[0][0]
+        self.assertIsInstance(image, mp.Image)
+        self.assertEqual((image.height, image.width), (480, 640))
+
+    def test_extract_landmarks_returns_tasks_landmarks(self):
+        """A detected face yields the Tasks landmarks as a (478, 3) array."""
+        lm = _fake_landmarks()
+        with _tasks_landmarker(landmarks=lm):
+            result = self.analyzer.extract_landmarks(
+                np.zeros((480, 640, 3), dtype=np.uint8))
+        np.testing.assert_allclose(result, lm)
 
 
 class GazeTrackingServiceTests(TestCase):
@@ -305,6 +357,69 @@ class GazeEstimatorTests(TestCase):
         """Test estimation with no frame."""
         result = self.estimator.estimate(None)
         self.assertIsNone(result)
+
+
+class LegacyDetectorTasksPortTests(TestCase):
+    """ActionUnitDetector / GazeEstimator run on the MediaPipe Tasks API.
+
+    Both used the legacy mediapipe.python.solutions FaceMesh, which no
+    current mediapipe wheel ships, so they silently fell back to "no
+    landmarks". They now share face_landmarker.py's Tasks detector pool.
+    """
+
+    def setUp(self):
+        from .ml_models import face_landmarker
+        face_landmarker._reset_for_tests()
+        self.addCleanup(face_landmarker._reset_for_tests)
+        self.frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    def test_no_legacy_solutions_import(self):
+        import inspect
+        from .ml_models import action_unit_detector, gaze_estimator
+        for module in (action_unit_detector, gaze_estimator):
+            self.assertNotIn('mediapipe.python', inspect.getsource(module))
+
+    def test_unavailable_without_model(self):
+        """No model asset configured -> unavailable, nothing fabricated."""
+        au = ActionUnitDetector()
+        gaze = GazeEstimator()
+        self.assertFalse(au.is_available())
+        self.assertFalse(gaze.is_available())
+        self.assertEqual(au.detect(self.frame),
+                         {name: 0.0 for name in ActionUnitDetector.AU_LABELS})
+        self.assertIsNone(gaze.estimate(self.frame))
+
+    def test_action_units_from_tasks_landmarks(self):
+        lm = _fake_landmarks()
+        with _tasks_landmarker(landmarks=lm):
+            detector = ActionUnitDetector()
+            self.assertTrue(detector.is_available())
+            aus = detector.detect(self.frame)
+        # Same AU geometry as before the port, now fed by real landmarks.
+        self.assertEqual(aus, detector._compute_aus_from_landmarks(lm))
+        self.assertEqual(set(aus), set(ActionUnitDetector.AU_LABELS))
+        self.assertTrue(any(v > 0 for v in aus.values()))
+
+    def test_action_units_no_face(self):
+        with _tasks_landmarker(landmarks=None):
+            aus = ActionUnitDetector().detect(self.frame)
+        self.assertEqual(aus, {name: 0.0 for name in ActionUnitDetector.AU_LABELS})
+
+    def test_gaze_from_tasks_landmarks(self):
+        lm = _fake_landmarks()
+        with _tasks_landmarker(landmarks=lm):
+            estimator = GazeEstimator()
+            self.assertTrue(estimator.is_available())
+            result = estimator.estimate(self.frame)
+        # Identical to estimating from the same landmarks passed in directly.
+        self.assertEqual(result, GazeEstimator().estimate(self.frame, face_landmarks=lm))
+        for key in ('gaze_x', 'gaze_y', 'screen_x', 'screen_y',
+                    'confidence', 'head_pose', 'left_eye', 'right_eye'):
+            self.assertIn(key, result)
+
+    def test_gaze_no_face(self):
+        with _tasks_landmarker(landmarks=None):
+            self.assertIsNone(GazeEstimator().estimate(self.frame))
 
 
 class FakeTextureClassifierTests(TestCase):
