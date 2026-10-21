@@ -7,15 +7,24 @@ Optimized for simple operations like:
 - Character type counting (encrypted)
 - Simple boolean operations on encrypted data
 
-Note: concrete-python only works on Linux x86_64.
-      In local development, the code uses fallback mode.
-      In production (Docker/Linux), FHE operations are fully functional.
+Availability: concrete-python is NOT installed in the shipped image and is
+not a project dependency. Every release up to 2.11.0 pins numpy<2 (the ML
+stack is on numpy 2) and imports pkg_resources (setuptools<81, below the
+security floor in requirements.txt). Without it, ``is_available`` is False and
+every method returns a PLAINTEXT result explicitly marked ``fhe: False``.
+``is_available`` is True only when concrete is importable AND every standard
+circuit compiled, so a partial install (e.g. no linker for circuit
+compilation) never reports FHE.
+
+Callers that send the plaintext password to this server gain no
+confidentiality from FHE here anyway: the server already holds the input.
 """
 
 import logging
 import hashlib
 import time
 import os
+import numpy as np
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass
 from enum import Enum
@@ -81,6 +90,11 @@ class EncryptedValue:
     metadata: Dict[str, Any]
 
 
+# Circuits every Concrete-backed operation depends on. The service reports
+# available only when all of them compiled.
+STANDARD_CIRCUITS = ('length_comparison', 'character_count', 'strength')
+
+
 class ConcreteService:
     """
     Service for lightweight FHE operations using Concrete-Python.
@@ -118,8 +132,14 @@ class ConcreteService:
             
             # Pre-compile common circuits
             self._compile_standard_circuits()
-            self._initialized = True
-            logger.info("ConcreteService initialized successfully")
+            missing = self.missing_circuits
+            self._initialized = not missing
+            if missing:
+                logger.error(
+                    "ConcreteService unavailable: circuits failed to compile: %s",
+                    ", ".join(missing))
+            else:
+                logger.info("ConcreteService initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize Concrete: {e}")
@@ -228,8 +248,9 @@ class ConcreteService:
             - Char type score: char_types * 10
             - Pattern penalty: -20 if has_common_pattern
             """
-            # Simplified scoring (Concrete requires bounded operations)
-            length_score = fhe.min(length * 4, 40)
+            # Simplified scoring (Concrete requires bounded operations).
+            # concrete.fhe has no `min`; np.minimum is a supported op.
+            length_score = np.minimum(length * 4, 40)
             char_score = char_types * 10
             pattern_penalty = has_common_pattern * 20
             
@@ -255,9 +276,25 @@ class ConcreteService:
             logger.warning(f"Could not compile strength circuit: {e}")
     
     @property
+    def missing_circuits(self) -> List[str]:
+        """Standard circuits that are not compiled."""
+        return [c for c in STANDARD_CIRCUITS if c not in self._compiled_circuits]
+
+    @property
     def is_available(self) -> bool:
-        """Check if Concrete FHE is available and initialized."""
-        return CONCRETE_AVAILABLE and self._initialized
+        """True only when concrete is installed and every standard circuit compiled."""
+        return CONCRETE_AVAILABLE and self._initialized and not self.missing_circuits
+
+    @property
+    def unavailable_reason(self) -> Optional[str]:
+        """Why FHE is unavailable, or None when it is available."""
+        if not CONCRETE_AVAILABLE:
+            return "concrete-python is not installed"
+        if self.missing_circuits:
+            return "circuits failed to compile: " + ", ".join(self.missing_circuits)
+        if not self._initialized:
+            return "initialization failed"
+        return None
     
     def encrypt_password_length(self, length: int) -> EncryptedValue:
         """
@@ -286,7 +323,7 @@ class ConcreteService:
                     operation_type="password_length",
                     encrypted_at=time.time(),
                     circuit_hash=self._get_circuit_hash('length_comparison'),
-                    metadata={"original_length": length}
+                    metadata={"fhe": True}
                 )
             else:
                 return self._fallback_encrypt(length, "password_length")
@@ -323,7 +360,7 @@ class ConcreteService:
                     operation_type="character_count",
                     encrypted_at=time.time(),
                     circuit_hash=self._get_circuit_hash('character_count'),
-                    metadata={"count_types": 4}
+                    metadata={"fhe": True, "count_types": 4}
                 )
             else:
                 return self._fallback_encrypt(counts, "character_count")
@@ -361,7 +398,7 @@ class ConcreteService:
                     operation_type="homomorphic_compare",
                     encrypted_at=time.time(),
                     circuit_hash=self._get_circuit_hash('length_comparison'),
-                    metadata={"operation": "comparison"}
+                    metadata={"fhe": True, "operation": "comparison"}
                 )
             else:
                 return self._fallback_compare(ct1, ct2)
@@ -410,6 +447,7 @@ class ConcreteService:
                     encrypted_at=time.time(),
                     circuit_hash=self._get_circuit_hash('strength'),
                     metadata={
+                        "fhe": True,
                         "decrypted": True,
                         "score": int(encrypted_result)
                     }
@@ -450,24 +488,20 @@ class ConcreteService:
             return None
     
     def _fallback_encrypt(self, value: Any, operation_type: str) -> EncryptedValue:
-        """Fallback encryption using standard cryptography (not FHE)."""
-        import json
-        
-        # Serialize value
-        if isinstance(value, dict):
-            serialized = json.dumps(value).encode()
-        else:
-            serialized = str(value).encode()
-        
-        # Simple hash for demo (in production, use actual encryption)
-        ciphertext = hashlib.sha256(serialized).digest()
-        
+        """
+        Plaintext result used when FHE is unavailable. NOT encrypted.
+
+        Carries no ciphertext (a former SHA-256 "ciphertext" of the value
+        looked like encryption but was a hash of the plaintext), and is
+        explicitly marked ``fhe: False`` so callers and the API can say so.
+        """
         return EncryptedValue(
-            ciphertext=ciphertext,
+            ciphertext=None,
             operation_type=operation_type,
             encrypted_at=time.time(),
-            circuit_hash="fallback",
+            circuit_hash="plaintext",
             metadata={
+                "fhe": False,
                 "fallback": True,
                 "fallback_value": value
             }
@@ -514,9 +548,11 @@ class ConcreteService:
         """Get service status information."""
         return {
             "available": self.is_available,
+            "unavailable_reason": self.unavailable_reason,
             "concrete_installed": CONCRETE_AVAILABLE,
             "initialized": self._initialized,
             "compiled_circuits": list(self._compiled_circuits.keys()),
+            "missing_circuits": self.missing_circuits,
             "config": {
                 "security_level": self.config.security_level,
                 "enable_parallel": self.config.enable_parallel,

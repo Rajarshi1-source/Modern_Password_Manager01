@@ -371,21 +371,23 @@ class SEALBatchService:
             return 0.0
     
     def _sum_slots(self, vector: Any, num_slots: int) -> Any:
-        """Sum the first num_slots of a CKKS vector."""
+        """
+        Sum the first num_slots of a CKKS vector into slot 0.
+        
+        Uses CKKSVector.sum() (rotations under the context's Galois keys).
+        The previous rotate-and-add loop called ``rotate_vector``, which
+        CKKSVector does not have, and a bare ``except`` swallowed the error,
+        so nothing was summed and the "score" was slot 0 alone. Errors now
+        propagate to the caller, whose handler falls back and marks the
+        result as not FHE.
+        """
         if not self.is_available:
             return vector
         
-        result = vector
-        
-        # Rotate and add to sum slots
-        for i in range(1, num_slots):
-            try:
-                rotated = vector.rotate_vector(-i)
-                result = result + rotated
-            except:
-                pass
-        
-        return result
+        size = vector.size()
+        if num_slots < size:
+            vector = vector * ([1.0] * num_slots + [0.0] * (size - num_slots))
+        return vector.sum()
     
     def _pad_to_slots(self, values: List[float]) -> List[float]:
         """Pad values to fill SIMD slots."""

@@ -71,6 +71,9 @@ class RoutingDecision:
     estimated_accuracy: float
     cache_key: Optional[str] = None
     metadata: Dict[str, Any] = None
+    # True only when the result was actually computed under FHE. A FHE tier
+    # whose service fell back to plaintext for this call is NOT fhe_used.
+    fhe_used: bool = False
 
 
 class FHEOperationRouter:
@@ -106,6 +109,14 @@ class FHEOperationRouter:
         OperationType.ENCRYPTED_COMPARE: EncryptionTier.HYBRID_FHE,
         OperationType.CHARACTER_COUNT: EncryptionTier.HYBRID_FHE,
     }
+    
+    # Operations _execute_full_fhe actually computes under SEAL.
+    FULL_FHE_OPERATIONS = frozenset({
+        OperationType.STRENGTH_CHECK,
+        OperationType.BATCH_STRENGTH,
+        OperationType.SIMILARITY_SEARCH,
+        OperationType.BREACH_DETECTION,
+    })
     
     # Estimated latencies per tier (ms)
     ESTIMATED_LATENCIES = {
@@ -175,13 +186,15 @@ class FHEOperationRouter:
         cached_result = self._check_cache(cache_key)
         
         if cached_result is not None:
+            # Only FHE-computed results are cached (below), so a hit is one.
             decision = RoutingDecision(
                 tier=EncryptionTier.CACHED_FHE,
                 service_name="cache",
                 estimated_latency_ms=self.ESTIMATED_LATENCIES[EncryptionTier.CACHED_FHE],
                 estimated_accuracy=1.0,
                 cache_key=cache_key,
-                metadata={"cache_hit": True}
+                metadata={"cache_hit": True},
+                fhe_used=True,
             )
             return decision, cached_result
         
@@ -191,8 +204,9 @@ class FHEOperationRouter:
         # Execute operation
         decision, result = self._execute_operation(op_type, tier, data, budget)
         
-        # Cache result if appropriate
-        if decision.tier != EncryptionTier.CACHED_FHE:
+        # Cache only real FHE results: a cached plaintext result would be
+        # served back labelled CACHED_FHE.
+        if decision.fhe_used:
             self._cache_result(cache_key, result)
         
         return decision, result
@@ -206,9 +220,10 @@ class FHEOperationRouter:
         
         default_tier = self.DEFAULT_TIERS.get(op_type, EncryptionTier.FULL_FHE)
         
-        # Check service availability
-        concrete_available = self.concrete_service.is_available if self._concrete else False
-        seal_available = self.seal_service.is_available if self._seal else False
+        # Check service availability (resolves the services; the cached
+        # attributes are None until first use, which is not "unavailable").
+        concrete_available = self.concrete_available
+        seal_available = self.seal_available
         
         # Adjust based on budget constraints
         if default_tier == EncryptionTier.FULL_FHE:
@@ -230,8 +245,11 @@ class FHEOperationRouter:
                 return EncryptionTier.CLIENT_ONLY
             
             if not concrete_available:
-                # Try upgrading to full FHE
-                if seal_available and budget.allows_full_fhe():
+                # Try upgrading to full FHE, but only for operations the SEAL
+                # path implements; others would pass plaintext through
+                # under a FULL_FHE label.
+                if (seal_available and budget.allows_full_fhe()
+                        and op_type in self.FULL_FHE_OPERATIONS):
                     return EncryptionTier.FULL_FHE
                 return EncryptionTier.CLIENT_ONLY
         
@@ -260,6 +278,11 @@ class FHEOperationRouter:
         
         elapsed_ms = int((time.time() - start_time) * 1000)
         
+        fhe_used = (
+            tier in (EncryptionTier.HYBRID_FHE, EncryptionTier.FULL_FHE)
+            and self._result_is_fhe(result)
+        )
+        
         decision = RoutingDecision(
             tier=tier,
             service_name=service_name,
@@ -268,10 +291,51 @@ class FHEOperationRouter:
             metadata={
                 "operation_type": op_type.value,
                 "actual_latency_ms": elapsed_ms
-            }
+            },
+            fhe_used=fhe_used,
         )
         
         return decision, result
+    
+    @property
+    def concrete_available(self) -> bool:
+        """Live Concrete availability (all circuits compiled)."""
+        service = self.concrete_service
+        return bool(service and service.is_available)
+    
+    @property
+    def seal_available(self) -> bool:
+        """Live SEAL (TenSEAL) availability."""
+        service = self.seal_service
+        return bool(service and service.is_available)
+    
+    @classmethod
+    def _result_is_fhe(cls, result: Any) -> bool:
+        """
+        True only if every ciphertext-bearing part of ``result`` is real FHE.
+        
+        Services fall back to plaintext per call (e.g. on an exception), and
+        mark those results: EncryptedValue.metadata['fhe'] is False, and
+        SEALCiphertext uses scheme 'fallback'. A result with no ciphertext
+        part at all is not FHE either.
+        """
+        found = []
+        
+        def walk(value):
+            if isinstance(value, EncryptedValue):
+                found.append(value.metadata.get('fhe') is True)
+            elif isinstance(value, SEALCiphertext):
+                found.append(value.scheme != 'fallback'
+                             and not value.metadata.get('fallback'))
+            elif isinstance(value, dict):
+                for v in value.values():
+                    walk(v)
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    walk(v)
+        
+        walk(result)
+        return bool(found) and all(found)
     
     def _execute_hybrid(self, op_type: OperationType, data: Any) -> Any:
         """Execute operation using Concrete (hybrid FHE)."""
@@ -477,9 +541,16 @@ class FHEOperationRouter:
     
     def get_status(self) -> Dict[str, Any]:
         """Get router status information."""
+        concrete = self.concrete_service
+        seal = self.seal_service
         return {
-            "concrete_available": self.concrete_service.is_available if self._concrete else False,
-            "seal_available": self.seal_service.is_available if self._seal else False,
+            # Live availability. When both are False every operation runs as
+            # plaintext CLIENT_ONLY and responses say fhe_used: false.
+            "fhe_available": self.concrete_available or self.seal_available,
+            "concrete_available": self.concrete_available,
+            "concrete": concrete.get_status() if concrete else None,
+            "seal_available": self.seal_available,
+            "seal": seal.get_status() if seal else None,
             "cache_enabled": self._cache is not None,
             "supported_operations": [op.value for op in OperationType],
             "tier_latencies": {

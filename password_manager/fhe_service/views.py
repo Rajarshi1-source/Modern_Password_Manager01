@@ -49,7 +49,9 @@ def log_fhe_operation(
             ip_address=request.META.get('REMOTE_ADDR') if request else None,
             user_agent=request.META.get('HTTP_USER_AGENT', '')[:500] if request else None,
             operation_type=operation_type,
-            encryption_tier=tier,
+            # Tier names arrive as enum names (CLIENT_ONLY); the model's
+            # choices, and fhe_metrics' tier_distribution, are lowercase.
+            encryption_tier=tier.lower(),
             status=status_result,
             total_time_ms=metrics.get('total_time_ms', 0),
             computation_time_ms=metrics.get('computation_time_ms', 0),
@@ -115,6 +117,7 @@ def encrypt_data(request):
                 'total_time_ms': elapsed_ms,
                 'computation_time_ms': decision.estimated_latency_ms,
                 'cache_hit': decision.tier == EncryptionTier.CACHED_FHE,
+                'fallback_used': not decision.fhe_used,
             },
             request=request
         )
@@ -124,6 +127,9 @@ def encrypt_data(request):
             'result': _serialize_result(result),
             'tier': decision.tier.name,
             'service': decision.service_name,
+            # False whenever the result was computed in plaintext (no FHE
+            # backend available, or the backend fell back for this call).
+            'fhe_used': decision.fhe_used,
             'latency_ms': elapsed_ms,
             'accuracy_estimate': decision.estimated_accuracy,
             'cached': decision.tier == EncryptionTier.CACHED_FHE
@@ -191,11 +197,13 @@ def strength_check(request):
             
             score = result.get('score', 0) if isinstance(result, dict) else 50
             tier_used = decision.tier.name
+            fhe_used = decision.fhe_used
             
         else:
             # Non-FHE fallback
             score = _calculate_strength_score_simple(password)
-            tier_used = 'client_only'
+            tier_used = EncryptionTier.CLIENT_ONLY.name
+            fhe_used = False
         
         elapsed_ms = int((time.time() - start_time) * 1000)
         
@@ -214,7 +222,8 @@ def strength_check(request):
             operation_type='strength_check',
             tier=tier_used,
             status_result='success',
-            metrics={'total_time_ms': elapsed_ms, 'score': score},
+            metrics={'total_time_ms': elapsed_ms, 'score': score,
+                     'fallback_used': not fhe_used},
             request=request
         )
         
@@ -222,7 +231,10 @@ def strength_check(request):
             'success': True,
             'score': score,
             'strength': strength,
-            'fhe_used': use_fhe and tier_used != 'client_only',
+            # Previously `tier_used != 'client_only'`, which compared the
+            # lowercase literal to the enum name CLIENT_ONLY and so reported
+            # FHE for every plaintext result.
+            'fhe_used': fhe_used,
             'tier': tier_used,
             'latency_ms': elapsed_ms
         })
@@ -316,7 +328,8 @@ def batch_strength_check(request):
             status_result='success',
             metrics={
                 'total_time_ms': elapsed_ms,
-                'batch_size': len(passwords)
+                'batch_size': len(passwords),
+                'fallback_used': not decision.fhe_used,
             },
             request=request
         )
@@ -326,6 +339,7 @@ def batch_strength_check(request):
             'results': results,
             'batch_size': len(passwords),
             'tier': decision.tier.name,
+            'fhe_used': decision.fhe_used,
             'latency_ms': elapsed_ms
         })
         
@@ -394,6 +408,7 @@ def encrypted_search(request):
             'success': True,
             'matches': matches,
             'tier': decision.tier.name,
+            'fhe_used': decision.fhe_used,
             'latency_ms': elapsed_ms
         })
         

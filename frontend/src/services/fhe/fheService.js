@@ -460,6 +460,8 @@ class FHEService {
         breakdown: response.data.breakdown,
         recommendations: response.data.recommendations,
         computedOn: response.data.computed_on || 'server',
+        // Only true when the server says it computed under FHE.
+        fheUsed: response.data.fhe_used === true || response.data.fhe_enabled === true,
       };
       
     } catch (error) {
@@ -687,6 +689,7 @@ class FHEService {
     return {
       score: Math.min(score, 100),
       tier: 'client_only',
+      fheUsed: false,
       breakdown: {
         length: Math.min(password.length * 4, 40),
         variety: ((/[a-z]/.test(password) ? 10 : 0) +

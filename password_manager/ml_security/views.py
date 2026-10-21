@@ -593,40 +593,36 @@ def batch_analyze_session(request):
 @throttle_classes([MLSecurityThrottle])
 def predict_password_strength_fhe(request):
     """
-    Predict password strength using FHE (Fully Homomorphic Encryption).
+    Length-based password strength for a client-side encrypted password.
     
-    The password is received encrypted from the client and strength
-    is computed on the encrypted data using FHE operations.
+    This endpoint does NOT compute on the ciphertext. The server holds no
+    evaluation key for client TFHE ciphertexts, and no server FHE backend can
+    consume them, so the only usable input is ``password_length``. The
+    response says so: ``fhe_enabled`` is always False and ``tier`` is
+    ``length_estimate``. (It previously labelled this estimate
+    ``hybrid_fhe``, and its "real FHE" branch passed a fourth argument that
+    route_operation does not accept.)
     
     POST Data:
     {
-        "encrypted_password": [...],  # FHE encrypted password bytes
-        "password_length": int,  # Encrypted or plaintext length
-        "budget": {
-            "max_latency_ms": 1000,
-            "min_accuracy": 0.9
-        },
-        "metadata": {...}  # Additional metadata
+        "encrypted_password": [...],  # Required for API compatibility; unused
+        "password_length": int,
     }
     
     Returns:
     {
         "success": true,
-        "score": 0.85,
-        "tier": "full_fhe",
+        "score": 0-100,
+        "tier": "length_estimate",
         "breakdown": {...},
-        "recommendations": [...]
+        "recommendations": [...],
+        "computed_on": "server",
+        "fhe_enabled": false
     }
     """
     try:
-        # Import FHE services
-        from fhe_service.services import get_fhe_router, EncryptionTier
-        from fhe_service.services.fhe_router import ComputationalBudget, OperationType
-        
         encrypted_password = request.data.get('encrypted_password')
         password_length = request.data.get('password_length', 0)
-        budget_data = request.data.get('budget', {})
-        metadata = request.data.get('metadata', {})
         
         if not encrypted_password:
             return error_response(
@@ -634,71 +630,30 @@ def predict_password_strength_fhe(request):
                 status_code=status.HTTP_400_BAD_REQUEST
             )
         
-        # Create computational budget
-        budget = ComputationalBudget(
-            max_latency_ms=budget_data.get('max_latency_ms', 1000),
-            max_memory_mb=budget_data.get('max_memory_mb', 512),
-            min_accuracy=budget_data.get('min_accuracy', 0.9),
-            priority=budget_data.get('priority', 5)
-        )
-        
-        # Get FHE router
-        fhe_router = get_fhe_router()
-        
-        # Determine if password was sent as simulated encryption
-        is_simulated = metadata.get('isSimulated', True)
-        
-        if is_simulated:
-            # For simulated encryption, we can use the password length
-            # to estimate strength without actual FHE computation
-            score = _estimate_strength_from_length(password_length)
-            tier = 'hybrid_fhe'
-            breakdown = {
-                'length_score': min(password_length * 4, 40),
-                'complexity_bonus': 10 if password_length >= 12 else 0,
-            }
-            recommendations = []
-            if score < 60:
-                recommendations.append('Use a longer password')
-                recommendations.append('Add special characters')
-        else:
-            # Route through actual FHE computation
-            tier, result = fhe_router.route_operation(
-                OperationType.STRENGTH_CHECK,
-                bytes(encrypted_password) if isinstance(encrypted_password, list) else encrypted_password,
-                budget,
-                metadata
+        try:
+            password_length = max(0, int(password_length))
+        except (TypeError, ValueError):
+            return error_response(
+                "password_length must be an integer",
+                status_code=status.HTTP_400_BAD_REQUEST
             )
-            
-            if result.get('success'):
-                score = result.get('score', 0)
-                breakdown = result.get('breakdown', {})
-                recommendations = result.get('recommendations', [])
-            else:
-                # Fallback to length-based estimation
-                score = _estimate_strength_from_length(password_length)
-                breakdown = {'fallback': True}
-                recommendations = []
+        
+        score = _estimate_strength_from_length(password_length)
+        recommendations = []
+        if score < 60:
+            recommendations.append('Use a longer password')
+            recommendations.append('Add special characters')
         
         return success_response({
             'score': score,
-            'tier': tier.name if hasattr(tier, 'name') else str(tier),
-            'breakdown': breakdown,
+            'tier': 'length_estimate',
+            'breakdown': {
+                'length_score': min(password_length * 4, 40),
+                'complexity_bonus': 10 if password_length >= 12 else 0,
+                'reason': 'ciphertext not evaluated; length-only estimate',
+            },
             'recommendations': recommendations,
             'computed_on': 'server',
-            'fhe_enabled': not is_simulated,
-        })
-    
-    except ImportError as e:
-        logger.warning(f"FHE service not available: {str(e)}")
-        # Fallback to length-based estimation
-        password_length = request.data.get('password_length', 0)
-        return success_response({
-            'score': _estimate_strength_from_length(password_length),
-            'tier': 'client_only',
-            'breakdown': {'fallback': True, 'reason': 'FHE service not available'},
-            'recommendations': [],
-            'computed_on': 'client_fallback',
             'fhe_enabled': False,
         })
     
