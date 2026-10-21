@@ -56,7 +56,7 @@ postgresql-client
 redis-cli
 
 # Frontend
-node 20+
+node 22.13+
 npm 10+
 
 # Deployment

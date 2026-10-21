@@ -2479,7 +2479,7 @@ k8s/
 ### Prerequisites
 
 - Python 3.13+
-- Node.js 20+
+- Node.js 22.13+ (Node 20 is end-of-life; Hardhat 3.10+ needs 22.13+, CI uses 22)
 - PostgreSQL 15+
 - Redis 7+
 - Docker & Docker Compose (optional)
