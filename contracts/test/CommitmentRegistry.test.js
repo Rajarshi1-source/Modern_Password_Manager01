@@ -1,11 +1,9 @@
 import { expect } from "chai";
 import { network } from "hardhat";
 
-// NOTE: `.to.emit().withArgs(...)` and `.to.be.revertedWith(...)` come
-// from `@nomicfoundation/hardhat-chai-matchers`, which does not yet
-// publish a Hardhat 3 compatible release. Tests using those matchers
-// will be skipped until upstream ships the v3 plugin. Tracking issue:
-// https://github.com/NomicFoundation/hardhat/issues for v3 chai-matchers.
+// `.to.emit().withArgs(...)` and `.to.be.revertedWith(...)` come from
+// `@nomicfoundation/hardhat-ethers-chai-matchers`, registered as a plugin
+// in hardhat.config.js.
 
 // Hardhat 3 + hardhat-ethers v3 no longer exposes `hre.ethers`. We open
 // a single connection in the top-level `before()` and reuse its
@@ -37,6 +35,18 @@ function anchorMessageHash(contractAddress, merkleRoot, batchSize) {
     ["uint256", "address", "bytes32", "uint256"],
     [chainId, contractAddress, merkleRoot, batchSize]
   );
+}
+
+/**
+ * Parent node of two Merkle siblings, as `verifyCommitment` computes it:
+ * keccak256 over the sorted pair (smaller hash first). The backend's
+ * MerkleTreeBuilder (blockchain/services/merkle_tree_builder.py) builds
+ * trees the same way, so a root built here in leaf order would never
+ * verify on-chain.
+ */
+function hashPair(a, b) {
+  const [lo, hi] = BigInt(a) <= BigInt(b) ? [a, b] : [b, a];
+  return ethers.solidityPackedKeccak256(["bytes32", "bytes32"], [lo, hi]);
 }
 
 describe("CommitmentRegistry", function () {
@@ -232,9 +242,7 @@ describe("CommitmentRegistry", function () {
       // Simple Merkle tree with 2 leaves
       const leaf1 = ethers.keccak256(ethers.toUtf8Bytes("commitment1"));
       const leaf2 = ethers.keccak256(ethers.toUtf8Bytes("commitment2"));
-      const merkleRoot = ethers.keccak256(
-        ethers.solidityPacked(["bytes32", "bytes32"], [leaf1, leaf2])
-      );
+      const merkleRoot = hashPair(leaf1, leaf2);
 
       // Anchor the commitment
       const batchSize = 2;
@@ -255,9 +263,7 @@ describe("CommitmentRegistry", function () {
     it("Should reject invalid Merkle proof", async function () {
       const leaf1 = ethers.keccak256(ethers.toUtf8Bytes("commitment1"));
       const leaf2 = ethers.keccak256(ethers.toUtf8Bytes("commitment2"));
-      const merkleRoot = ethers.keccak256(
-        ethers.solidityPacked(["bytes32", "bytes32"], [leaf1, leaf2])
-      );
+      const merkleRoot = hashPair(leaf1, leaf2);
 
       const batchSize = 2;
       const messageHash = anchorMessageHash(
@@ -278,9 +284,7 @@ describe("CommitmentRegistry", function () {
     it("C2: verifyCommitment is view (callable without a tx) and emits NO event", async function () {
       const leaf1 = ethers.keccak256(ethers.toUtf8Bytes("c2-leaf-1"));
       const leaf2 = ethers.keccak256(ethers.toUtf8Bytes("c2-leaf-2"));
-      const merkleRoot = ethers.keccak256(
-        ethers.solidityPacked(["bytes32", "bytes32"], [leaf1, leaf2])
-      );
+      const merkleRoot = hashPair(leaf1, leaf2);
 
       const batchSize = 2;
       const messageHash = anchorMessageHash(

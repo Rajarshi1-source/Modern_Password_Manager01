@@ -1,0 +1,51 @@
+name: Contracts CI
+
+# Runs the Hardhat suite under contracts/ so contract dependency bumps
+# (Dependabot's hardhat / hardhat-mocha / dotenv majors) are validated
+# before merge instead of by hand.
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/contracts-ci.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/contracts-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Hardhat tests
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: contracts/.nvmrc
+          cache: 'npm'
+          cache-dependency-path: contracts/package-lock.json
+
+      # Node 22 bundles npm 10; contracts/.npmrc sets engine-strict and
+      # package.json requires npm >= 11.10 (for min-release-age).
+      - name: Upgrade npm
+        run: npm install -g npm@11
+
+      - name: Install dependencies
+        working-directory: ./contracts
+        run: npm ci
+
+      - name: Run Hardhat tests
+        working-directory: ./contracts
+        run: npm test

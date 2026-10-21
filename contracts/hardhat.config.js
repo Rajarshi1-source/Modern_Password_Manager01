@@ -5,18 +5,19 @@
 // pulls in Hardhat 2 deps that conflict with Hardhat 3.
 import hardhatEthers from "@nomicfoundation/hardhat-ethers";
 import hardhatMocha from "@nomicfoundation/hardhat-mocha";
-// NOTE: `@nomicfoundation/hardhat-chai-matchers` is loaded directly by
-// each test file via `import "@nomicfoundation/hardhat-chai-matchers"`,
-// not as a Hardhat plugin. The current published versions don't ship a
-// Hardhat 3-compatible plugin entrypoint; the package's chai-side
-// `use(...)` registration works fine when imported for side effects.
+// `hardhat-ethers-chai-matchers` is the Hardhat 3 plugin that adds
+// `.to.emit()`, `.to.be.revertedWith()` etc. to chai. Without it those
+// properties do not exist, so `expect(tx).to.emit(...)` throws before
+// the transaction promise is awaited, and a reverting transaction then
+// surfaces as an unhandled rejection that aborts the whole mocha run.
+import hardhatEthersChaiMatchers from "@nomicfoundation/hardhat-ethers-chai-matchers";
 
 import { config as dotenvConfig } from "dotenv";
 dotenvConfig({ path: "../password_manager/.env" });
 
 /** @type import('hardhat/config').HardhatUserConfig */
 export default {
-  plugins: [hardhatEthers, hardhatMocha],
+  plugins: [hardhatEthers, hardhatMocha, hardhatEthersChaiMatchers],
   solidity: {
     version: "0.8.28",
     settings: {

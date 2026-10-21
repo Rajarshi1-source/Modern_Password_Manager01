@@ -9,10 +9,9 @@
 import { expect } from "chai";
 import { network } from "hardhat";
 
-// NOTE: `.to.emit().withArgs(...)` and `.to.be.revertedWith(...)` come
-// from `@nomicfoundation/hardhat-chai-matchers`, which does not yet
-// publish a Hardhat 3 compatible release. Tests using those matchers
-// will be skipped until upstream ships the v3 plugin.
+// `.to.emit().withArgs(...)` and `.to.be.revertedWith(...)` come from
+// `@nomicfoundation/hardhat-ethers-chai-matchers`, registered as a plugin
+// in hardhat.config.js.
 
 // Hardhat 3 + hardhat-ethers v3 no longer exposes `hre.ethers`. Connect
 // once per file via `network.create()` and stash the ethers handle on
@@ -33,6 +32,16 @@ before(async function () {
   };
 });
 
+/**
+ * Timestamp of the latest block. Deadlines must be relative to chain
+ * time, not `Date.now()`: tests that `evm_increaseTime` move the shared
+ * chain weeks ahead of the wall clock, so a wall-clock "+1 day" is
+ * already in the past for every test that runs after them.
+ */
+async function chainNow() {
+  return (await hre.ethers.provider.getBlock("latest")).timestamp;
+}
+
 describe("TimeLockedVault", function () {
   let vault;
   let owner, user1, user2, user3, beneficiary, arbitrator;
@@ -50,7 +59,7 @@ describe("TimeLockedVault", function () {
   // ===========================================================================
   describe("Time-Lock Vault", function () {
     it("should create a time-lock vault", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 86400; // +1 day
+      const futureTime = (await chainNow()) + 86400; // +1 day
       const tx = await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
       const receipt = await tx.wait();
 
@@ -62,7 +71,7 @@ describe("TimeLockedVault", function () {
     });
 
     it("should not unlock before time", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 86400;
+      const futureTime = (await chainNow()) + 86400;
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
 
       const canAccess = await vault.conditionalAccess(1);
@@ -70,7 +79,7 @@ describe("TimeLockedVault", function () {
     });
 
     it("should unlock after time passes", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 60; // +60 seconds
+      const futureTime = (await chainNow()) + 60; // +60 seconds
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
 
       // Advance time
@@ -87,14 +96,14 @@ describe("TimeLockedVault", function () {
     });
 
     it("should reject past unlock time", async function () {
-      const pastTime = Math.floor(Date.now() / 1000) - 100;
+      const pastTime = (await chainNow()) - 100;
       await expect(
         vault.connect(user1).createTimeLockVault(passwordHash, pastTime)
       ).to.be.revertedWith("Unlock time must be in the future");
     });
 
     it("should reject empty password hash", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 86400;
+      const futureTime = (await chainNow()) + 86400;
       await expect(
         vault.connect(user1).createTimeLockVault("0x" + "00".repeat(32), futureTime)
       ).to.be.revertedWith("Invalid password hash");
@@ -245,7 +254,7 @@ describe("TimeLockedVault", function () {
   describe("DAO Voting Vault", function () {
     it("should create a DAO voting vault", async function () {
       const voters = [user1.address, user2.address, user3.address];
-      const deadline = Math.floor(Date.now() / 1000) + 7 * 24 * 3600; // +7 days
+      const deadline = (await chainNow()) + 7 * 24 * 3600; // +7 days
 
       await vault.connect(owner).createDAOVault(passwordHash, voters, deadline, 5100);
 
@@ -257,7 +266,7 @@ describe("TimeLockedVault", function () {
 
     it("should record votes correctly", async function () {
       const voters = [user1.address, user2.address, user3.address];
-      const deadline = Math.floor(Date.now() / 1000) + 7 * 24 * 3600;
+      const deadline = (await chainNow()) + 7 * 24 * 3600;
 
       await vault.connect(owner).createDAOVault(passwordHash, voters, deadline, 5100);
 
@@ -272,7 +281,7 @@ describe("TimeLockedVault", function () {
 
     it("should approve when quorum met after deadline", async function () {
       const voters = [user1.address, user2.address, user3.address];
-      const deadline = Math.floor(Date.now() / 1000) + 60;
+      const deadline = (await chainNow()) + 60;
 
       await vault.connect(owner).createDAOVault(passwordHash, voters, deadline, 5100);
 
@@ -292,7 +301,7 @@ describe("TimeLockedVault", function () {
 
     it("should reject when quorum not met", async function () {
       const voters = [user1.address, user2.address, user3.address];
-      const deadline = Math.floor(Date.now() / 1000) + 60;
+      const deadline = (await chainNow()) + 60;
 
       await vault.connect(owner).createDAOVault(passwordHash, voters, deadline, 6700); // 67% quorum
 
@@ -308,7 +317,7 @@ describe("TimeLockedVault", function () {
 
     it("should reject duplicate votes", async function () {
       const voters = [user1.address, user2.address];
-      const deadline = Math.floor(Date.now() / 1000) + 86400;
+      const deadline = (await chainNow()) + 86400;
 
       await vault.connect(owner).createDAOVault(passwordHash, voters, deadline, 5100);
 
@@ -320,7 +329,7 @@ describe("TimeLockedVault", function () {
 
     it("should reject votes after deadline", async function () {
       const voters = [user1.address, user2.address];
-      const deadline = Math.floor(Date.now() / 1000) + 60;
+      const deadline = (await chainNow()) + 60;
 
       await vault.connect(owner).createDAOVault(passwordHash, voters, deadline, 5100);
 
@@ -388,7 +397,7 @@ describe("TimeLockedVault", function () {
   // ===========================================================================
   describe("General Operations", function () {
     it("should cancel a vault", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 86400;
+      const futureTime = (await chainNow()) + 86400;
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
 
       await vault.connect(user1).cancelVault(1);
@@ -397,7 +406,7 @@ describe("TimeLockedVault", function () {
     });
 
     it("should not allow non-creator to cancel", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 86400;
+      const futureTime = (await chainNow()) + 86400;
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
 
       await expect(
@@ -406,7 +415,7 @@ describe("TimeLockedVault", function () {
     });
 
     it("should not double-unlock", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 60;
+      const futureTime = (await chainNow()) + 60;
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
 
       await hre.network.provider.send("evm_increaseTime", [120]);
@@ -419,7 +428,7 @@ describe("TimeLockedVault", function () {
     });
 
     it("should track user vaults", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 86400;
+      const futureTime = (await chainNow()) + 86400;
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime + 1);
       await vault.connect(user2).createTimeLockVault(passwordHash, futureTime);
@@ -444,7 +453,7 @@ describe("TimeLockedVault", function () {
     it("should return correct vault count", async function () {
       expect(await vault.getVaultCount()).to.equal(0);
 
-      const futureTime = Math.floor(Date.now() / 1000) + 86400;
+      const futureTime = (await chainNow()) + 86400;
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
       expect(await vault.getVaultCount()).to.equal(1);
 
@@ -464,7 +473,7 @@ describe("TimeLockedVault", function () {
   // ===========================================================================
   describe("C3: unlockVault authorization", function () {
     it("blocks third-party callers on a ready TIME_LOCK vault", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 60;
+      const futureTime = (await chainNow()) + 60;
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
       await hre.network.provider.send("evm_increaseTime", [120]);
       await hre.network.provider.send("evm_mine");
@@ -477,7 +486,7 @@ describe("TimeLockedVault", function () {
     });
 
     it("allows the creator to unlock", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 60;
+      const futureTime = (await chainNow()) + 60;
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
       await hre.network.provider.send("evm_increaseTime", [120]);
       await hre.network.provider.send("evm_mine");
@@ -538,7 +547,7 @@ describe("TimeLockedVault", function () {
     });
 
     it("rejects on a non-DMS vault", async function () {
-      const futureTime = Math.floor(Date.now() / 1000) + 60;
+      const futureTime = (await chainNow()) + 60;
       await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
       await expect(
         vault.connect(beneficiary).triggerDeadMansSwitch(1)
