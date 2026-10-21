@@ -171,6 +171,37 @@ def test_ops_seal_cannot_run_are_not_upgraded_to_full_fhe(no_concrete):
         assert decision.fhe_used is False
 
 
+def _similarity_router(no_concrete, scheme):
+    seal = MagicMock(is_available=True)
+    ct = SEALCiphertext(ciphertext=object(), scheme=scheme, created_at=0.0,
+                        context_hash='ctx', metadata={})
+    seal.encrypt_password_features.return_value = ct
+    seal.batch_encrypt_passwords.return_value = [ct, ct]
+    seal.encrypted_similarity_search.return_value = [(0, 0.93)]
+    return FHEOperationRouter(concrete_service=no_concrete, seal_service=seal)
+
+
+def test_similarity_search_under_fhe_is_fhe_used(no_concrete):
+    """The SEAL similarity path decrypts its scores, so no ciphertext reaches
+    the result; its explicit provenance flag must still count as FHE."""
+    router = _similarity_router(no_concrete, 'ckks')
+    decision, result = router.route_operation(
+        'similarity_search', {'query': PASSWORD, 'vault': ['a1', 'b2']},
+        ComputationalBudget(max_latency_ms=2000))
+    assert decision.tier == EncryptionTier.FULL_FHE
+    assert result['matches'] == [(0, 0.93)]
+    assert decision.fhe_used is True
+
+
+def test_similarity_search_over_fallback_ciphertexts_is_not_fhe(no_concrete):
+    router = _similarity_router(no_concrete, 'fallback')
+    decision, result = router.route_operation(
+        'similarity_search', {'query': PASSWORD, 'vault': ['a1', 'b2']},
+        ComputationalBudget(max_latency_ms=2000))
+    assert decision.tier == EncryptionTier.FULL_FHE
+    assert decision.fhe_used is False
+
+
 def test_mixed_results_are_not_fhe():
     real = EncryptedValue(b'x', 'op', 0.0, 'h', {'fhe': True})
     fake = EncryptedValue(None, 'op', 0.0, 'plaintext', {'fhe': False})
