@@ -1,6 +1,6 @@
 # Small constraints to avoid the hyper/h2/pyasn1 conflicts and pin security-relevant transitive deps
 # Top-level primary pins (from your installed environment)
-Django==5.2.17
+Django==5.2.18
 djangorestframework==3.17.2
 djangorestframework-simplejwt==5.5.1
 celery==5.6.3
@@ -28,7 +28,7 @@ hpack==4.2.0
 # Other transitive/security pins recommended by pip-audit / pip-check steps
 filelock==3.20.3
 marshmallow==4.1.2
-certifi>=2026.4.22
+certifi>=2026.10.19  # PYSEC-2026-4320: fixed in the 2026.10.19 CA bundle
 sentencepiece==0.2.1
 tokenizers==0.22.1
 PySocks==1.7.1
