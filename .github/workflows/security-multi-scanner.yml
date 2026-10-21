@@ -43,13 +43,13 @@ jobs:
     
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0  # Full history for gitleaks
       
@@ -102,7 +102,7 @@ jobs:
 
       - name: Upload Gitleaks SARIF
         if: always() && steps.gitleaks_sarif.outputs.exists == 'true'
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
         with:
           sarif_file: gitleaks-results.sarif
           category: gitleaks
@@ -121,13 +121,13 @@ jobs:
     
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       
       # FIX #2: Pinned to commit hash
       - name: Set up Python
@@ -286,7 +286,7 @@ jobs:
       
       - name: Upload scan results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: dependency-scan-results
           path: |
@@ -307,13 +307,13 @@ jobs:
     
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       
       # =====================================================================
       # Scanner 1: Trivy (Filesystem Scan)
@@ -371,7 +371,7 @@ jobs:
       # scanner as a clean pass in the Security tab. Only upload when Trivy
       # actually produced real results (mirrors the Gitleaks upload gate above).
       - name: Upload Trivy Results
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
         if: always() && steps.trivy_sarif_check.outputs.valid == 'true'
         with:
           sarif_file: 'trivy-fs.sarif'
@@ -462,7 +462,7 @@ jobs:
       # and uploading it unconditionally would misrepresent an unavailable
       # scanner as a clean pass.
       - name: Upload Grype Results
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
         if: always() && steps.grype_sarif_check.outputs.valid == 'true'
         with:
           sarif_file: grype-fs.sarif
@@ -525,17 +525,17 @@ jobs:
     
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
 
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       
       # FIX #2: Pinned to commit hash
       - name: Download All Scan Results
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           path: scan-results
           pattern: 'dependency-scan-results' # Only downloading available artifacts
@@ -577,7 +577,7 @@ jobs:
       
       # FIX #2: Pinned to commit hash
       - name: Upload Consolidated Report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: security-report
           path: security-report.md
