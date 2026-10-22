@@ -202,6 +202,39 @@ def test_similarity_search_over_fallback_ciphertexts_is_not_fhe(no_concrete):
     assert decision.fhe_used is False
 
 
+def test_caller_supplied_fhe_key_is_not_provenance(no_concrete):
+    """Branches that echo the caller's data must not let a caller-written
+    {'fhe': True} claim FHE, get cached, and come back as CACHED_FHE."""
+    cache = MagicMock()
+    cache.get.return_value = None
+    seal_router = FHEOperationRouter(concrete_service=no_concrete,
+                                     seal_service=MagicMock(is_available=True),
+                                     cache=cache)
+    decision, result = seal_router.route_operation(
+        'batch_strength', {'fhe': True}, ComputationalBudget())
+    assert decision.tier == EncryptionTier.FULL_FHE
+    assert result == {'fhe': True}
+    assert decision.fhe_used is False
+
+    concrete = MagicMock(is_available=True)
+    hybrid_router = FHEOperationRouter(concrete_service=concrete,
+                                       seal_service=_unavailable('seal'),
+                                       cache=cache)
+    decision, _ = hybrid_router.route_operation(
+        'password_search', {'fhe': True}, ComputationalBudget())
+    assert decision.tier == EncryptionTier.HYBRID_FHE
+    assert decision.fhe_used is False
+    cache.set.assert_not_called()
+
+
+def test_decrypted_result_marker_survives_cache_pickling():
+    import pickle
+    from fhe_service.services.fhe_router import _DecryptedFHEResult
+    marked = pickle.loads(pickle.dumps(_DecryptedFHEResult({'matches': []}, fhe=True)))
+    assert marked == {'matches': []}
+    assert FHEOperationRouter._result_is_fhe(marked) is True
+
+
 def test_mixed_results_are_not_fhe():
     real = EncryptedValue(b'x', 'op', 0.0, 'h', {'fhe': True})
     fake = EncryptedValue(None, 'op', 0.0, 'plaintext', {'fhe': False})
