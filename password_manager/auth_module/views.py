@@ -1101,7 +1101,7 @@ class AuthViewSet(viewsets.ViewSet):
     def setup_recovery_key(self, request):
         """Retired with the rest of the legacy recovery-key flow: nothing can
         read what it stored. Recovery keys are enrolled at /recovery/key/enroll-v2."""
-        return self._legacy_recovery_retired()
+        return self._legacy_recovery_retired('/recovery/key/enroll-v2')
 
     @action(detail=False, methods=['post'])
     def update_recovery_status(self, request):
@@ -1153,10 +1153,10 @@ class AuthViewSet(viewsets.ViewSet):
     # to the server, and the flow could not complete. Vault recovery with a
     # recovery key is the layered v2 flow (vault/recovery-factors), which
     # unwraps the vault on the client.
-    def _legacy_recovery_retired(self):
+    def _legacy_recovery_retired(self, replacement='/recovery/key/use-v2'):
         return Response({
-            "error": "This recovery endpoint is retired. Use the recovery-key "
-                     "flow at /recovery/key/use-v2.",
+            "error": f"This recovery endpoint is retired. Use the recovery-key "
+                     f"flow at {replacement}.",
             "code": "legacy_recovery_retired",
         }, status=status.HTTP_410_GONE)
 

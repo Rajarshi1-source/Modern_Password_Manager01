@@ -280,7 +280,7 @@ const PasskeyPrimaryRecoveryInitiate = () => {
         primary_recovery_attempt_id: recoveryAttemptId
       });
 
-      toast.success('Fallback to social mesh recovery initiated!');
+      toast.success(response.data.message || 'If guardian recovery is set up, it has been started.');
       navigate('/recovery/social-mesh', {
         state: {
           primaryAttemptId: recoveryAttemptId,

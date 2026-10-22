@@ -55,6 +55,7 @@ class RecoveryEndpointHardeningTests(TestCase):
             'encryptedVault': 'new-vault', 'salt': 's2', 'method': 'm',
         }, format='json')
         self.assertEqual(r.status_code, 410, r.content)
+        self.assertIn('/recovery/key/enroll-v2', r.json()['error'])
         self.assertEqual(RecoveryKey.objects.get(user=self.owner).encrypted_vault, 'owner-vault-ct')
 
     def test_legacy_validate_recovery_key_is_retired(self):
@@ -72,6 +73,14 @@ class RecoveryEndpointHardeningTests(TestCase):
         attempt.similarity_scores = {'typing': similarity}
         attempt.save()
         return attempt
+
+    def test_behavioral_initiate_answers_unknown_and_unenrolled_accounts_the_same(self):
+        url = '/api/behavioral-recovery/initiate/'
+        unknown = self.anon.post(url, {'email': 'nobody@example.com'}, format='json')
+        unenrolled = self.anon.post(url, {'email': 'owner@example.com'}, format='json')
+        self.assertEqual(unknown.status_code, 200, unknown.content)
+        self.assertEqual(unenrolled.status_code, unknown.status_code, unenrolled.content)
+        self.assertEqual(unenrolled.json(), unknown.json())
 
     def test_behavioral_complete_is_retired_and_keeps_the_password(self):
         attempt = self._attempt()
