@@ -399,7 +399,8 @@ class MLSecurityService {
             return {
                 success: true,
                 results,
-                fheEnabled: true,
+                // batchCheckStrength runs on this device, not under FHE.
+                fheEnabled: false,
                 batchSize: passwords.length,
             };
         } catch (error) {

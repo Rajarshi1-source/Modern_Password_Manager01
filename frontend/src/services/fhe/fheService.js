@@ -428,119 +428,51 @@ class FHEService {
   }
   
   /**
-   * Check password strength using FHE (server-side computation on encrypted data)
-   * 
+   * Check password strength on this device.
+   *
+   * Computed locally; nothing about the password leaves the client. This
+   * used to upload a (simulated or TFHE) ciphertext as `encrypted_password`
+   * to /api/fhe/strength-check/, which reads `password`, so every call was a
+   * 400 that fell back to this same local estimate. Fixing the field name
+   * would mean sending the plaintext password, and no server backend can
+   * evaluate these client ciphertexts (there is no TFHE server key), so the
+   * upload is gone rather than repaired.
+   *
    * @param {string} password - Password to check
-   * @param {Object} options - Options including budget constraints
-   * @returns {Object} Strength check result
+   * @returns {Object} Strength result (computedOn: 'client', fheUsed: false)
    */
-  async checkPasswordStrength(password, options = {}) {
-    await this.initialize();
-    
-    try {
-      // Encrypt the password
-      const encryptedPassword = await this.encryptPassword(password);
-      
-      // Send to backend for FHE strength evaluation
-      const response = await api.post(FHE_CONFIG.ENDPOINTS.STRENGTH_CHECK, {
-        encrypted_password: this._serializeCiphertext(encryptedPassword.ciphertext),
-        password_length: password.length,
-        budget: {
-          max_latency_ms: options.maxLatency || 1000,
-          min_accuracy: options.minAccuracy || 0.9,
-        },
-        metadata: {
-          isSimulated: !this.wasmLoaded,
-        },
-      });
-      
-      return {
-        score: response.data.score,
-        tier: response.data.tier,
-        breakdown: response.data.breakdown,
-        recommendations: response.data.recommendations,
-        computedOn: response.data.computed_on || 'server',
-        // Only true when the server says it computed under FHE.
-        fheUsed: response.data.fhe_used === true || response.data.fhe_enabled === true,
-      };
-      
-    } catch (error) {
-      console.warn('[FHE] Server-side strength check failed, using client estimation');
-      return this._estimateStrengthLocally(password);
-    }
+  async checkPasswordStrength(password) {
+    return this._estimateStrengthLocally(password);
   }
   
   /**
-   * Batch check password strength for multiple passwords
-   * 
-   * @param {string[]} passwords - Array of passwords to check
-   * @param {Object} options - Options for the batch operation
-   * @returns {Object[]} Array of strength results
+   * Check strength for multiple passwords on this device.
+   *
+   * Local for the same reason as checkPasswordStrength: the batch endpoint
+   * reads `passwords` (plaintext), not the `encrypted_passwords` this sent.
+   *
+   * @param {string[]} passwords - Passwords to check
+   * @returns {Object[]} Strength results, in input order
    */
-  async batchCheckStrength(passwords, options = {}) {
-    await this.initialize();
-    
-    try {
-      // Encrypt all passwords
-      const encryptedPasswords = await Promise.all(
-        passwords.map(pwd => this.encryptPassword(pwd))
-      );
-      
-      // Send batch to backend
-      const response = await api.post(FHE_CONFIG.ENDPOINTS.BATCH_STRENGTH, {
-        encrypted_passwords: encryptedPasswords.map(ep => 
-          this._serializeCiphertext(ep.ciphertext)
-        ),
-        strength_rules: options.rules || {},
-        batch_size: passwords.length,
-      });
-      
-      return response.data.scores.map((score, index) => ({
-        score,
-        index,
-        passwordLength: passwords[index].length,
-      }));
-      
-    } catch (error) {
-      console.warn('[FHE] Batch strength check failed, using local estimation');
-      return passwords.map(pwd => this._estimateStrengthLocally(pwd));
-    }
+  async batchCheckStrength(passwords) {
+    return passwords.map((pwd, index) => ({
+      ...this._estimateStrengthLocally(pwd),
+      index,
+      passwordLength: pwd.length,
+    }));
   }
   
   /**
-   * Search encrypted passwords (homomorphic search)
-   * 
-   * @param {string} query - Search query
-   * @param {Object} options - Search options
-   * @returns {Object} Search results
+   * Encrypted vault search is not supported.
+   *
+   * This uploaded `encrypted_query` plus an unsalted SHA-256 of the query
+   * (dictionary-attackable) to /api/fhe/search/, which reads a plaintext
+   * `query` and so rejected every call. Nothing is sent now.
+   *
+   * @throws {Error} Always
    */
-  async encryptedSearch(query, options = {}) {
-    await this.initialize();
-    
-    try {
-      // Encrypt the search query
-      const encryptedQuery = await this.encryptPassword(query);
-      
-      // Send to backend for encrypted search
-      const response = await api.post(FHE_CONFIG.ENDPOINTS.SEARCH, {
-        encrypted_query: this._serializeCiphertext(encryptedQuery.ciphertext),
-        query_hash: await this._hashQuery(query),
-        options: {
-          fuzzy: options.fuzzy || false,
-          limit: options.limit || 10,
-        },
-      });
-      
-      return {
-        results: response.data.results,
-        count: response.data.count,
-        searchedOn: 'encrypted_server',
-      };
-      
-    } catch (error) {
-      console.error('[FHE] Encrypted search failed:', error);
-      throw new Error('Encrypted search failed');
-    }
+  async encryptedSearch() {
+    throw new Error('Encrypted search is not supported: the server cannot evaluate client-side ciphertexts');
   }
   
   /**
@@ -632,39 +564,6 @@ class FHEService {
     }
     
     return Array.from(this.publicKey.data || new Uint8Array());
-  }
-  
-  /**
-   * Serialize ciphertext for transmission
-   */
-  _serializeCiphertext(ciphertext) {
-    if (Array.isArray(ciphertext)) {
-      return ciphertext.map(c => 
-        Array.isArray(c) ? c : Array.from(c)
-      );
-    }
-    
-    if (ciphertext.data) {
-      return {
-        data: Array.from(ciphertext.data),
-        iv: ciphertext.iv ? Array.from(ciphertext.iv) : null,
-      };
-    }
-    
-    return ciphertext;
-  }
-  
-  /**
-   * Hash a query for cache lookup
-   */
-  async _hashQuery(query) {
-    const hash = await crypto.subtle.digest(
-      'SHA-256',
-      new TextEncoder().encode(query)
-    );
-    return Array.from(new Uint8Array(hash))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
   }
   
   /**
