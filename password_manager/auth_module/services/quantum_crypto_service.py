@@ -394,45 +394,44 @@ class QuantumCryptoService:
         
         return plaintext
     
+    # Binary fields of the dicts encrypt_shard_hybrid and encrypt_with_password
+    # return; every other field (algorithm, version) is stored as is.
+    _BINARY_SHARD_FIELDS = ('kyber_ciphertext', 'aes_ciphertext', 'ciphertext', 'salt', 'nonce')
+
     def serialize_encrypted_shard(self, encrypted_shard: Dict[str, bytes]) -> bytes:
         """
-        Serialize encrypted shard dict to bytes for database storage
-        
+        Serialize an encrypted dict to bytes for database storage
+
         Args:
-            encrypted_shard: Dictionary from encrypt_shard_hybrid
-        
+            encrypted_shard: Dictionary from encrypt_shard_hybrid or
+                encrypt_with_password
+
         Returns:
             Serialized bytes
         """
-        # Convert dict to JSON-serializable format
         serializable = {
-            'kyber_ciphertext': base64.b64encode(encrypted_shard['kyber_ciphertext']).decode('utf-8'),
-            'aes_ciphertext': base64.b64encode(encrypted_shard['aes_ciphertext']).decode('utf-8'),
-            'nonce': base64.b64encode(encrypted_shard['nonce']).decode('utf-8'),
-            'algorithm': encrypted_shard['algorithm'],
-            'version': encrypted_shard['version']
+            key: base64.b64encode(value).decode('utf-8')
+            if key in self._BINARY_SHARD_FIELDS else value
+            for key, value in encrypted_shard.items()
         }
-        
+
         return json.dumps(serializable).encode('utf-8')
-    
+
     def deserialize_encrypted_shard(self, serialized_shard: bytes) -> Dict[str, bytes]:
         """
-        Deserialize encrypted shard from database
-        
+        Deserialize an encrypted dict from database
+
         Args:
             serialized_shard: Bytes from database
-        
+
         Returns:
-            Dictionary suitable for decrypt_shard_hybrid
+            Dictionary suitable for decrypt_shard_hybrid or decrypt_with_password
         """
-        data = json.loads(serialized_shard.decode('utf-8'))
-        
+        data = json.loads(bytes(serialized_shard).decode('utf-8'))
+
         return {
-            'kyber_ciphertext': base64.b64decode(data['kyber_ciphertext']),
-            'aes_ciphertext': base64.b64decode(data['aes_ciphertext']),
-            'nonce': base64.b64decode(data['nonce']),
-            'algorithm': data['algorithm'],
-            'version': data['version']
+            key: base64.b64decode(value) if key in self._BINARY_SHARD_FIELDS else value
+            for key, value in data.items()
         }
 
 

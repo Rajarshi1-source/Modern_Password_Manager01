@@ -19,6 +19,8 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import transaction
 from datetime import timedelta
+import base64
+import binascii
 import uuid
 import secrets
 import hashlib
@@ -36,7 +38,7 @@ from .quantum_recovery_models import (
     BehavioralBiometrics,
     RecoveryShardType
 )
-from .services.kyber_crypto import DEFAULT_KEM
+from .services.kyber_crypto import DEFAULT_KEM, ProductionKyber
 from .services.quantum_crypto_service import quantum_crypto_service
 
 logger = logging.getLogger(__name__)
@@ -69,8 +71,10 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             "total_shards": 5,
             "threshold_shards": 3,
             "guardians": [
-                {"email": "guardian1@example.com", "requires_video": false},
-                {"email": "guardian2@example.com", "requires_video": true}
+                {"email": "guardian1@example.com", "requires_video": false,
+                 "public_key": "<base64 ML-KEM-768 public key>"},
+                {"email": "guardian2@example.com", "requires_video": true,
+                 "public_key": "<base64 ML-KEM-768 public key>"}
             ],
             "enable_temporal_shard": true,
             "enable_biometric_shard": true,
@@ -100,7 +104,26 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 return Response({
                     'error': 'threshold_shards must be between 2 and total_shards'
                 }, status=status.HTTP_400_BAD_REQUEST)
-            
+
+            # Each guardian's shard is sealed to a public key the guardian
+            # generated on their own device. The server never generates a
+            # guardian keypair: it would have to hold or discard the private
+            # key, and a discarded key makes the shard unrecoverable.
+            guardian_public_keys = []
+            for guardian_data in guardians_data[:total_shards]:
+                try:
+                    guardian_public_key = base64.b64decode(
+                        guardian_data.get('public_key') or '', validate=True
+                    )
+                except (binascii.Error, ValueError, TypeError, AttributeError):
+                    guardian_public_key = b''
+                if len(guardian_public_key) != ProductionKyber.PUBLIC_KEY_SIZE:
+                    return Response({
+                        'error': "Each guardian needs a 'public_key' (base64 "
+                                 f"{DEFAULT_KEM} public key) from their own device"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                guardian_public_keys.append(guardian_public_key)
+
             with transaction.atomic():
                 # Generate post-quantum keypair
                 public_key, private_key = quantum_crypto_service.generate_kyber_keypair()
@@ -142,10 +165,9 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                         break
                     
                     shard_index, shard_data = shards[i]
-                    
-                    # Generate guardian keypair
-                    guardian_public_key, _ = quantum_crypto_service.generate_kyber_keypair()
-                    
+
+                    guardian_public_key = guardian_public_keys[i]
+
                     # Encrypt shard with guardian's public key
                     encrypted_shard = quantum_crypto_service.encrypt_shard_hybrid(
                         shard_data,
