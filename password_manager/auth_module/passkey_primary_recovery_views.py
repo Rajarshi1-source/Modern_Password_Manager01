@@ -326,10 +326,12 @@ def complete_primary_passkey_recovery(request):
 
     try:
         # Find recovery attempt. A decoy, used or expired attempt answers
-        # exactly like a wrong key, so complete reveals neither.
+        # exactly like a wrong key, so complete reveals neither. A wrong key
+        # leaves the attempt retryable (key_invalid); progressive_lockout and
+        # the completion throttle bound the retries.
         recovery_attempt = PasskeyRecoveryAttempt.objects.filter(
             id=_attempt_id_from_token(recovery_attempt_id) or 0,
-            status='initiated'
+            status__in=('initiated', 'key_invalid')
         ).first()
         if recovery_attempt is None:
             progressive_lockout.record_failure(request, 'invalid_key')
