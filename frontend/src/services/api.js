@@ -145,9 +145,6 @@ const ApiService = {
     resetPassword: (data) => api.post('/auth/reset_password/', data),
     // Email verification endpoint
     verifyEmailExists: (data) => api.post('/auth/verify-email-exists/', data),
-    // Recovery key endpoints
-    setupRecoveryKey: (data) => api.post('/auth/setup-recovery-key/', data),
-    updateRecoveryStatus: (status) => api.post('/auth/update-recovery-status/', status),
     // Passkey endpoints
     registerPasskeyBegin: () => api.post('/auth/passkey/register/begin/'),
     registerPasskeyComplete: (data) => api.post('/auth/passkey/register/complete/', data),

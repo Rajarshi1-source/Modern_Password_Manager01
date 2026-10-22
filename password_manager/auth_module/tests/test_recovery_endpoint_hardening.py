@@ -48,6 +48,15 @@ class RecoveryEndpointHardeningTests(TestCase):
         self.assertEqual(r.status_code, 410, r.content)
         self.assertNotIn(b'owner-vault-ct', r.content)
 
+    def test_legacy_setup_recovery_key_is_retired(self):
+        authed = APIClient()
+        authed.force_authenticate(self.owner)
+        r = authed.post(reverse('setup-recovery-key'), {
+            'encryptedVault': 'new-vault', 'salt': 's2', 'method': 'm',
+        }, format='json')
+        self.assertEqual(r.status_code, 410, r.content)
+        self.assertEqual(RecoveryKey.objects.get(user=self.owner).encrypted_vault, 'owner-vault-ct')
+
     def test_legacy_validate_recovery_key_is_retired(self):
         r = self.anon.post(reverse('validate-recovery-key'), {
             'email': 'owner@example.com', 'recovery_key_hash': 'anything',
@@ -106,11 +115,18 @@ class RecoveryEndpointHardeningTests(TestCase):
 
     def test_recovery_status_returns_no_similarity_scores(self):
         attempt = self._attempt()
+        challenge = self._challenge(attempt)
+        challenge.similarity_score, challenge.passed = 0.91, True
+        challenge.save()
         r = self.anon.get(f'/api/behavioral-recovery/status/{attempt.attempt_id}/')
         self.assertEqual(r.status_code, 200, r.content)
         data = r.json()
         self.assertNotIn('overall_similarity', data)
         self.assertNotIn('similarity_scores', data)
+        self.assertEqual(len(data['challenges']), 1)
+        for nested in data['challenges']:
+            self.assertNotIn('similarity_score', nested)
+            self.assertNotIn('passed', nested)
 
     # --- passkey-primary recovery -------------------------------------------
 
@@ -168,13 +184,44 @@ class RecoveryEndpointHardeningTests(TestCase):
         r = self._complete(str(attempt.id), key)
         self.assertEqual(r.status_code, 401, r.content)
 
-    def test_passkey_fallback_answers_a_decoy_like_an_account_without_guardians(self):
+    def _fallback(self, token):
+        return self.anon.post(reverse('fallback_to_social_mesh_recovery'), {
+            'primary_recovery_attempt_id': token,
+        }, format='json')
+
+    def test_passkey_fallback_answers_every_account_the_same_way(self):
+        from auth_module.passkey_primary_recovery_models import PasskeyRecoveryAttempt
+        from auth_module.quantum_recovery_models import (
+            PasskeyRecoverySetup, RecoveryShard, RecoveryShardType)
         self._backup()
-        decoy = self.anon.post(reverse('fallback_to_social_mesh_recovery'), {
-            'primary_recovery_attempt_id': self._initiate('nobody')['recovery_attempt_id'],
-        }, format='json')
-        real = self.anon.post(reverse('fallback_to_social_mesh_recovery'), {
-            'primary_recovery_attempt_id': self._initiate('owner')['recovery_attempt_id'],
-        }, format='json')
-        self.assertEqual(decoy.status_code, 400, decoy.content)
-        self.assertEqual(decoy.json(), real.json())
+        setup = PasskeyRecoverySetup.objects.create(
+            user=self.owner, total_shards=3, threshold_shards=2, is_active=True)
+        RecoveryShard.objects.create(
+            recovery_setup=setup, shard_type=RecoveryShardType.DEVICE, shard_index=1,
+            encrypted_shard_data=b'x')
+        token = self._initiate('owner')['recovery_attempt_id']
+        self.assertEqual(self._complete(token, 'A' * 24).status_code, 401)
+        real = self._fallback(token)
+        decoy = self._fallback(self._initiate('nobody')['recovery_attempt_id'])
+        self.assertEqual(real.status_code, 200, real.content)
+        self.assertEqual(decoy.status_code, 200, decoy.content)
+        self.assertEqual(real.json(), decoy.json())
+        self.assertNotIn('threshold', real.json())
+        self.assertNotIn('total_guardians', real.json())
+        attempt = PasskeyRecoveryAttempt.objects.get(user=self.owner)
+        self.assertEqual(attempt.status, 'fallback_initiated')
+
+    def test_passkey_fallback_leaves_an_unverified_attempt_in_primary_recovery(self):
+        from auth_module.passkey_primary_recovery_models import PasskeyRecoveryAttempt
+        from auth_module.quantum_recovery_models import (
+            PasskeyRecoverySetup, RecoveryShard, RecoveryShardType)
+        key = self._backup()
+        setup = PasskeyRecoverySetup.objects.create(
+            user=self.owner, total_shards=3, threshold_shards=2, is_active=True)
+        RecoveryShard.objects.create(
+            recovery_setup=setup, shard_type=RecoveryShardType.DEVICE, shard_index=1,
+            encrypted_shard_data=b'x')
+        token = self._initiate('owner')['recovery_attempt_id']
+        self.assertEqual(self._fallback(token).status_code, 200)
+        self.assertEqual(PasskeyRecoveryAttempt.objects.get(user=self.owner).status, 'initiated')
+        self.assertEqual(self._complete(token, key).status_code, 200)

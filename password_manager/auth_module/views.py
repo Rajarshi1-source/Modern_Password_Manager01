@@ -1099,38 +1099,9 @@ class AuthViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['post'])
     def setup_recovery_key(self, request):
-        """
-        Store encrypted vault data protected by a recovery key
-        """
-        user = request.user
-        
-        # Validate request data
-        if not user.is_authenticated:
-            return Response({"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
-        
-        if not all(k in request.data for k in ['encryptedVault', 'salt', 'method']):
-            return Response({"error": "Missing required fields"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            # Create or update recovery key record
-            recovery_key, created = RecoveryKey.objects.update_or_create(
-                user=user,
-                defaults={
-                    'encrypted_vault': request.data['encryptedVault'],
-                    'salt': request.data['salt'],
-                    'method': request.data['method'],
-                }
-            )
-            
-            return Response({
-                "success": True,
-                "created": created,
-                "message": "Recovery key setup successful"
-            }, status=status.HTTP_200_OK)
-        
-        except Exception as e:
-            logger.exception("Handled Exception in view")
-            return Response({"error": 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        """Retired with the rest of the legacy recovery-key flow: nothing can
+        read what it stored. Recovery keys are enrolled at /recovery/key/enroll-v2."""
+        return self._legacy_recovery_retired()
 
     @action(detail=False, methods=['post'])
     def update_recovery_status(self, request):

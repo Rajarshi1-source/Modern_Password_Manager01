@@ -38,7 +38,6 @@ import zkProof from './services/zkProof';
 
 // Lazy load heavy components
 const PasswordStrengthMeterML = lazy(() => import('./Components/security/PasswordStrengthMeterML'));
-const RecoveryKeySetupPage = lazy(() => import('./Components/auth/RecoveryKeySetup'));
 // Layered Recovery Mesh (Unit 11) — tier-1 printable recovery key
 const RecoveryKeyEnrollV2 = lazy(() => import('./Components/recovery/layered/RecoveryKeyEnrollV2'));
 const RecoveryKeyUseV2 = lazy(() => import('./Components/recovery/layered/RecoveryKeyUseV2'));
@@ -2287,9 +2286,8 @@ function App() {
                 <Route path="/password-recovery" element={
                   isAuthenticated ? <Navigate to="/" /> : <PasswordRecoveryPage />
                 } />
-                <Route path="/recovery-key-setup" element={
-                  isAuthenticated ? <Navigate to="/" /> : <RecoveryKeySetupPage />
-                } />
+                {/* Legacy recovery-key setup is retired; enrollment is the layered v2 flow. */}
+                <Route path="/recovery-key-setup" element={<Navigate to="/recovery/key/enroll-v2" replace />} />
                 {/* Layered Recovery Mesh (Unit 11) — tier-1 printable recovery key */}
                 <Route path="/recovery/key/enroll-v2" element={
                   !isAuthenticated ? <Navigate to="/" /> : <RecoveryKeyEnrollV2 />

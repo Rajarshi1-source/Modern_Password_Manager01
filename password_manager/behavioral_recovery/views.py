@@ -21,8 +21,8 @@ from .models import (
     RecoveryAuditLog
 )
 from .serializers import (
-    BehavioralRecoveryAttemptSerializer,
-    BehavioralChallengeSerializer,
+    RecoveryAttemptStatusSerializer,
+    RecoveryChallengeSerializer,
     RecoveryInitiateSerializer,
     ChallengeSubmitSerializer,
     CommitmentSetupSerializer
@@ -33,9 +33,10 @@ from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
-# Similarity scores are never returned to the (anonymous) recovery caller:
-# they would let a caller tune forged behavioral data against the model.
-SIMILARITY_FIELDS = ('similarity_scores', 'overall_similarity')
+# Every endpoint here that the anonymous recovery caller uses serializes with
+# RecoveryAttemptStatusSerializer / RecoveryChallengeSerializer, which carry
+# no similarity scores: they would let a caller tune forged behavioral data
+# against the model.
 
 
 @api_view(['POST'])
@@ -110,7 +111,7 @@ def initiate_recovery(request):
                     'total_challenges': recovery_attempt.challenges_total,
                     'expected_completion': recovery_attempt.expected_completion_date.isoformat()
                 },
-                'first_challenge': BehavioralChallengeSerializer(first_challenge).data
+                'first_challenge': RecoveryChallengeSerializer(first_challenge).data
             },
             message="Behavioral recovery initiated. Complete the challenges over the next 5 days."
         )
@@ -140,11 +141,7 @@ def get_recovery_status(request, attempt_id):
     try:
         recovery_attempt = BehavioralRecoveryAttempt.objects.get(attempt_id=attempt_id)
         
-        serializer = BehavioralRecoveryAttemptSerializer(recovery_attempt)
-        status_data = {
-            key: value for key, value in serializer.data.items()
-            if key not in SIMILARITY_FIELDS
-        }
+        serializer = RecoveryAttemptStatusSerializer(recovery_attempt)
         
         # Calculate days remaining
         if recovery_attempt.expected_completion_date:
@@ -154,7 +151,7 @@ def get_recovery_status(request, attempt_id):
         
         return success_response(
             data={
-                **status_data,
+                **serializer.data,
                 'days_remaining': days_remaining,
                 'progress_percentage': (recovery_attempt.challenges_completed / recovery_attempt.challenges_total * 100)
                     if recovery_attempt.challenges_total > 0 else 0
@@ -230,7 +227,7 @@ def submit_challenge(request):
         
         return success_response(
             data={
-                'next_challenge': BehavioralChallengeSerializer(next_challenge).data if next_challenge else None,
+                'next_challenge': RecoveryChallengeSerializer(next_challenge).data if next_challenge else None,
                 'challenges_remaining': recovery_attempt.challenges_total - recovery_attempt.challenges_completed
             },
             message="Challenge evaluated successfully"
@@ -368,7 +365,7 @@ def get_next_challenge(request, attempt_id):
         
         if next_challenge:
             return success_response(
-                data={'challenge': BehavioralChallengeSerializer(next_challenge).data}
+                data={'challenge': RecoveryChallengeSerializer(next_challenge).data}
             )
         else:
             return success_response(

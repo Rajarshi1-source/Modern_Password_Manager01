@@ -79,6 +79,27 @@ def require_kem_length(what: str, value, expected: int, kem: str) -> bytes:
     return value
 
 
+def ml_kem_768_public_key_is_valid(public_key) -> bool:
+    """
+    FIPS 203 section 7.2 encapsulation-key check for an ML-KEM-768 key that
+    came from outside (for example, a guardian's device).
+
+    Type check: exactly 1184 bytes. Modulus check: every 12-bit coefficient
+    in the first 384*k = 1152 bytes is below q = 3329. ML-KEM.Encaps must
+    not run on a key that fails either check.
+    """
+    if not isinstance(public_key, (bytes, bytearray, memoryview)):
+        return False
+    public_key = bytes(public_key)
+    if len(public_key) != ProductionKyber.PUBLIC_KEY_SIZE:
+        return False
+    for i in range(0, 1152, 3):
+        b0, b1, b2 = public_key[i], public_key[i + 1], public_key[i + 2]
+        if (b0 | (b1 & 0x0F) << 8) >= 3329 or (b1 >> 4 | b2 << 4) >= 3329:
+            return False
+    return True
+
+
 def require_supported_kem(kem: str) -> str:
     """Return ``kem`` if this module supports it, else raise ValueError."""
     if kem not in SUPPORTED_KEMS:
