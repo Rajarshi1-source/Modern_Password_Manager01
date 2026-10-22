@@ -99,6 +99,30 @@ class GuardianRecoverySetupTests(TestCase):
         self.assertEqual(r.status_code, 400, r.content)
         self.assertEqual(PasskeyRecoverySetup.objects.filter(user=self.user).count(), 1)
 
+    def test_setup_that_cannot_meet_the_threshold_is_rejected(self):
+        # No guardians: only the device shard, below threshold_shards=2.
+        r = self._setup([])
+        self.assertEqual(r.status_code, 400, r.content)
+        # One guardian, device shard disabled: one shard, below the threshold.
+        r = self.client.post(self.url, {
+            'total_shards': 3, 'threshold_shards': 2, 'enable_device_shard': False,
+            'guardians': [_guardian('g1@example.com', _ml_kem_768_public_key())],
+        }, format='json')
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertFalse(PasskeyRecoverySetup.objects.filter(user=self.user).exists())
+
+    def test_simulated_public_keys_pass_the_encapsulation_key_check(self):
+        from auth_module.services.kyber_crypto import (
+            ProductionKyber, ml_kem_768_public_key_is_valid)
+        kem = ProductionKyber(allow_simulation=True)
+        if kem.is_real_pqc:
+            self.skipTest('liboqs is installed; this checks the simulation backend')
+        for _ in range(5):
+            public_key, private_key = kem.generate_keypair()
+            self.assertTrue(ml_kem_768_public_key_is_valid(public_key))
+            ciphertext, secret = kem.encapsulate(public_key)
+            self.assertEqual(kem.decapsulate(ciphertext, private_key), secret)
+
     def test_hybrid_shard_serialization_is_unchanged(self):
         hybrid = {'kyber_ciphertext': b'k', 'aes_ciphertext': b'a', 'nonce': b'n',
                   'algorithm': 'ML-KEM-768-AES-256-GCM', 'version': '1.0'}

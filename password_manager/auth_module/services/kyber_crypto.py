@@ -20,6 +20,7 @@ import os
 import logging
 import hashlib
 import base64
+import secrets
 from typing import Tuple, Optional
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives import hashes
@@ -325,7 +326,14 @@ class ProductionKyber:
         WARNING: Not cryptographically secure!
         """
         logger.debug("SIMULATION: Generating fake Kyber keypair")
-        public_key = os.urandom(self.PUBLIC_KEY_SIZE)
+        # Canonically encoded like a real key (12-bit coefficients below
+        # q = 3329, then a 32-byte seed), so it passes
+        # ml_kem_768_public_key_is_valid.
+        coefficients = [secrets.randbelow(3329) for _ in range(768)]
+        public_key = b''.join(
+            bytes((a & 0xFF, a >> 8 | (b & 0x0F) << 4, b >> 4))
+            for a, b in zip(coefficients[0::2], coefficients[1::2])
+        ) + os.urandom(32)
         private_key = (
             os.urandom(self._SIM_PK_OFFSET)
             + public_key
