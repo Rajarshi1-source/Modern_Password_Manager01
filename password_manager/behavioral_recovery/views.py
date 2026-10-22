@@ -66,23 +66,13 @@ def initiate_recovery(request):
         
         email = serializer.validated_data['email']
         
-        # Find user by email
-        try:
-            user = User.objects.get(email=email)
-        except User.DoesNotExist:
-            # Don't reveal whether user exists
+        # Find user by email. An unknown email and an account without
+        # behavioral commitments get the same answer: don't reveal either.
+        user = User.objects.filter(email=email).first()
+        if user is None or not BehavioralCommitment.objects.filter(user=user, is_active=True).exists():
             return error_response(
                 "If an account exists with this email, recovery instructions will be sent",
                 status_code=status.HTTP_200_OK
-            )
-        
-        # Check if user has behavioral commitments set up
-        commitments = BehavioralCommitment.objects.filter(user=user, is_active=True)
-        if not commitments.exists():
-            return error_response(
-                "Behavioral recovery not set up for this account",
-                code="no_commitments",
-                status_code=status.HTTP_400_BAD_REQUEST
             )
         
         # Initialize recovery orchestrator

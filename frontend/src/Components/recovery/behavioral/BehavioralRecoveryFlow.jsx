@@ -165,6 +165,9 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
           challenges_completed: 0,
           overall_similarity: 0
         });
+      } else {
+        // Account-neutral answer (unknown email or no behavioral setup)
+        setError(response.data.message);
       }
     } catch (err) {
       console.error('Error initiating recovery:', err);
