@@ -232,24 +232,19 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
       });
       
       if (response.data.success) {
-        // Update recovery attempt with new similarity scores
+        // The server does not return similarity scores
         setRecoveryAttempt(prev => ({
           ...prev,
-          challenges_completed: prev.challenges_completed + 1,
-          overall_similarity: response.data.data.overall_similarity
+          challenges_completed: prev.challenges_completed + 1
         }));
-        
+
         // Load next challenge
         if (response.data.data.next_challenge) {
           setCurrentChallenge(response.data.data.next_challenge);
         } else {
           // All challenges completed
           setCurrentChallenge(null);
-          
-          // Check if similarity threshold met
-          if (response.data.data.overall_similarity >= 0.87) {
-            setCompleted(true);
-          }
+          setCompleted(true);
         }
       }
     } catch (err) {
@@ -261,13 +256,11 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
   };
   
   /**
-   * Complete recovery with new password
+   * Behavioral checks cannot restore access on their own; continue with the
+   * recovery key, which unlocks the vault on this device.
    */
   const handleCompleteRecovery = () => {
-    // Navigate to password reset page
-    navigate('/password-recovery/finalize', {
-      state: { attemptId, similarityScore: recoveryAttempt?.overall_similarity }
-    });
+    navigate('/recovery/key/use-v2');
   };
   
   // Render loading state
@@ -311,13 +304,13 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
         <Content>
           <SuccessContainer>
             <FaCheckCircle />
-            <h2>Recovery Authorized!</h2>
+            <h2>Challenges Submitted</h2>
             <p>
-              Your behavioral similarity score of {(recoveryAttempt.overall_similarity * 100).toFixed(1)}%
-              meets our security threshold. You can now reset your password.
+              Behavioral checks cannot restore access to your account on their own.
+              Use your recovery key to unlock your vault and set a new master password.
             </p>
             <Button onClick={handleCompleteRecovery}>
-              Reset Password Now
+              Use Recovery Key
             </Button>
           </SuccessContainer>
         </Content>

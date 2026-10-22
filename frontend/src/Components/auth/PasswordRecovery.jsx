@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
-import { CryptoService } from '../../services/cryptoService';
 import ApiService from '../../services/api';
 import { errorTracker } from '../../services/errorTracker';
 import { FaKey, FaEnvelope, FaCheckCircle, FaExclamationCircle, FaBrain } from 'react-icons/fa';
@@ -195,9 +194,10 @@ const LoadingSpinner = styled.div`
 /**
  * Password Recovery Component
  * 
- * Provides two recovery methods:
+ * Provides these recovery methods:
  * 1. Email-based recovery - sends a password reset link
- * 2. Recovery key - uses the previously set up recovery key to reset master password
+ * 2. Recovery key - points to the layered recovery-key flow (/recovery/key/use-v2),
+ *    which unwraps the vault on this device
  */
 const PasswordRecovery = () => {
   const navigate = useNavigate();
@@ -205,12 +205,6 @@ const PasswordRecovery = () => {
   // State for email-based recovery
   const [email, setEmail] = useState('');
   const [submitted, setSubmitted] = useState(false);
-  
-  // State for recovery key flow
-  const [recoveryKey, setRecoveryKey] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [recoveryStage, setRecoveryStage] = useState('initial'); // initial, validating, success
   
   // Shared state
   const [error, setError] = useState('');
@@ -226,7 +220,6 @@ const PasswordRecovery = () => {
     setActiveTab(tabIndex);
     setError('');
     setSubmitted(false);
-    setRecoveryStage('initial');
     setShowBehavioralFlow(false);
   };
   
@@ -252,106 +245,6 @@ const PasswordRecovery = () => {
     } catch (err) {
       setError('An error occurred. Please try again later.');
       errorTracker.captureError(err, 'PasswordRecovery:EmailSubmit', { email }, 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Recovery key flow - Step 1: Validate key
-  const validateRecoveryKey = async () => {
-    if (!email || !recoveryKey) {
-      setError('Please enter both email and recovery key.');
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    
-    try {
-      const response = await ApiService.auth.validateRecoveryKey({ 
-        email, 
-        recovery_key_hash: recoveryKey.replace(/-/g, '')
-      });
-      
-      if (response.data.valid) {
-        setRecoveryStage('validating');
-      } else {
-        setError('Invalid recovery key or email. Please check and try again.');
-      }
-    } catch (err) {
-      setError('Failed to validate recovery key. Please check your credentials and try again.');
-      errorTracker.captureError(err, 'PasswordRecovery:ValidateKey', { email }, 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Recovery key flow - Step 2: Reset password
-  const completeRecoveryWithKey = async (e) => {
-    e.preventDefault();
-    
-    if (newPassword !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
-    
-    if (newPassword.length < 12) {
-      setError('Password must be at least 12 characters long.');
-      return;
-    }
-    
-    // Check password strength
-    if (!/[A-Z]/.test(newPassword) || !/[a-z]/.test(newPassword) || 
-        !/[0-9]/.test(newPassword) || !/[^A-Za-z0-9]/.test(newPassword)) {
-      setError('Password must contain uppercase, lowercase, number, and special character.');
-      return;
-    }
-    
-    setLoading(true);
-    setError('');
-    
-    try {
-      // Get encrypted vault data from server
-      const vaultResponse = await ApiService.auth.getEncryptedVault({ 
-        email, 
-        recovery_key_hash: recoveryKey.replace(/-/g, '')
-      });
-      
-      const { encryptedVault, salt, userId } = vaultResponse.data;
-      
-      // Use crypto service to decrypt vault with recovery key
-      const cryptoService = new CryptoService();
-      const derivedKey = await cryptoService.deriveKeyFromRecoveryKey(recoveryKey, salt);
-      
-      try {
-        // Try to decrypt - this will throw an error if the key is invalid
-        const decryptedVault = await cryptoService.decrypt(encryptedVault, derivedKey);
-        
-        // Generate new salt for better security
-        const newSalt = window.crypto.getRandomValues(new Uint8Array(16));
-        const newSaltBase64 = btoa(String.fromCharCode.apply(null, newSalt));
-        
-        // Derive new key from new password
-        const newDerivedKey = await cryptoService.deriveKey(newPassword, newSaltBase64);
-        const newEncryptedVault = await cryptoService.encrypt(decryptedVault, newDerivedKey);
-        
-        // Save new password and vault to backend
-        await ApiService.auth.resetWithRecoveryKey({
-          user_id: userId,
-          new_encrypted_vault: newEncryptedVault,
-          new_salt: newSaltBase64,
-          email: email
-        });
-        
-        setRecoveryStage('success');
-      } catch (decryptError) {
-        setError('Invalid recovery key. Could not decrypt your vault.');
-        setRecoveryStage('initial');
-        errorTracker.captureError(decryptError, 'PasswordRecovery:DecryptVault', { email }, 'error');
-      }
-    } catch (err) {
-      setError('An error occurred during recovery. Please try again.');
-      errorTracker.captureError(err, 'PasswordRecovery:CompleteRecovery', { email }, 'error');
     } finally {
       setLoading(false);
     }
@@ -384,37 +277,6 @@ const PasswordRecovery = () => {
               <SecondaryButton onClick={() => navigate('/')}>
                 Back to Login
               </SecondaryButton>
-            </SuccessContainer>
-          </Content>
-        </Card>
-      </Container>
-    );
-  }
-
-  // Render recovery key success state
-  if (activeTab === 1 && recoveryStage === 'success') {
-    return (
-      <Container>
-        <Card>
-          <Header>
-            <h1>Password Reset Successful</h1>
-            <p>Your master password has been updated</p>
-          </Header>
-          <Content>
-            <SuccessContainer>
-              <FaCheckCircle />
-              <h2>All Done!</h2>
-              <p>
-                Your master password has been successfully reset using your recovery key.
-                You can now log in with your new password.
-              </p>
-              {/* Test-friendly recovery success indicator */}
-              <span className="sr-only" data-testid="recovery-status">
-                Recovery Successful! Your account has been restored.
-              </span>
-              <Button onClick={() => navigate('/')}>
-                Log In Now
-              </Button>
             </SuccessContainer>
           </Content>
         </Card>
@@ -484,98 +346,23 @@ const PasswordRecovery = () => {
             </form>
           )}
           
-          {activeTab === 1 && recoveryStage === 'initial' && (
+          {activeTab === 1 && (
             <>
               <HelpText>
-                If you've set up a recovery key, you can use it to reset your master password.
+                Your recovery key unlocks your vault on this device; it is never sent to the
+                server. Continue to the recovery-key page to restore access.
               </HelpText>
-              
-              <FormGroup>
-                <Label htmlFor="email-recovery">Email Address</Label>
-                <Input
-                  type="email"
-                  id="email-recovery"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@gmail.com"
-                  required
-                  autoFocus
-                />
-              </FormGroup>
-              
-              <FormGroup>
-                <Label htmlFor="recovery-key">Recovery Key</Label>
-                <Input
-                  type="text"
-                  id="recovery-key"
-                  value={recoveryKey}
-                  onChange={(e) => setRecoveryKey(e.target.value)}
-                  placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
-                  required
-                />
-                <HelpText>
-                  Enter your 24-character recovery key with or without hyphens.
-                </HelpText>
-              </FormGroup>
-              
-              <Button onClick={validateRecoveryKey} disabled={loading || !email || !recoveryKey}>
-                {loading ? <LoadingSpinner /> : 'Continue'}
+
+              <Button type="button" onClick={() => navigate('/recovery/key/use-v2')}>
+                Use Recovery Key
               </Button>
-              
+
               <SecondaryButton type="button" onClick={() => navigate('/')} style={{ marginTop: '12px' }}>
                 Back to Login
               </SecondaryButton>
             </>
           )}
 
-          {activeTab === 1 && recoveryStage === 'validating' && (
-            <form onSubmit={completeRecoveryWithKey}>
-              <HelpText>
-                Enter a new master password for your account.
-              </HelpText>
-              
-              <FormGroup>
-                <Label htmlFor="new-password">New Master Password</Label>
-                <Input
-                  type="password"
-                  id="new-password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password"
-                  required
-                  autoFocus
-                />
-                <HelpText>
-                  Must be at least 12 characters with uppercase, lowercase, number, and special character.
-                </HelpText>
-              </FormGroup>
-              
-              <FormGroup>
-                <Label htmlFor="confirm-password">Confirm Master Password</Label>
-                <Input
-                  type="password"
-                  id="confirm-password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm new password"
-                  required
-                />
-              </FormGroup>
-              
-              <Button type="submit" disabled={loading || !newPassword || !confirmPassword}>
-                {loading ? <LoadingSpinner /> : 'Reset Password'}
-              </Button>
-              
-              <SecondaryButton 
-                type="button" 
-                onClick={() => setRecoveryStage('initial')} 
-                style={{ marginTop: '12px' }}
-              >
-                Go Back
-              </SecondaryButton>
-            </form>
-          )}
-          
           {activeTab === 2 && (
             <>
               <HelpText>

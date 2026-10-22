@@ -148,9 +148,6 @@ const ApiService = {
     // Recovery key endpoints
     setupRecoveryKey: (data) => api.post('/auth/setup-recovery-key/', data),
     updateRecoveryStatus: (status) => api.post('/auth/update-recovery-status/', status),
-    validateRecoveryKey: (data) => api.post('/auth/validate-recovery-key/', data),
-    getEncryptedVault: (data) => api.post('/auth/get-encrypted-vault/', data),
-    resetWithRecoveryKey: (data) => api.post('/auth/reset-with-recovery-key/', data),
     // Passkey endpoints
     registerPasskeyBegin: () => api.post('/auth/passkey/register/begin/'),
     registerPasskeyComplete: (data) => api.post('/auth/passkey/register/complete/', data),

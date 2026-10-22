@@ -13,6 +13,10 @@ from django.utils import timezone
 import base64
 import logging
 import json
+import struct
+
+from cryptography.fernet import Fernet, InvalidToken
+from django.utils.crypto import salted_hmac
 
 from .passkey_primary_recovery_models import (
     PasskeyRecoveryBackup,
@@ -37,6 +41,37 @@ recovery_service = PasskeyPrimaryRecoveryService()
 
 
 _get_client_ip = get_client_ip
+
+# initiate answers every lookup the same way (OWASP Forgot Password): an
+# unknown account, an account without backups and one with backups all get a
+# recovery_attempt_id. It is an encrypted attempt id, so a decoy (id 0) is
+# indistinguishable from a real one, and complete/fallback need nothing else:
+# no user_id is handed out before the recovery key is proven.
+ATTEMPT_TOKEN_TTL_SECONDS = 3600
+INITIATE_MESSAGE = "If this account has a recovery backup, enter your recovery key to continue."
+INVALID_KEY_RESPONSE = {
+    "error": "Invalid recovery key",
+    "fallback_available": True,
+    "message": "Recovery key did not match. Would you like to try social mesh recovery?"
+}
+
+
+def _attempt_fernet():
+    key = salted_hmac('passkey-primary-recovery-attempt', 'fernet-key', algorithm='sha256').digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+
+def _attempt_token(attempt_id):
+    return _attempt_fernet().encrypt(struct.pack('>Q', attempt_id)).decode('ascii')
+
+
+def _attempt_id_from_token(token):
+    """The attempt id in ``token``; 0 for a decoy, None if invalid or expired."""
+    try:
+        raw = _attempt_fernet().decrypt(str(token).encode('ascii'), ttl=ATTEMPT_TOKEN_TTL_SECONDS)
+        return struct.unpack('>Q', raw)[0]
+    except (InvalidToken, UnicodeEncodeError, struct.error, TypeError, ValueError):
+        return None
 
 
 @api_view(['POST'])
@@ -195,10 +230,9 @@ def initiate_primary_passkey_recovery(request):
     Request body:
         - username_or_email: User's username or email
     
-    Response:
+    Response (the same for every account, existing or not):
         - message: Instructions for next step
-        - has_backups: Whether user has active backups
-        - backup_count: Number of active backups
+        - recovery_attempt_id: Opaque token for complete/fallback
     """
     username_or_email = request.data.get('username_or_email')
     
@@ -213,28 +247,14 @@ def initiate_primary_passkey_recovery(request):
         user = User.objects.filter(username=username_or_email).first() or \
                User.objects.filter(email=username_or_email).first()
         
-        if not user:
-            # Don't reveal if user exists
-            logger.warning(log_safe(f"Recovery initiated for non-existent user: {username_or_email}"))
+        if not user or not PasskeyRecoveryBackup.objects.filter(user=user, is_active=True).exists():
+            # The same answer as a real attempt: don't reveal whether the
+            # account exists or has backups
+            if not user:
+                logger.warning(log_safe(f"Recovery initiated for non-existent user: {username_or_email}"))
             return Response({
-                "message": "If an account exists, you will be prompted for your recovery key.",
-                "has_backups": False,
-                "backup_count": 0
-            }, status=status.HTTP_200_OK)
-        
-        # Check for active backups
-        active_backups = PasskeyRecoveryBackup.objects.filter(
-            user=user,
-            is_active=True
-        )
-        
-        if not active_backups.exists():
-            return Response({
-                "message": "No active recovery backups found. Consider social mesh recovery.",
-                "has_backups": False,
-                "backup_count": 0,
-                "fallback_available": True,
-                "user_id": user.id  # Needed for fallback
+                "message": INITIATE_MESSAGE,
+                "recovery_attempt_id": _attempt_token(0)
             }, status=status.HTTP_200_OK)
         
         # Create recovery attempt
@@ -251,11 +271,8 @@ def initiate_primary_passkey_recovery(request):
         logger.info(f"Primary passkey recovery initiated for user {user.username}, attempt ID: {recovery_attempt.id}")
         
         return Response({
-            "message": "Active backups found. Please provide your recovery key.",
-            "has_backups": True,
-            "backup_count": active_backups.count(),
-            "recovery_attempt_id": recovery_attempt.id,
-            "user_id": user.id
+            "message": INITIATE_MESSAGE,
+            "recovery_attempt_id": _attempt_token(recovery_attempt.id)
         }, status=status.HTTP_200_OK)
     
     except Exception as e:
@@ -275,9 +292,8 @@ def complete_primary_passkey_recovery(request):
     Step 2: User provides recovery key, system decrypts backup.
     
     Request body:
-        - recovery_attempt_id: ID from initiate step
+        - recovery_attempt_id: Token from initiate step
         - recovery_key: User's recovery key
-        - user_id: User ID from initiate step
     
     Response:
         - passkey_credential: Decrypted passkey credential data
@@ -295,27 +311,23 @@ def complete_primary_passkey_recovery(request):
     
     recovery_attempt_id = request.data.get('recovery_attempt_id')
     recovery_key = request.data.get('recovery_key')
-    user_id = request.data.get('user_id')
-    
-    if not all([recovery_attempt_id, recovery_key, user_id]):
+
+    if not all([recovery_attempt_id, recovery_key]):
         return Response(
-            {"error": "recovery_attempt_id, recovery_key, and user_id are required"},
+            {"error": "recovery_attempt_id and recovery_key are required"},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     try:
-        # Find recovery attempt
-        try:
-            recovery_attempt = PasskeyRecoveryAttempt.objects.get(
-                id=recovery_attempt_id,
-                user_id=user_id,
-                status='initiated'
-            )
-        except PasskeyRecoveryAttempt.DoesNotExist:
-            return Response(
-                {"error": "Recovery attempt not found or already processed"},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        # Find recovery attempt. A decoy, used or expired attempt answers
+        # exactly like a wrong key, so complete reveals neither.
+        recovery_attempt = PasskeyRecoveryAttempt.objects.filter(
+            id=_attempt_id_from_token(recovery_attempt_id) or 0,
+            status='initiated'
+        ).first()
+        if recovery_attempt is None:
+            progressive_lockout.record_failure(request, 'invalid_key')
+            return Response(INVALID_KEY_RESPONSE, status=status.HTTP_401_UNAUTHORIZED)
         
         user = recovery_attempt.user
         
@@ -342,11 +354,7 @@ def complete_primary_passkey_recovery(request):
             
             logger.warning(f"Invalid recovery key for user {user.username}, attempt ID: {recovery_attempt.id}")
             
-            return Response({
-                "error": "Invalid recovery key",
-                "fallback_available": True,
-                "message": "Recovery key did not match. Would you like to try social mesh recovery?"
-            }, status=status.HTTP_401_UNAUTHORIZED)
+            return Response(INVALID_KEY_RESPONSE, status=status.HTTP_401_UNAUTHORIZED)
         
         # Update recovery attempt
         recovery_attempt.status = 'key_verified'
@@ -425,41 +433,38 @@ def fallback_to_social_mesh_recovery(request):
     Links the failed primary attempt to a new social mesh recovery attempt.
     
     Request body:
-        - primary_recovery_attempt_id: ID of failed primary recovery attempt
-        - user_id: User ID
+        - primary_recovery_attempt_id: Token of the failed primary recovery attempt
     
     Response:
         - social_mesh_recovery_attempt_id: ID of new social mesh recovery attempt
         - message: Instructions for social mesh recovery
     """
     primary_attempt_id = request.data.get('primary_recovery_attempt_id')
-    user_id = request.data.get('user_id')
-    
-    if not all([primary_attempt_id, user_id]):
+
+    if not primary_attempt_id:
         return Response(
-            {"error": "primary_recovery_attempt_id and user_id are required"},
+            {"error": "primary_recovery_attempt_id is required"},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     try:
         # Find primary recovery attempt
-        try:
-            primary_attempt = PasskeyRecoveryAttempt.objects.get(
-                id=primary_attempt_id,
-                user_id=user_id
-            )
-        except PasskeyRecoveryAttempt.DoesNotExist:
+        attempt_pk = _attempt_id_from_token(primary_attempt_id)
+        if attempt_pk is None:
             return Response(
                 {"error": "Primary recovery attempt not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
-        user = primary_attempt.user
-        
-        # Check if social mesh recovery is set up
+        primary_attempt = PasskeyRecoveryAttempt.objects.filter(id=attempt_pk).first()
+
+        # Check if social mesh recovery is set up. A decoy attempt answers
+        # like an account without it.
         from .quantum_recovery_models import RecoveryShard, PasskeyRecoverySetup
-        
+
         try:
+            if primary_attempt is None:
+                raise PasskeyRecoverySetup.DoesNotExist
+            user = primary_attempt.user
             recovery_setup = PasskeyRecoverySetup.objects.get(
                 user=user,
                 is_active=True
