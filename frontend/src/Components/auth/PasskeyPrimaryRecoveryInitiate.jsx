@@ -199,8 +199,6 @@ const PasskeyPrimaryRecoveryInitiate = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [recoveryAttemptId, setRecoveryAttemptId] = useState(null);
-  const [userId, setUserId] = useState(null);
-  const [backupCount, setBackupCount] = useState(0);
   const [recoveredCredential, setRecoveredCredential] = useState(null);
   const [fallbackAvailable, setFallbackAvailable] = useState(false);
   const navigate = useNavigate();
@@ -220,18 +218,11 @@ const PasskeyPrimaryRecoveryInitiate = () => {
         username_or_email: username
       });
 
-      setUserId(response.data.user_id);
-      setBackupCount(response.data.backup_count);
+      // The server answers every account the same way; whether a backup
+      // exists is only known once the recovery key is checked.
       setRecoveryAttemptId(response.data.recovery_attempt_id);
-      setFallbackAvailable(response.data.fallback_available || false);
-
-      if (response.data.has_backups) {
-        setStep(2);
-        toast.success('Account found! Please enter your recovery key.');
-      } else {
-        toast.error('No recovery backups found for this account');
-        setError('No active recovery backups found. You may need to use guardian-based recovery.');
-      }
+      setFallbackAvailable(false);
+      setStep(2);
     } catch (err) {
       const errorMsg = err.response?.data?.error || 'Failed to identify account. Please try again.';
       setError(errorMsg);
@@ -254,8 +245,7 @@ const PasskeyPrimaryRecoveryInitiate = () => {
     try {
       const response = await ApiService.passkeyPrimaryRecovery.completeRecovery({
         recovery_attempt_id: recoveryAttemptId,
-        recovery_key: recoveryKey.replace(/-/g, ''), // Remove hyphens
-        user_id: userId
+        recovery_key: recoveryKey.replace(/-/g, '') // Remove hyphens
       });
 
       setRecoveredCredential(response.data.passkey_credential);
@@ -278,7 +268,7 @@ const PasskeyPrimaryRecoveryInitiate = () => {
   };
 
   const handleFallbackToSocialMesh = async () => {
-    if (!userId || !recoveryAttemptId) {
+    if (!recoveryAttemptId) {
       toast.error('Cannot initiate fallback recovery');
       return;
     }
@@ -287,14 +277,12 @@ const PasskeyPrimaryRecoveryInitiate = () => {
 
     try {
       const response = await ApiService.passkeyPrimaryRecovery.fallbackToSocialMesh({
-        primary_recovery_attempt_id: recoveryAttemptId,
-        user_id: userId
+        primary_recovery_attempt_id: recoveryAttemptId
       });
 
       toast.success('Fallback to social mesh recovery initiated!');
-      navigate('/recovery/social-mesh', { 
-        state: { 
-          userId,
+      navigate('/recovery/social-mesh', {
+        state: {
           primaryAttemptId: recoveryAttemptId,
           instructions: response.data.instructions
         }
@@ -385,16 +373,9 @@ const PasskeyPrimaryRecoveryInitiate = () => {
             <p>Decrypt your passkey backup</p>
           </Header>
           <Content>
-            <Alert type="success">
-              <FaCheckCircle />
-              <div>
-                <strong>Account Found!</strong>
-                <p style={{ margin: '4px 0 0 0' }}>
-                  We found {backupCount} active backup{backupCount !== 1 ? 's' : ''} for your account.
-                  Enter your recovery key to decrypt your passkey.
-                </p>
-              </div>
-            </Alert>
+            <p style={{ marginBottom: '24px', lineHeight: '1.6', color: '#666' }}>
+              If this account has a recovery backup, enter your recovery key to decrypt your passkey.
+            </p>
 
             {error && (
               <Alert type="error">

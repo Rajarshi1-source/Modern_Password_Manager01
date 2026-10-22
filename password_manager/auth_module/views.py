@@ -11,7 +11,6 @@ from .utils import (
     initiate_push_auth, check_push_auth_status
 )
 from vault.models import AuditLog
-from logging_manager.models import RecoveryAttemptLog
 import os
 import logging
 import base64
@@ -1178,213 +1177,29 @@ class AuthViewSet(viewsets.ViewSet):
             logger.exception("Handled Exception in view")
             return Response({"error": 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    # The legacy recovery-key flow (validate -> get vault -> reset) is retired.
+    # It never checked proof of the recovery key, its client sent the raw key
+    # to the server, and the flow could not complete. Vault recovery with a
+    # recovery key is the layered v2 flow (vault/recovery-factors), which
+    # unwraps the vault on the client.
+    def _legacy_recovery_retired(self):
+        return Response({
+            "error": "This recovery endpoint is retired. Use the recovery-key "
+                     "flow at /recovery/key/use-v2.",
+            "code": "legacy_recovery_retired",
+        }, status=status.HTTP_410_GONE)
+
     @action(detail=False, methods=['post'])
     def validate_recovery_key(self, request):
-        """
-        Validate if a recovery key exists for a given email
-        """
-        email = request.data.get('email')
-        recovery_key_hash = request.data.get('recovery_key_hash')
-        
-        if not email or not recovery_key_hash:
-            return Response({"error": "Email and recovery key hash are required"}, 
-                           status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            # Find user by email
-            user = User.objects.get(email=email)
-            
-            # Check if recovery key exists
-            has_recovery_key = RecoveryKey.objects.filter(user=user).exists()
-            
-            # We don't validate the actual key here - that happens client side
-            # This endpoint just confirms a recovery key exists for the account
-            
-            # Log analytics for recovery key validation attempt
-            AuditLog.objects.create(
-                user=user,
-                action='recovery_key_validation',
-                ip_address=self.get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                status='success' if has_recovery_key else 'failure'
-            )
-            
-            # Privacy-preserving analytics
-            RecoveryAttemptLog.log_attempt(
-                user=user,
-                attempt_type='validate_key',
-                result='success' if has_recovery_key else 'failure',
-                request=request
-            )
-            
-            return Response({
-                "valid": has_recovery_key,
-                "message": "Recovery key exists for this account" if has_recovery_key else "No recovery key found"
-            })
-            
-        except User.DoesNotExist:
-            # Don't reveal that the email doesn't exist
-            return Response({
-                "valid": False,
-                "message": "No recovery key found"
-            })
-    
+        return self._legacy_recovery_retired()
+
     @action(detail=False, methods=['post'])
     def get_encrypted_vault(self, request):
-        """
-        Get encrypted vault data for recovery with a recovery key
-        """
-        email = request.data.get('email')
-        recovery_key_hash = request.data.get('recovery_key_hash')
-        
-        if not email or not recovery_key_hash:
-            return Response({"error": "Email and recovery key hash are required"}, 
-                           status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            # Find user by email
-            user = User.objects.get(email=email)
-            
-            # Get recovery key data
-            recovery_key = RecoveryKey.objects.get(user=user)
-            
-            # Log analytics for recovery data access attempt
-            AuditLog.objects.create(
-                user=user,
-                action='recovery_data_access',
-                ip_address=self.get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                status='success'
-            )
-            
-            # Privacy-preserving analytics
-            RecoveryAttemptLog.log_attempt(
-                user=user,
-                attempt_type='get_vault',
-                result='success',
-                request=request
-            )
-            
-            return Response({
-                "encryptedVault": recovery_key.encrypted_vault,
-                "salt": recovery_key.salt,
-                "userId": user.id
-            })
-            
-        except User.DoesNotExist:
-            # Don't reveal that the email doesn't exist
-            return Response({"error": "Invalid credentials"}, status=status.HTTP_404_NOT_FOUND)
-            
-        except RecoveryKey.DoesNotExist:
-            # If user exists but no recovery key found, log the attempt
-            if 'user' in locals():
-                RecoveryAttemptLog.log_attempt(
-                    user=user,
-                    attempt_type='get_vault',
-                    result='failure',
-                    request=request
-                )
-            return Response({"error": "No recovery key found for this account"}, status=status.HTTP_404_NOT_FOUND)
-    
+        return self._legacy_recovery_retired()
+
     @action(detail=False, methods=['post'])
     def reset_with_recovery_key(self, request):
-        """
-        Reset password using a recovery key
-        """
-        user_id = request.data.get('user_id')
-        new_encrypted_vault = request.data.get('new_encrypted_vault')
-        new_password_hash = request.data.get('new_password_hash')
-        
-        if not user_id or not new_encrypted_vault or not new_password_hash:
-            return Response({"error": "All fields are required"}, 
-                           status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            # Find user
-            user = User.objects.get(id=user_id)
-            
-            # Update password hash
-            salt_obj = UserSalt.objects.get(user=user)
-            salt_obj.auth_hash = base64.b64decode(new_password_hash)
-            salt_obj.save()
-            
-            # Enhanced security analysis for recovery key password reset - Option B: Parallel services
-            try:
-                # Primary analysis with existing service
-                account_protection_service.analyze_login_attempt(
-                    request=request,
-                    user=user,
-                    username=user.username,
-                    success=True
-                )
-            except Exception as e:
-                print(f"Account protection analysis for recovery key reset failed: {str(e)}")
-            
-            try:
-                # Enhanced analysis with new security service
-                analysis_result = security_service.analyze_login_attempt(
-                    user=user,
-                    request=request,
-                    is_successful=True,
-                    failure_reason=None
-                )
-                print(f"Recovery key reset analysis - Threat score: {analysis_result.threat_score}, Suspicious: {analysis_result.is_suspicious}")
-            except Exception as e:
-                print(f"Security service analysis for recovery key reset failed: {str(e)}")
-            
-            # Update encrypted vault
-            recovery_key = RecoveryKey.objects.get(user=user)
-            recovery_key.encrypted_vault = new_encrypted_vault
-            recovery_key.updated_at = timezone.now()
-            recovery_key.save()
-            
-            # Log analytics for successful password reset with recovery key
-            AuditLog.objects.create(
-                user=user,
-                action='password_reset_with_recovery_key',
-                ip_address=self.get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                status='success'
-            )
-            
-            # Privacy-preserving analytics
-            RecoveryAttemptLog.log_attempt(
-                user=user,
-                attempt_type='recovery_success',
-                result='success',
-                request=request
-            )
-            
-            return Response({
-                "success": True,
-                "message": "Password reset successful with recovery key"
-            })
-            
-        except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-            
-        except (UserSalt.DoesNotExist, RecoveryKey.DoesNotExist):
-            # Log failure if user exists
-            if 'user' in locals():
-                RecoveryAttemptLog.log_attempt(
-                    user=user,
-                    attempt_type='reset_password',
-                    result='failure',
-                    request=request
-                )
-            return Response({"error": "Account not set up properly for recovery"}, 
-                          status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            logger.exception("Handled Exception in view")
-            # Log unexpected errors
-            if 'user' in locals():
-                RecoveryAttemptLog.log_attempt(
-                    user=user,
-                    attempt_type='reset_password',
-                    result='failure',
-                    request=request
-                )
-            return Response({"error": 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return self._legacy_recovery_retired()
 
     @action(detail=False, methods=['post'])
     def verify_email_exists(self, request):

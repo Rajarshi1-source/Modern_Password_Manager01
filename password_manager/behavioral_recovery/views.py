@@ -25,7 +25,6 @@ from .serializers import (
     BehavioralChallengeSerializer,
     RecoveryInitiateSerializer,
     ChallengeSubmitSerializer,
-    RecoveryCompleteSerializer,
     CommitmentSetupSerializer
 )
 from .services import RecoveryOrchestrator, ChallengeGenerator, CommitmentService
@@ -33,6 +32,10 @@ from password_manager.api_utils import success_response, error_response
 from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
+
+# Similarity scores are never returned to the (anonymous) recovery caller:
+# they would let a caller tune forged behavioral data against the model.
+SIMILARITY_FIELDS = ('similarity_scores', 'overall_similarity')
 
 
 @api_view(['POST'])
@@ -131,7 +134,6 @@ def get_recovery_status(request, attempt_id):
     Returns: {
         "stage": "typing_challenge",
         "days_remaining": 3,
-        "similarity_score": 0.85,
         "progress": {...}
     }
     """
@@ -139,6 +141,10 @@ def get_recovery_status(request, attempt_id):
         recovery_attempt = BehavioralRecoveryAttempt.objects.get(attempt_id=attempt_id)
         
         serializer = BehavioralRecoveryAttemptSerializer(recovery_attempt)
+        status_data = {
+            key: value for key, value in serializer.data.items()
+            if key not in SIMILARITY_FIELDS
+        }
         
         # Calculate days remaining
         if recovery_attempt.expected_completion_date:
@@ -148,7 +154,7 @@ def get_recovery_status(request, attempt_id):
         
         return success_response(
             data={
-                **serializer.data,
+                **status_data,
                 'days_remaining': days_remaining,
                 'progress_percentage': (recovery_attempt.challenges_completed / recovery_attempt.challenges_total * 100)
                     if recovery_attempt.challenges_total > 0 else 0
@@ -183,9 +189,8 @@ def submit_challenge(request):
     }
     
     Returns: {
-        "similarity_score": 0.92,
-        "passed": true,
-        "next_challenge": {...}
+        "next_challenge": {...},
+        "challenges_remaining": 3
     }
     """
     try:
@@ -206,7 +211,7 @@ def submit_challenge(request):
             recovery_attempt = BehavioralRecoveryAttempt.objects.get(attempt_id=attempt_id)
             challenge = BehavioralChallenge.objects.select_related(
                 'recovery_attempt__user'
-            ).get(challenge_id=challenge_id)
+            ).get(challenge_id=challenge_id, recovery_attempt=recovery_attempt)
         except (BehavioralRecoveryAttempt.DoesNotExist, BehavioralChallenge.DoesNotExist):
             return error_response(
                 "Recovery attempt or challenge not found",
@@ -215,7 +220,7 @@ def submit_challenge(request):
         
         # Use orchestrator to evaluate challenge
         orchestrator = RecoveryOrchestrator()
-        result = orchestrator.evaluate_challenge(challenge, behavioral_data)
+        orchestrator.evaluate_challenge(challenge, behavioral_data)
         
         # Generate next challenge if needed
         next_challenge = None
@@ -225,9 +230,6 @@ def submit_challenge(request):
         
         return success_response(
             data={
-                'similarity_score': result['similarity_score'],
-                'passed': result['passed'],
-                'overall_similarity': recovery_attempt.overall_similarity,
                 'next_challenge': BehavioralChallengeSerializer(next_challenge).data if next_challenge else None,
                 'challenges_remaining': recovery_attempt.challenges_total - recovery_attempt.challenges_completed
             },
@@ -246,69 +248,19 @@ def submit_challenge(request):
 @permission_classes([AllowAny])
 def complete_recovery(request):
     """
-    Complete recovery and reset password
-    
-    POST /api/behavioral-recovery/complete/
-    Body: {
-        "attempt_id": "uuid",
-        "new_password": "..."
-    }
-    
-    Returns: { "success": true, "new_vault_encrypted": {...} }
+    Retired: POST /api/behavioral-recovery/complete/ returns 410.
+
+    It set a new login password from a behavioral similarity score alone. A
+    behavioral match is at most a risk signal next to a real recovery factor,
+    never the factor that grants access; vault recovery is the layered
+    recovery-key flow.
     """
-    try:
-        serializer = RecoveryCompleteSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response(
-                "Invalid request data",
-                details=serializer.errors,
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
-        
-        attempt_id = serializer.validated_data['attempt_id']
-        new_password = serializer.validated_data['new_password']
-        
-        # Get recovery attempt
-        try:
-            recovery_attempt = BehavioralRecoveryAttempt.objects.get(attempt_id=attempt_id)
-        except BehavioralRecoveryAttempt.DoesNotExist:
-            return error_response(
-                "Recovery attempt not found",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-        
-        # Check if similarity threshold met
-        if not recovery_attempt.overall_similarity or recovery_attempt.overall_similarity < 0.87:
-            return error_response(
-                f"Behavioral similarity too low ({recovery_attempt.overall_similarity:.2f}). Required: 0.87",
-                code="low_similarity",
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Use orchestrator to complete recovery
-        orchestrator = RecoveryOrchestrator()
-        result = orchestrator.complete_recovery(recovery_attempt, new_password)
-        
-        # Log completion
-        RecoveryAuditLog.objects.create(
-            recovery_attempt=recovery_attempt,
-            event_type='recovery_completed',
-            ip_address=request.META.get('REMOTE_ADDR'),
-            user_agent=request.META.get('HTTP_USER_AGENT', ''),
-            event_data={'similarity_score': recovery_attempt.overall_similarity}
-        )
-        
-        return success_response(
-            data=result,
-            message="Password recovery completed successfully"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error completing recovery: {e}", exc_info=True)
-        return error_response(
-            "Failed to complete recovery",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    return error_response(
+        "Behavioral recovery cannot complete an account recovery. "
+        "Use your recovery key instead.",
+        code="behavioral_completion_retired",
+        status_code=status.HTTP_410_GONE
+    )
 
 
 @api_view(['POST'])
