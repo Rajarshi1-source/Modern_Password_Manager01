@@ -38,7 +38,7 @@ from .quantum_recovery_models import (
     BehavioralBiometrics,
     RecoveryShardType
 )
-from .services.kyber_crypto import DEFAULT_KEM, ProductionKyber
+from .services.kyber_crypto import DEFAULT_KEM, ml_kem_768_public_key_is_valid
 from .services.quantum_crypto_service import quantum_crypto_service
 
 logger = logging.getLogger(__name__)
@@ -84,10 +84,13 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
         try:
             user = request.user
             
-            # Check if recovery already setup
-            if hasattr(user, 'passkey_recovery_setup') and user.passkey_recovery_setup.is_active:
+            # Check if recovery already setup. A pending setup (guardians not
+            # yet accepted) counts too: the user has one setup at most.
+            if hasattr(user, 'passkey_recovery_setup'):
                 return Response({
                     'error': 'Recovery system already configured'
+                    if user.passkey_recovery_setup.is_active
+                    else 'Recovery system already set up; waiting for guardians to accept'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             # Validate request data
@@ -117,7 +120,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     )
                 except (binascii.Error, ValueError, TypeError, AttributeError):
                     guardian_public_key = b''
-                if len(guardian_public_key) != ProductionKyber.PUBLIC_KEY_SIZE:
+                if not ml_kem_768_public_key_is_valid(guardian_public_key):
                     return Response({
                         'error': "Each guardian needs a 'public_key' (base64 "
                                  f"{DEFAULT_KEM} public key) from their own device"

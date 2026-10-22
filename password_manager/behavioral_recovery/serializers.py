@@ -68,6 +68,28 @@ class BehavioralRecoveryAttemptSerializer(serializers.ModelSerializer):
         ]
 
 
+class RecoveryChallengeSerializer(BehavioralChallengeSerializer):
+    """A challenge as the anonymous recovery caller sees it: no model scores,
+    which would let a caller tune forged behavioral data against the model."""
+
+    class Meta(BehavioralChallengeSerializer.Meta):
+        fields = [
+            field for field in BehavioralChallengeSerializer.Meta.fields
+            if field not in ('similarity_score', 'passed')
+        ]
+
+
+class RecoveryAttemptStatusSerializer(BehavioralRecoveryAttemptSerializer):
+    """A recovery attempt as the anonymous recovery caller sees it: no scores."""
+    challenges = RecoveryChallengeSerializer(many=True, read_only=True)
+
+    class Meta(BehavioralRecoveryAttemptSerializer.Meta):
+        fields = [
+            field for field in BehavioralRecoveryAttemptSerializer.Meta.fields
+            if field not in ('similarity_scores', 'overall_similarity')
+        ]
+
+
 class RecoveryInitiateSerializer(serializers.Serializer):
     """Serializer for initiating recovery"""
     email = serializers.EmailField(required=True)

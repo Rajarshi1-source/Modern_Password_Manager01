@@ -54,6 +54,12 @@ INVALID_KEY_RESPONSE = {
     "fallback_available": True,
     "message": "Recovery key did not match. Would you like to try social mesh recovery?"
 }
+FALLBACK_RESPONSE = {
+    "message": "If guardian recovery is set up for this account, it has been started.",
+    "instructions": "If guardian recovery is set up, temporal challenges will be sent to your guardians. "
+                    "They need to verify their identity to help you recover.",
+    "estimated_time": "3-7 days"
+}
 
 
 def _attempt_fernet():
@@ -435,9 +441,8 @@ def fallback_to_social_mesh_recovery(request):
     Request body:
         - primary_recovery_attempt_id: Token of the failed primary recovery attempt
     
-    Response:
-        - social_mesh_recovery_attempt_id: ID of new social mesh recovery attempt
-        - message: Instructions for social mesh recovery
+    Response (the same for every attempt token that decrypts):
+        - message, instructions, estimated_time
     """
     primary_attempt_id = request.data.get('primary_recovery_attempt_id')
 
@@ -455,53 +460,27 @@ def fallback_to_social_mesh_recovery(request):
                 {"error": "Primary recovery attempt not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
-        primary_attempt = PasskeyRecoveryAttempt.objects.filter(id=attempt_pk).first()
+        # Only an attempt whose recovery key failed may fall back; a fresh
+        # attempt stays in primary recovery.
+        primary_attempt = PasskeyRecoveryAttempt.objects.filter(
+            id=attempt_pk,
+            status__in=('key_invalid', 'decryption_failed')
+        ).first()
 
-        # Check if social mesh recovery is set up. A decoy attempt answers
-        # like an account without it.
         from .quantum_recovery_models import RecoveryShard, PasskeyRecoverySetup
 
-        try:
-            if primary_attempt is None:
-                raise PasskeyRecoverySetup.DoesNotExist
-            user = primary_attempt.user
-            recovery_setup = PasskeyRecoverySetup.objects.get(
-                user=user,
-                is_active=True
-            )
-        except PasskeyRecoverySetup.DoesNotExist:
-            return Response({
-                "error": "No social mesh recovery set up",
-                "message": "You need to set up guardian-based recovery first.",
-                "setup_url": "/recovery/setup"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        active_shards = RecoveryShard.objects.filter(
-            recovery_setup=recovery_setup,
+        # The answer is the same whether or not the account exists or has
+        # guardian recovery set up; guardian details are never returned.
+        if primary_attempt is not None and RecoveryShard.objects.filter(
+            recovery_setup__in=PasskeyRecoverySetup.objects.filter(
+                user=primary_attempt.user, is_active=True
+            ),
             is_active=True
-        )
-        
-        if not active_shards.exists():
-            return Response({
-                "error": "No social mesh recovery set up",
-                "message": "You need to set up guardian-based recovery first.",
-                "setup_url": "/recovery/setup"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # For now, just mark primary attempt as fallback initiated
-        primary_attempt.initiate_fallback()
-        
-        logger.info(f"Fallback to social mesh recovery initiated for user {user.username}")
-        
-        return Response({
-            "message": "Fallback to social mesh recovery initiated",
-            "instructions": "Temporal challenges will be sent to your guardians. They need to verify their identity to help you recover.",
-            "threshold": recovery_setup.threshold_shards,
-            "total_guardians": active_shards.count(),
-            "estimated_time": "3-7 days",
-            "primary_attempt_id": primary_attempt_id,
-            "social_mesh_setup": True
-        }, status=status.HTTP_200_OK)
+        ).exists():
+            primary_attempt.initiate_fallback()
+            logger.info(f"Fallback to social mesh recovery initiated for user {primary_attempt.user.username}")
+
+        return Response(FALLBACK_RESPONSE, status=status.HTTP_200_OK)
     
     except Exception as e:
         logger.error(f"Error initiating fallback to social mesh recovery: {e}", exc_info=True)

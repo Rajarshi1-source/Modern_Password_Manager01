@@ -383,7 +383,7 @@ const PasswordRecovery = () => {
                   <li>Complete behavioral challenges over 5 days</li>
                   <li>System analyzes your typing, mouse, and cognitive patterns</li>
                   <li>AI compares patterns to your stored behavioral DNA</li>
-                  <li>Recovery authorized when similarity ≥ 87%</li>
+                  <li>After the challenges, use your recovery key to unlock your vault</li>
                 </ul>
               </div>
               
