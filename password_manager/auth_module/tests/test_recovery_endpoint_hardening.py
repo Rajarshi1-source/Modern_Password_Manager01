@@ -176,6 +176,13 @@ class RecoveryEndpointHardeningTests(TestCase):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertIn('passkey_credential', r.json())
 
+    def test_passkey_complete_accepts_the_right_key_after_a_typo(self):
+        key = self._backup()
+        token = self._initiate('owner')['recovery_attempt_id']
+        self.assertEqual(self._complete(token, 'A' * 24).status_code, 401)
+        r = self._complete(token, key)
+        self.assertEqual(r.status_code, 200, r.content)
+
     def test_passkey_complete_rejects_a_raw_attempt_id(self):
         from auth_module.passkey_primary_recovery_models import PasskeyRecoveryAttempt
         key = self._backup()

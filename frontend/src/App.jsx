@@ -2042,9 +2042,8 @@ function App() {
               option to regain access to your account.
             </p>
             <p style={{ marginTop: '16px' }}>
-              <Link to="/recovery-key-setup" className="recovery-link" onClick={() => setShowHelpCenter(false)}>
-                <FaUnlock /> Set up your recovery key
-              </Link>
+              <FaUnlock /> A recovery key is set up after you log in: once logged in, open
+              {' '}<code>/recovery/key/enroll-v2</code> to create one.
             </p>
           </Modal>
         </div>
