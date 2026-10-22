@@ -127,6 +127,19 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     }, status=status.HTTP_400_BAD_REQUEST)
                 guardian_public_keys.append(guardian_public_key)
 
+            # Setup creates one shard per guardian (at most total_shards) plus
+            # an optional device shard. Fewer than threshold_shards of them
+            # could never reconstruct the secret.
+            usable_shards = len(guardian_public_keys) + (
+                1 if request.data.get('enable_device_shard', True)
+                and total_shards > len(guardians_data) else 0
+            )
+            if usable_shards < threshold_shards:
+                return Response({
+                    'error': f'{usable_shards} usable shard(s) (guardians plus device) '
+                             f'cannot meet threshold_shards={threshold_shards}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
             with transaction.atomic():
                 # Generate post-quantum keypair
                 public_key, private_key = quantum_crypto_service.generate_kyber_keypair()
