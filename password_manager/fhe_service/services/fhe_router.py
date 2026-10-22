@@ -76,6 +76,22 @@ class RoutingDecision:
     fhe_used: bool = False
 
 
+class _DecryptedFHEResult(dict):
+    """
+    A result whose ciphertexts were decrypted inside the router, carrying
+    router-owned FHE provenance in ``.fhe``.
+    
+    Only router code constructs this type, so caller-supplied data (parsed
+    JSON is plain dicts) can never assert provenance; an ``fhe`` key in a
+    caller's dict is just data. It is still a dict, so views serialize it
+    unchanged.
+    """
+    
+    def __init__(self, *args, fhe: bool, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fhe = fhe
+
+
 class FHEOperationRouter:
     """
     Routes FHE operations to appropriate encryption tier and service.
@@ -316,9 +332,11 @@ class FHEOperationRouter:
         
         Services fall back to plaintext per call (e.g. on an exception), and
         mark those results: EncryptedValue.metadata['fhe'] is False, and
-        SEALCiphertext uses scheme 'fallback'. A dict carrying a boolean
-        ``fhe`` key states its own provenance (paths that decrypt before
-        returning). A result with no ciphertext part at all is not FHE.
+        SEALCiphertext uses scheme 'fallback'. Paths that decrypt before
+        returning wrap the result in the router-owned _DecryptedFHEResult;
+        an ``fhe`` key in an ordinary dict (possibly the caller's own data,
+        echoed back) is never trusted. A result with no ciphertext part at
+        all is not FHE.
         """
         found = []
         
@@ -328,10 +346,9 @@ class FHEOperationRouter:
             elif isinstance(value, SEALCiphertext):
                 found.append(value.scheme != 'fallback'
                              and not value.metadata.get('fallback'))
+            elif isinstance(value, _DecryptedFHEResult):
+                found.append(value.fhe is True)
             elif isinstance(value, dict):
-                if isinstance(value.get('fhe'), bool):
-                    found.append(value['fhe'])
-                    return
                 for v in value.values():
                     walk(v)
             elif isinstance(value, (list, tuple)):
@@ -426,11 +443,11 @@ class FHEOperationRouter:
                 # into the result for _result_is_fhe to inspect. Record the
                 # provenance explicitly: FHE only if the comparisons ran on
                 # the live backend over real ciphertexts.
-                return {
-                    'matches': results,
-                    'fhe': bool(service.is_available)
+                return _DecryptedFHEResult(
+                    {'matches': results},
+                    fhe=bool(service.is_available)
                     and self._result_is_fhe([query_ct] + list(vault_cts)),
-                }
+                )
         
         elif op_type == OperationType.BREACH_DETECTION:
             # Encrypt features for breach detection
