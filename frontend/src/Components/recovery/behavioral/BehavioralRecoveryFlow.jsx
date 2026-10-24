@@ -128,11 +128,12 @@ const API_URL = import.meta.env.VITE_API_URL ||
 const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
   const navigate = useNavigate();
   
-  const [attemptId, setAttemptId] = useState(initialAttemptId);
+  const [attemptId] = useState(initialAttemptId);
   const [recoveryAttempt, setRecoveryAttempt] = useState(null);
   const [currentChallenge, setCurrentChallenge] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [completed, setCompleted] = useState(false);
   
   // Initialize recovery or load existing attempt
@@ -155,20 +156,10 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
       const response = await axios.post(`${API_URL}/api/behavioral-recovery/initiate/`, {
         email
       });
-      
-      if (response.data.success) {
-        setAttemptId(response.data.data.attempt_id);
-        setCurrentChallenge(response.data.data.first_challenge);
-        setRecoveryAttempt({
-          attempt_id: response.data.data.attempt_id,
-          ...response.data.data.timeline,
-          challenges_completed: 0,
-          overall_similarity: 0
-        });
-      } else {
-        // Account-neutral answer (unknown email or no behavioral setup)
-        setError(response.data.message);
-      }
+
+      // The answer is the same for every email; an enrolled account gets
+      // its recovery link by email, which reopens this flow with attemptId.
+      setNotice(response.data.message);
     } catch (err) {
       console.error('Error initiating recovery:', err);
       setError(err.response?.data?.message || 'Failed to initiate recovery');
@@ -187,8 +178,9 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
     try {
       const response = await axios.get(`${API_URL}/api/behavioral-recovery/status/${attemptId}/`);
       
+      // success_response puts the fields at the top level
       if (response.data.success) {
-        setRecoveryAttempt(response.data.data);
+        setRecoveryAttempt(response.data);
         
         // Get next challenge
         await loadNextChallenge();
@@ -208,8 +200,8 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
     try {
       const response = await axios.get(`${API_URL}/api/behavioral-recovery/challenges/${attemptId}/next/`);
       
-      if (response.data.success && response.data.data.challenge) {
-        setCurrentChallenge(response.data.data.challenge);
+      if (response.data.success && response.data.challenge) {
+        setCurrentChallenge(response.data.challenge);
       } else {
         // No more challenges - recovery complete or ready for completion
         setCurrentChallenge(null);
@@ -242,8 +234,8 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
         }));
 
         // Load next challenge
-        if (response.data.data.next_challenge) {
-          setCurrentChallenge(response.data.data.next_challenge);
+        if (response.data.next_challenge) {
+          setCurrentChallenge(response.data.next_challenge);
         } else {
           // All challenges completed
           setCurrentChallenge(null);
@@ -284,6 +276,22 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
     );
   }
   
+  // Render the account-neutral initiate answer
+  if (notice) {
+    return (
+      <Container>
+        <Content>
+          <Alert type="info">
+            {notice}
+          </Alert>
+          <Button onClick={() => navigate('/password-recovery')}>
+            Back to Recovery Options
+          </Button>
+        </Content>
+      </Container>
+    );
+  }
+
   // Render error state
   if (error) {
     return (

@@ -15,7 +15,7 @@ import os
 import logging
 import base64
 from django.contrib.auth.models import User
-from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes
 from django.core.mail import send_mail
@@ -39,6 +39,21 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 
 logger = logging.getLogger(__name__)
+
+PASSWORD_RESET_MESSAGE = 'If your email exists in our system, you will receive a password reset link'
+
+
+class _PasswordResetTokenGenerator(PasswordResetTokenGenerator):
+    """Django's reset token is bound to the login password and last login.
+    reset_password changes UserSalt.auth_hash instead, so the token also
+    covers auth_hash: a completed reset invalidates its link (single use)."""
+
+    def _make_hash_value(self, user, timestamp):
+        auth_hash = UserSalt.objects.filter(user=user).values_list('auth_hash', flat=True).first()
+        return super()._make_hash_value(user, timestamp) + (bytes(auth_hash).hex() if auth_hash else '')
+
+
+password_reset_token_generator = _PasswordResetTokenGenerator()
 
 # Create your views here.
 
@@ -809,7 +824,7 @@ class AuthViewSet(viewsets.ViewSet):
         try:
             user = User.objects.get(email=email)
             # Generate password reset token
-            token = default_token_generator.make_token(user)
+            token = password_reset_token_generator.make_token(user)
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             
             # Enhanced security analysis for password reset request - Option B: Parallel services
@@ -839,12 +854,17 @@ class AuthViewSet(viewsets.ViewSet):
             # Send email with reset link
             reset_url = f"{request.build_absolute_uri('/').rstrip('/')}/reset-password/{uid}/{token}/"
             
+            # fail_silently: a mail error must not turn into a 500 that only
+            # real accounts produce. The link resets the login only: in a
+            # zero-knowledge vault it cannot decrypt the vault.
             send_mail(
                 'Password Reset Request',
-                f'Click the following link to reset your master password: {reset_url}',
+                f'Click the following link to reset your master password: {reset_url} '
+                'This link works once. It resets your sign-in only and cannot '
+                'decrypt your vault: to restore vault access, use your recovery key.',
                 'noreply@yourpasswordmanager.com',
                 [email],
-                fail_silently=False,
+                fail_silently=True,
             )
             
             # Log the password reset request
@@ -856,11 +876,11 @@ class AuthViewSet(viewsets.ViewSet):
                 status='success'
             )
             
-            return Response({'success': True, 'message': 'Password reset email sent'})
+            return Response({'success': True, 'message': PASSWORD_RESET_MESSAGE})
             
         except User.DoesNotExist:
-            # Return success anyway to prevent email enumeration
-            return Response({'success': True, 'message': 'If your email exists in our system, you will receive a password reset link'})
+            # The same answer as for an existing account (no email enumeration)
+            return Response({'success': True, 'message': PASSWORD_RESET_MESSAGE})
 
     @action(detail=False, methods=['post'])
     def reset_password(self, request):
@@ -879,7 +899,7 @@ class AuthViewSet(viewsets.ViewSet):
             user = User.objects.get(pk=user_id)
             
             # Verify token
-            if not default_token_generator.check_token(user, token):
+            if not password_reset_token_generator.check_token(user, token):
                 return Response({'error': 'Invalid or expired token'}, 
                               status=status.HTTP_400_BAD_REQUEST)
             
@@ -1174,31 +1194,10 @@ class AuthViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['post'])
     def verify_email_exists(self, request):
-        """
-        Verify if an email address exists in the system
-        
-        For security, we don't directly confirm or deny the existence of an email
-        to prevent user enumeration attacks, but we return consistent responses
-        for registered users to enable recovery key generation.
-        """
-        try:
-            email = request.data.get('email')
-            if not email:
-                return error_response('Email is required', status_code=status.HTTP_400_BAD_REQUEST)
-            
-            # Check if a user with this email exists
-            user_exists = User.objects.filter(email=email).exists()
-            
-            # For security reasons, we only confirm existence for authenticated sessions
-            # or for specific secure operations like recovery key setup
-            if user_exists:
-                return success_response({'exists': True})
-            else:
-                # Return a 200 response with exists=false
-                # This way attackers can't differentiate based on response codes
-                return success_response({'exists': False})
-                
-        except Exception as e:
-            logger.error(f"Error verifying email existence: {str(e)}")
-            return error_response('An error occurred while processing your request', 
-                                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        """Retired: answering whether an email has an account lets anyone
+        enumerate accounts (OWASP Forgot Password). Passkey sign-in is
+        discoverable and needs no such check."""
+        return Response({
+            "error": "This endpoint is retired.",
+            "code": "email_existence_check_retired",
+        }, status=status.HTTP_410_GONE)

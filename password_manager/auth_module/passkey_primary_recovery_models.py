@@ -143,7 +143,15 @@ class PasskeyRecoveryAttempt(models.Model):
         blank=True,
         help_text="Additional notes or context"
     )
-    
+    token_nonce = models.CharField(
+        max_length=32,
+        null=True,
+        blank=True,
+        unique=True,
+        help_text="Nonce of the recovery_attempt_id token; the attempt row is "
+                  "created on the token's first use, so initiate writes nothing"
+    )
+
     class Meta:
         verbose_name = "Passkey Primary Recovery Attempt"
         verbose_name_plural = "Passkey Primary Recovery Attempts"

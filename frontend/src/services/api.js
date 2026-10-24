@@ -143,8 +143,6 @@ const ApiService = {
     verifyTwoFactor: (data) => api.post('/auth/two_factor_auth/', data),
     requestPasswordReset: (email) => api.post('/auth/request_password_reset/', { email }),
     resetPassword: (data) => api.post('/auth/reset_password/', data),
-    // Email verification endpoint
-    verifyEmailExists: (data) => api.post('/auth/verify-email-exists/', data),
     // Passkey endpoints
     registerPasskeyBegin: () => api.post('/auth/passkey/register/begin/'),
     registerPasskeyComplete: (data) => api.post('/auth/passkey/register/complete/', data),
