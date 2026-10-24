@@ -197,7 +197,7 @@ class RecoveryFollowupTests(TestCase):
         from vault.models import AuditLog
         with patch('django.core.mail.send_mail', return_value=0):
             self.anon.post('/api/auth/request_password_reset/', {'email': 'owner@example.com'}, format='json')
-        log = AuditLog.objects.get(user=self.owner, action='password_reset_request')
+        log = AuditLog.objects.get(user=self.owner, action='password_reset_req')
         self.assertEqual(log.status, 'failure')
 
     def test_passkey_backup_is_consumed_once_under_concurrency(self):
