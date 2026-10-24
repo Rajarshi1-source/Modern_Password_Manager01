@@ -33,6 +33,30 @@ class PredictiveIntentAuditLogTests(TestCase):
             self.user, SimpleNamespace(id='x', vault_item_id='i', delivery_count=1))
         self.assertEqual(sorted(self._actions()), ['credential_preload', 'preload_access'])
 
+    def _preload(self, create):
+        """Run preload_credentials over one prediction with the given create."""
+        from unittest.mock import MagicMock, patch
+        from ml_security.services import predictive_intent_service as module
+        prediction = SimpleNamespace(
+            predicted_vault_item=SimpleNamespace(item_id='i', encrypted_data='x'),
+            prediction_reason='r', confidence_score=0.95)
+        predictions = MagicMock()
+        predictions.select_related.return_value.order_by.return_value.__getitem__.return_value = [prediction]
+        service = PredictiveIntentService()
+        with patch.object(module.IntentPrediction.objects, 'filter', return_value=predictions), \
+                patch.object(module.PreloadedCredential.objects, 'filter') as existing, \
+                patch.object(module.PreloadedCredential.objects, 'create', side_effect=create):
+            existing.return_value.exists.return_value = False
+            return service.preload_credentials(self.user, b'k' * 32, 'session-key-id')
+
+    def test_a_failed_preload_records_no_success(self):
+        self.assertEqual(self._preload(RuntimeError('insert failed')), [])
+        self.assertNotIn('credential_preload', self._actions())
+
+        stored = object()
+        self.assertEqual(self._preload(lambda **kwargs: stored), [stored])
+        self.assertEqual(self._actions(), ['credential_preload'])
+
     def test_every_action_fits_the_column(self):
         max_length = AuditLog._meta.get_field('action').max_length
         for action in ('predictive_export', 'predictive_delete', 'credential_preload', 'preload_access'):

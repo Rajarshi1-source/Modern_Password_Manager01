@@ -513,9 +513,6 @@ class PredictiveIntentService:
                 # Encrypt with AES-256-GCM (provides authentication)
                 encrypted = aesgcm.encrypt(iv, plaintext, None)
                 
-                # Log for audit trail
-                self._log_preload_event(user, vault_item, prediction)
-                
                 preload = PreloadedCredential.objects.create(
                     user=user,
                     vault_item=prediction.predicted_vault_item,
@@ -528,6 +525,9 @@ class PredictiveIntentService:
                     expires_at=expires_at,
                     requires_biometric=settings_obj.preload_confidence_threshold < 0.9,
                 )
+                # Log for audit trail, only once the credential is stored: a
+                # failed create must not leave a success record behind
+                self._log_preload_event(user, vault_item, prediction)
                 preloaded.append(preload)
                 
             except Exception as e:
