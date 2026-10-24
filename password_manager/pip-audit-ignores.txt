@@ -201,42 +201,13 @@
 # rather than renewed; re-add only if a future downgrade of either
 # package's floor brings it back into the affected range.
 
-# nltk model-artifact APIs bypass pathsec and touch files outside allowed
-# roots (CVE-2026-81726 / GHSA-8mgp-746c-j5xp, reported by pip-audit as
-# PYSEC-2026-3740 on 2026-09-04). NO upstream fix exists: the GHSA record's
-# range is `introduced: 0` → `last_affected: 3.10.3`, i.e. every release up to
-# and including the one CI resolves, with no `fixed` event and pip-audit
-# reporting `fix_versions: []`. Pinning cannot help.
-#
-# (The PYSEC record for the same CVE lists `fixed: 3.10.3`, which would make
-# our resolved version clean; the GHSA alias does not, and pip-audit follows
-# the wider range. Recorded here so the next renewal does not "resolve" this
-# by reading only the PYSEC half and removing the entry while CI still fails.)
-#
-# Unreachable here for the same reason as the two nltk entries below, verified
-# by grep on this date rather than carried over: `import nltk` / `from nltk` /
-# `nltk.` return zero matches across password_manager/, so none of its
-# model-artifact loaders is ever called, with or without an attacker-controlled
-# path.
-#
-# Correcting how this entry described the dependency: `nltk` IS declared
-# directly (`nltk>=3.10.3` in requirements.txt, pinned `nltk==3.10.3` in
-# requirements-lock.txt), not merely pulled in transitively. It sits under
-# requirements.txt's "Security overrides for transitive dependencies" heading
-# alongside cbor2/keras/tornado/Twisted/ujson: the declaration exists ONLY to
-# raise the floor on a version something else pulls in. The floor was
-# originally 3.9.4 (its own comment named GHSA-gfwx-w7gr-fvh7 and
-# GHSA-jm6w-m3j8-898g); it was later raised again to 3.10.3 for an
-# unrelated AllowlistUnpickler RCE (GHSA-x99w-6fgc-pmfw / CVE-2026-79657).
-# So it must not be deleted to "remove an unused dependency" -- dropping
-# the line would let a transitively resolved, older, vulnerable nltk back
-# in. Nothing imports it; the pin is a floor, and the suppression stands
-# on non-reachability either way.
-# Accepted-risk record: SECURITY.md "Accepted & Tracked Risks" entry 5, as
-# DEPENDENCY_POLICY.md line 59 requires ("Accepted risks must be documented in
-# SECURITY.md"). This manifest is the ENFORCEMENT layer; that entry is the
-# disclosure one. Keep them in sync on every renewal.
-PYSEC-2026-3740 exp:2026-10-25
+# nltk model-artifact pathsec bypass (CVE-2026-81726 / GHSA-8mgp-746c-j5xp,
+# PYSEC-2026-3740) -- REMOVED 2026-10-24, one day before its exp:2026-10-25,
+# not renewed: nltk 3.10.4 fixes it. Verified rather than assumed: pip-audit
+# on python:3.12-slim with NO suppressions, against the requirements.txt CI
+# audits, resolves nltk 3.10.4 and no longer reports PYSEC-2026-3740, while
+# the lock files' nltk==3.10.3 is inside the affected range. Every nltk floor
+# and pin now names 3.10.4. SECURITY.md entry 5 is marked resolved.
 
 # PYSEC-2026-597 (nltk.data.load()/find() percent-encoded path traversal,
 # CVE-2026-12243) was suppressed here on the same reachability grounds as
@@ -292,3 +263,64 @@ PYSEC-2026-1325 exp:2026-10-30
 # a fixed Twisted ships, and raise the `Twisted>=` floor in every
 # requirements file to it.
 CVE-2026-106454 exp:2026-11-16
+
+# Twisted batch of 2026-10-23 (surfaced on PR #588's scan 2026-10-24), all
+# with first fix 26.10.0rc1 only: the newest stable release is 26.4.0, which
+# requirements.txt already floors, and a release candidate is not shipped to
+# production. Verified 2026-10-24 with `pip index versions twisted --pre` in
+# python:3.12-slim (26.10.0rc1 is the only newer version). Short expiry: when
+# 26.10.0 ships, remove all five entries and raise the `Twisted>=` floor in
+# every requirements file to it.
+#
+# Unreachable here, verified by grep rather than assumed: no `twisted.conch`,
+# `twisted.mail`, `twisted.words`, `imap4`, telnet, IRC or XML-stream code
+# anywhere in password_manager/ (excluding the venv); Twisted is transitive
+# (daphne, scrapy) and this app runs none of these services.
+#   CVE-2026-115778 / GHSA-cwm5-jh59-mwxr  conch telnet subnegotiation buffer
+#   CVE-2026-115774 / GHSA-2qrf-pqgx-qh9v  mail.imap4 negative literal size
+#   CVE-2026-115775 / GHSA-3476-c5c2-fr73  words XML element stream growth
+#   CVE-2026-115776 / GHSA-53xc-49m8-p798  words IRC server line buffer
+CVE-2026-115778 exp:2026-11-23
+CVE-2026-115774 exp:2026-11-23
+CVE-2026-115775 exp:2026-11-23
+CVE-2026-115776 exp:2026-11-23
+#
+# CVE-2026-115877 / GHSA-q7qq-6mhp-9rc4: twisted.web.http.HTTPChannel accepts
+# a bare CR or LF inside a header value, which can hide the next header from
+# the parser (request smuggling, CWE-444). This one IS reachable: daphne's
+# HTTP server subclasses twisted.web.http.Request/HTTPFactory. Mitigated where
+# daphne sits behind docker/nginx: nginx parses the request headers itself
+# (a bare LF ends the header line, a bare CR is a 400) and sends the upstream
+# a re-serialised CRLF request, so daphne never receives a header value with
+# a bare CR or LF. Exposed wherever daphne's port is reachable without the
+# proxy: the root docker-compose.yml (local development, requires DEBUG)
+# publishes it as ${BACKEND_PORT:-8000}, so keep that stack off untrusted
+# networks. Same short expiry, same removal step.
+CVE-2026-115877 exp:2026-11-23
+
+# filelock batch (surfaced on PR #588's scan 2026-10-24), fixed in 4.2.1, a
+# major release. NOT installable here: `safety` 3.8.1 (requirements.txt
+# safety>=3.8.1, the newest release, verified 2026-10-24 against pypi.org)
+# requires `filelock<4.0,>=3.16.1`, and pip's resolver reports
+# ResolutionImpossible for filelock>=4.2.1 in python:3.12-slim. `safety` is
+# needed by ci.yml's `safety check` step and by the check_dependencies
+# management command, so it cannot simply be dropped in this change.
+#
+# Unreachable in the deployment, verified by grep rather than assumed:
+#   CVE-2026-112940 / GHSA-v4x8-3wr5-3wq8  ReadWriteLock/AsyncReadWriteLock
+#     (SQLite-backed) follow a symlink on Linux. Nothing uses them: no project
+#     code imports filelock at all, and no installed package references
+#     ReadWriteLock (the only grep hit, in trio, is a comment).
+#   CVE-2026-112913 / GHSA-9vhv-jxww-xfm5  the same locks' SQLite side files,
+#     Windows only, and unused as above.
+#   CVE-2026-112907 / GHSA-567q-5qvw-pf92  soft locks read/rename their
+#     marker by path, Windows only. huggingface_hub falls back to
+#     SoftFileLock only on filesystems without flock; the backend runs in
+#     Linux containers, so this applies at most to a Windows developer's
+#     own Hugging Face cache, where the attacker already needs local write
+#     access to that directory.
+# Short expiry. The way out is to move `safety` out of the runtime
+# requirements (into the CI job that runs it) and raise filelock to >=4.2.1.
+CVE-2026-112940 exp:2026-11-23
+CVE-2026-112913 exp:2026-11-23
+CVE-2026-112907 exp:2026-11-23

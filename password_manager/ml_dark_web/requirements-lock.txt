@@ -69,7 +69,7 @@ django-silk==5.4.3
 django-storages==1.14.6
 django-timezone-field==7.2.2
 django_celery_results==2.6.0
-djangorestframework==3.17.2
+djangorestframework==3.18.3
 djangorestframework_simplejwt==5.5.1
 dnspython==2.7.0
 dparse==0.6.4
@@ -154,7 +154,7 @@ multidict==6.9.1
 murmurhash==1.0.15
 namex==0.1.0
 networkx==3.5
-nltk==3.10.3
+nltk==3.10.4
 numpy==2.3.5
 oauthlib==4.0.0
 opt_einsum==3.4.0
