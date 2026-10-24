@@ -54,7 +54,7 @@ def send_password_reset_email(email, ip_address, user_agent):
 
     AuditLog.objects.create(
         user=user,
-        action='password_reset_request',
+        action='password_reset_req',  # AuditLog.action is max_length=20
         ip_address=ip_address,
         user_agent=user_agent,
         status='success' if sent else 'failure'
