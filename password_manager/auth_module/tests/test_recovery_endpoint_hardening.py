@@ -195,7 +195,8 @@ class RecoveryEndpointHardeningTests(TestCase):
     def test_passkey_complete_rejects_a_raw_attempt_id(self):
         from auth_module.passkey_primary_recovery_models import PasskeyRecoveryAttempt
         key = self._backup()
-        self._initiate('owner')
+        # The attempt row exists from the token's first use
+        self._complete(self._initiate('owner')['recovery_attempt_id'], 'A' * 24)
         attempt = PasskeyRecoveryAttempt.objects.get(user=self.owner)
         r = self._complete(str(attempt.id), key)
         self.assertEqual(r.status_code, 401, r.content)
@@ -239,5 +240,5 @@ class RecoveryEndpointHardeningTests(TestCase):
             encrypted_shard_data=b'x')
         token = self._initiate('owner')['recovery_attempt_id']
         self.assertEqual(self._fallback(token).status_code, 200)
-        self.assertEqual(PasskeyRecoveryAttempt.objects.get(user=self.owner).status, 'initiated')
+        self.assertFalse(PasskeyRecoveryAttempt.objects.filter(status='fallback_initiated').exists())
         self.assertEqual(self._complete(token, key).status_code, 200)

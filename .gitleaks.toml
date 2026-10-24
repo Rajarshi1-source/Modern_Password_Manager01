@@ -1,0 +1,14 @@
+# Gitleaks configuration: the default rules, plus allowlists for patterns the
+# generic-api-key heuristic misreads. Fingerprints of individual historical
+# findings stay in .gitleaksignore; an allowlist here holds across rebases,
+# where a fingerprint (which includes the commit SHA) would not.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Django migration dependency lines, e.g. ('auth_module', '0015_ml_kem_768_defaults'),"
+regexTarget = "line"
+regexes = [
+  '''^\s*\('[a-z][a-z0-9_]*',\s*'\d{4}_[a-z0-9_]+'\),?\s*$''',
+]

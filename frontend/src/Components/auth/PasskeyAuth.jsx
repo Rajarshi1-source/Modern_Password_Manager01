@@ -53,20 +53,15 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
       setVerificationLoading(true);
       setError(null);
       
-      // Call the email verification API endpoint
-      const response = await axios.post('/api/auth/verify-email-exists/', { email });
-      
-      if (response.data.exists) {
-        // Email exists, user is verified
-        setIsVerified(true);
-        
-        // If conditional UI is supported, try autofill immediately
-        if (isConditionalUI) {
-          await startAuthenticationWithConditionalUI();
-        }
-      } else {
-        // Email doesn't exist
-        setError("We couldn't find an account with that email. Please register first.");
+      // No server-side existence check: passkey sign-in is discoverable
+      // (authenticate/begin takes no email), and an "account exists" answer
+      // would let anyone enumerate accounts. A missing account simply has no
+      // passkey to offer.
+      setIsVerified(true);
+
+      // If conditional UI is supported, try autofill immediately
+      if (isConditionalUI) {
+        await startAuthenticationWithConditionalUI();
       }
     } catch (err) {
       setError('Verification failed. Please try again.');

@@ -633,13 +633,13 @@ def export_prediction_data(request):
         try:
             from vault.models import AuditLog
             AuditLog.objects.create(
+                # vault AuditLog has action (max 20 chars), item_type and status;
+                # it has no `details` field, so passing one raised a TypeError
+                # (swallowed below) and nothing was ever recorded.
                 user=user,
-                action='PREDICTIVE_DATA_EXPORTED',
-                details={
-                    'patterns_count': len(pattern_data),
-                    'predictions_count': len(prediction_data),
-                    'feedback_count': len(feedback_data),
-                }
+                action='predictive_export',
+                item_type='predictive_intent',
+                status='success',
             )
         except Exception:
             pass
@@ -721,15 +721,13 @@ def delete_prediction_data(request):
         try:
             from vault.models import AuditLog
             AuditLog.objects.create(
+                # vault AuditLog has action (max 20 chars), item_type and status;
+                # it has no `details` field, so passing one raised a TypeError
+                # (swallowed below) and nothing was ever recorded.
                 user=user,
-                action='PREDICTIVE_DATA_DELETED',
-                details={
-                    'patterns_deleted': patterns_count,
-                    'predictions_deleted': predictions_count,
-                    'feedback_deleted': feedback_count,
-                    'preloaded_deleted': preloaded_count,
-                    'settings_reset': settings_reset,
-                }
+                action='predictive_delete',
+                item_type='predictive_intent',
+                status='success',
             )
         except Exception:
             pass

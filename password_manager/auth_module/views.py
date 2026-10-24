@@ -15,11 +15,12 @@ import os
 import logging
 import base64
 from django.contrib.auth.models import User
-from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes
-from django.core.mail import send_mail
+from django.db import transaction
 from .firebase import create_custom_token
+from .tasks import send_password_reset_email
 from .services.authy_service import authy_service
 from django.utils import timezone
 from datetime import timedelta
@@ -39,6 +40,26 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 
 logger = logging.getLogger(__name__)
+
+PASSWORD_RESET_MESSAGE = 'If your email exists in our system, you will receive a password reset link'
+
+
+class _PasswordResetTokenGenerator(PasswordResetTokenGenerator):
+    """Django's reset token is bound to the login password and last login.
+    The master credential lives in UserSalt instead, so the token also covers
+    UserSalt.reset_generation, which every completed reset bumps (a link works
+    once, even when the reset keeps the same auth_hash), and UserSalt.auth_hash,
+    which change_master replaces (a master-password change voids older links)."""
+
+    def _make_hash_value(self, user, timestamp):
+        generation, auth_hash = (
+            UserSalt.objects.filter(user=user).values_list('reset_generation', 'auth_hash').first()
+            or (None, b'')
+        )
+        return super()._make_hash_value(user, timestamp) + f'|{generation}|{bytes(auth_hash or b"").hex()}'
+
+
+password_reset_token_generator = _PasswordResetTokenGenerator()
 
 # Create your views here.
 
@@ -806,61 +827,15 @@ class AuthViewSet(viewsets.ViewSet):
             return Response({'error': 'Email is required'}, 
                           status=status.HTTP_400_BAD_REQUEST)
         
-        try:
-            user = User.objects.get(email=email)
-            # Generate password reset token
-            token = default_token_generator.make_token(user)
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
-            
-            # Enhanced security analysis for password reset request - Option B: Parallel services
-            try:
-                # Primary analysis with existing service
-                account_protection_service.analyze_login_attempt(
-                    request=request,
-                    user=user,
-                    username=user.username,
-                    success=True
-                )
-            except Exception as e:
-                print(f"Account protection analysis for password reset request failed: {str(e)}")
-            
-            try:
-                # Enhanced analysis with new security service
-                analysis_result = security_service.analyze_login_attempt(
-                    user=user,
-                    request=request,
-                    is_successful=True,
-                    failure_reason=None
-                )
-                print(f"Password reset request analysis - Threat score: {analysis_result.threat_score}, Suspicious: {analysis_result.is_suspicious}")
-            except Exception as e:
-                print(f"Security service analysis for password reset request failed: {str(e)}")
-            
-            # Send email with reset link
-            reset_url = f"{request.build_absolute_uri('/').rstrip('/')}/reset-password/{uid}/{token}/"
-            
-            send_mail(
-                'Password Reset Request',
-                f'Click the following link to reset your master password: {reset_url}',
-                'noreply@yourpasswordmanager.com',
-                [email],
-                fail_silently=False,
-            )
-            
-            # Log the password reset request
-            AuditLog.objects.create(
-                user=user,
-                action='password_reset_request',
-                ip_address=self.get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                status='success'
-            )
-            
-            return Response({'success': True, 'message': 'Password reset email sent'})
-            
-        except User.DoesNotExist:
-            # Return success anyway to prevent email enumeration
-            return Response({'success': True, 'message': 'If your email exists in our system, you will receive a password reset link'})
+        # Every email gets the same synchronous work (enqueue) and the same
+        # answer; the account lookup and the email happen in the task, so
+        # neither the response nor its timing reveals whether it has an account.
+        send_password_reset_email.delay(
+            email,
+            self.get_client_ip(request),
+            request.META.get('HTTP_USER_AGENT', ''),
+        )
+        return Response({'success': True, 'message': PASSWORD_RESET_MESSAGE})
 
     @action(detail=False, methods=['post'])
     def reset_password(self, request):
@@ -878,15 +853,16 @@ class AuthViewSet(viewsets.ViewSet):
             user_id = urlsafe_base64_decode(uid).decode()
             user = User.objects.get(pk=user_id)
             
-            # Verify token
-            if not default_token_generator.check_token(user, token):
-                return Response({'error': 'Invalid or expired token'}, 
-                              status=status.HTTP_400_BAD_REQUEST)
-            
-            # Update password
-            salt_obj = UserSalt.objects.get(user=user)
-            salt_obj.auth_hash = base64.b64decode(new_auth_hash)
-            salt_obj.save()
+            # Check and consume the token under the UserSalt row lock, so of
+            # two concurrent resets with one link only the first succeeds
+            with transaction.atomic():
+                salt_obj = UserSalt.objects.select_for_update().get(user=user)
+                if not password_reset_token_generator.check_token(user, token):
+                    return Response({'error': 'Invalid or expired token'}, 
+                                  status=status.HTTP_400_BAD_REQUEST)
+                salt_obj.auth_hash = base64.b64decode(new_auth_hash)
+                salt_obj.reset_generation += 1
+                salt_obj.save(update_fields=['auth_hash', 'reset_generation'])
             
             # Enhanced security analysis for password reset - Option B: Parallel services
             try:
@@ -1174,31 +1150,10 @@ class AuthViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['post'])
     def verify_email_exists(self, request):
-        """
-        Verify if an email address exists in the system
-        
-        For security, we don't directly confirm or deny the existence of an email
-        to prevent user enumeration attacks, but we return consistent responses
-        for registered users to enable recovery key generation.
-        """
-        try:
-            email = request.data.get('email')
-            if not email:
-                return error_response('Email is required', status_code=status.HTTP_400_BAD_REQUEST)
-            
-            # Check if a user with this email exists
-            user_exists = User.objects.filter(email=email).exists()
-            
-            # For security reasons, we only confirm existence for authenticated sessions
-            # or for specific secure operations like recovery key setup
-            if user_exists:
-                return success_response({'exists': True})
-            else:
-                # Return a 200 response with exists=false
-                # This way attackers can't differentiate based on response codes
-                return success_response({'exists': False})
-                
-        except Exception as e:
-            logger.error(f"Error verifying email existence: {str(e)}")
-            return error_response('An error occurred while processing your request', 
-                                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        """Retired: answering whether an email has an account lets anyone
+        enumerate accounts (OWASP Forgot Password). Passkey sign-in is
+        discoverable and needs no such check."""
+        return Response({
+            "error": "This endpoint is retired.",
+            "code": "email_existence_check_retired",
+        }, status=status.HTTP_410_GONE)

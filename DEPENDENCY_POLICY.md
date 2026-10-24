@@ -190,7 +190,7 @@ stored artefact records it, and decryption dispatches on that record.
 |---|---|---|
 | Passkey-primary recovery blob | `version: 3`, `kem: "ML-KEM-768"` (KEM bound into the private-key wrap AAD) | `version: 2`, which implies Kyber768 |
 | Recovery shard (`encrypt_shard_hybrid`) | `algorithm: "ML-KEM-768-AES-256-GCM"` | `"Kyber-768-AES-256-GCM"` |
-| `/api/kyber/*` blob, `KyberEncryptedPassword.algorithm` | `"ML-KEM-768-AES256-GCM"` | `"Kyber768-AES256-GCM"` (or no label) |
+| `HybridKyberEncryption` blob (the `/api/kyber/*` encrypt endpoints and `KyberEncryptedPassword` that used it are retired and deleted) | `"ML-KEM-768-AES256-GCM"` | `"Kyber768-AES256-GCM"` (or no label) |
 | `KyberKeyPair.algorithm` | `"ML-KEM-768"` | `"Kyber768"`; encryption to that key keeps using Kyber768 |
 | Behavioral embedding, `BehavioralCommitment.encryption_algorithm` | `"ml-kem-768-aes256gcm"` | `"kyber768-aes256gcm"` |
 | Cached public key (`kyber:kem-pubkey:<user>`) | `"<KEM>\|<base64>"` | old `kyber:pubkey:` entries are never read |

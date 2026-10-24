@@ -912,6 +912,13 @@ class DeadProfileFieldTests(TestCase):
     """`wpm_variance`, `rhythm_signature`, `common_error_types` (gap B6)."""
 
     def setUp(self):
+        # record_typing_session_v2 adds Laplace noise (numpy's global RNG,
+        # scale 200 ms) to the session's total time, and a session whose noisy
+        # total lands <= 0 skips the WPM update. For a 1200 ms session that is
+        # ~0.1% of runs, which made test_wpm_variance_... fail intermittently
+        # in CI. Seed the RNG: these tests check the profile logic, not the noise.
+        import numpy as np
+        np.random.seed(20261024)
         self.user = User.objects.create_user(
             username='b6user', password='testpass123'
         )

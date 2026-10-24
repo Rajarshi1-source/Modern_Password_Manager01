@@ -28,10 +28,13 @@ from .serializers import (
     CommitmentSetupSerializer
 )
 from .services import RecoveryOrchestrator, ChallengeGenerator, CommitmentService
+from .tasks import start_behavioral_recovery
 from password_manager.api_utils import success_response, error_response
 from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
+
+INITIATE_MESSAGE = "If an account exists with this email, recovery instructions will be sent"
 
 # Every endpoint here that the anonymous recovery caller uses serializes with
 # RecoveryAttemptStatusSerializer / RecoveryChallengeSerializer, which carry
@@ -48,12 +51,11 @@ def initiate_recovery(request):
     
     POST /api/behavioral-recovery/initiate/
     Body: { "email": "user@example.com" }
-    
-    Returns: {
-        "attempt_id": "uuid",
-        "timeline": {...},
-        "first_challenge": {...}
-    }
+
+    Returns the same generic message for every email. For an account with
+    behavioral commitments, the attempt link goes to the account's email
+    (/password-recovery?behavioral_attempt=<attempt_id>), never into the
+    response: otherwise the response itself would say the account exists.
     """
     try:
         serializer = RecoveryInitiateSerializer(data=request.data)
@@ -66,45 +68,16 @@ def initiate_recovery(request):
         
         email = serializer.validated_data['email']
         
-        # Find user by email. An unknown email and an account without
-        # behavioral commitments get the same answer: don't reveal either.
-        user = User.objects.filter(email=email).first()
-        if user is None or not BehavioralCommitment.objects.filter(user=user, is_active=True).exists():
-            return error_response(
-                "If an account exists with this email, recovery instructions will be sent",
-                status_code=status.HTTP_200_OK
-            )
-        
-        # Initialize recovery orchestrator
-        orchestrator = RecoveryOrchestrator()
-        recovery_attempt = orchestrator.initiate_recovery(user, request)
-        
-        # Generate first challenge
-        challenge_gen = ChallengeGenerator()
-        first_challenge = challenge_gen.generate_challenge(recovery_attempt, 'typing')
-        
-        # Log the initiation
-        RecoveryAuditLog.objects.create(
-            recovery_attempt=recovery_attempt,
-            event_type='recovery_initiated',
-            ip_address=request.META.get('REMOTE_ADDR'),
-            user_agent=request.META.get('HTTP_USER_AGENT', ''),
-            event_data={'email': email}
+        # Every email gets the same synchronous work (enqueue) and the same
+        # answer; the account lookup, the attempt and the email happen in the
+        # task, so neither the response nor its timing reveals the account.
+        start_behavioral_recovery.delay(
+            email,
+            request.META.get('REMOTE_ADDR'),
+            request.META.get('HTTP_USER_AGENT', ''),
         )
-        
-        return success_response(
-            data={
-                'attempt_id': str(recovery_attempt.attempt_id),
-                'timeline': {
-                    'expected_days': 5,
-                    'challenges_per_day': 4,
-                    'total_challenges': recovery_attempt.challenges_total,
-                    'expected_completion': recovery_attempt.expected_completion_date.isoformat()
-                },
-                'first_challenge': RecoveryChallengeSerializer(first_challenge).data
-            },
-            message="Behavioral recovery initiated. Complete the challenges over the next 5 days."
-        )
+
+        return success_response(message=INITIATE_MESSAGE)
         
     except Exception as e:
         logger.error(f"Error initiating recovery: {e}", exc_info=True)

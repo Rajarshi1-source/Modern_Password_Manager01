@@ -143,8 +143,6 @@ const ApiService = {
     verifyTwoFactor: (data) => api.post('/auth/two_factor_auth/', data),
     requestPasswordReset: (email) => api.post('/auth/request_password_reset/', { email }),
     resetPassword: (data) => api.post('/auth/reset_password/', data),
-    // Email verification endpoint
-    verifyEmailExists: (data) => api.post('/auth/verify-email-exists/', data),
     // Passkey endpoints
     registerPasskeyBegin: () => api.post('/auth/passkey/register/begin/'),
     registerPasskeyComplete: (data) => api.post('/auth/passkey/register/complete/', data),
@@ -176,14 +174,14 @@ const ApiService = {
   },
   
   // Quantum Recovery (Social Mesh) endpoints
+  // (the routes in auth_module/urls.py; guardian listing, invitation and
+  // revocation have no backend route, so they have no client call)
   quantumRecovery: {
-    setupRecovery: (data) => api.post('/auth/quantum-recovery/setup/', data),
-    listGuardians: () => api.get('/auth/quantum-recovery/guardians/'),
-    acceptGuardianInvitation: (invitationId) => api.post(`/auth/quantum-recovery/invitations/${invitationId}/accept/`),
-    revokeGuardian: (guardianId) => api.post(`/auth/quantum-recovery/guardians/${guardianId}/revoke/`),
-    initiateRecovery: (data) => api.post('/auth/quantum-recovery/initiate/', data),
-    submitChallengeResponse: (data) => api.post('/auth/quantum-recovery/challenge/submit/', data),
-    completeRecovery: (data) => api.post('/auth/quantum-recovery/complete/', data),
+    setupRecovery: (data) => api.post('/auth/quantum-recovery/setup_recovery/', data),
+    getRecoveryStatus: () => api.get('/auth/quantum-recovery/get_recovery_status/'),
+    initiateRecovery: (data) => api.post('/auth/quantum-recovery/initiate_recovery/', data),
+    submitChallengeResponse: (data) => api.post('/auth/quantum-recovery/respond_to_challenge/', data),
+    completeRecovery: (data) => api.post('/auth/quantum-recovery/complete_recovery/', data),
   },
   
   // Vault endpoints

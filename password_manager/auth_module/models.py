@@ -27,7 +27,8 @@ class KyberKeyPair(models.Model):
     - Shared secret: 32 bytes
     
     Security Considerations:
-    - Private keys are encrypted at rest
+    - The server holds public keys only: users' private keys never leave
+      their devices (zero knowledge)
     - Keys have version numbers for rotation
     - Last used timestamp for auditing
     """
@@ -47,10 +48,6 @@ class KyberKeyPair(models.Model):
     public_key = models.BinaryField(
         max_length=1568,  # Kyber-1024 max size for future-proofing
         help_text="ML-KEM-768 or Kyber768 public key (1184 bytes); see algorithm"
-    )
-    private_key = models.BinaryField(
-        max_length=3168,  # Kyber-1024 max size
-        help_text="ML-KEM-768 or Kyber768 private key (2400 bytes) - encrypted at rest"
     )
     
     # Key metadata
@@ -101,12 +98,6 @@ class KyberKeyPair(models.Model):
         null=True,
         blank=True,
         help_text="Optional X25519 public key for hybrid mode"
-    )
-    x25519_private_key = models.BinaryField(
-        max_length=32,
-        null=True,
-        blank=True,
-        help_text="Optional X25519 private key for hybrid mode"
     )
     
     # Usage statistics
@@ -167,11 +158,6 @@ class KyberKeyPair(models.Model):
         return len(self.public_key) if self.public_key else 0
     
     @property
-    def private_key_size(self) -> int:
-        """Get private key size in bytes."""
-        return len(self.private_key) if self.private_key else 0
-    
-    @property
     def is_expired(self) -> bool:
         """Check if key has expired."""
         if self.expires_at is None:
@@ -203,154 +189,6 @@ class KyberKeyPair(models.Model):
         """Deactivate the key."""
         self.is_active = False
         self.save(update_fields=['is_active'])
-
-
-class KyberEncryptedPassword(models.Model):
-    """
-    Optimized model for storing Kyber-encrypted password entries.
-    
-    Uses hybrid encryption:
-    1. Kyber KEM for key encapsulation (post-quantum)
-    2. AES-256-GCM for data encryption (symmetric)
-    """
-    
-    # Primary key
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
-    # Relationships
-    user = models.ForeignKey(
-        User, 
-        on_delete=models.CASCADE, 
-        related_name='kyber_passwords',
-        db_index=True
-    )
-    keypair = models.ForeignKey(
-        KyberKeyPair,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='encrypted_items',
-        help_text="Reference to the Kyber keypair used for encryption"
-    )
-    
-    # Password metadata (not encrypted)
-    service_name = models.CharField(
-        max_length=255, 
-        db_index=True,
-        help_text="Service name (e.g., 'Google', 'GitHub')"
-    )
-    username = models.CharField(
-        max_length=255,
-        help_text="Username for the service"
-    )
-    url = models.URLField(
-        max_length=2048,
-        blank=True,
-        null=True,
-        help_text="Service URL"
-    )
-    
-    # Kyber-encrypted data
-    kyber_ciphertext = models.BinaryField(
-        max_length=2048,
-        help_text="KEM ciphertext (1088 bytes for ML-KEM-768 and Kyber768)"
-    )
-    aes_ciphertext = models.BinaryField(
-        help_text="AES-256-GCM encrypted password data"
-    )
-    nonce = models.BinaryField(
-        max_length=32,
-        help_text="AES-GCM nonce (12 bytes)"
-    )
-    
-    # Ephemeral key for forward secrecy (optional)
-    ephemeral_public_key = models.BinaryField(
-        max_length=1568,
-        null=True,
-        blank=True,
-        help_text="Ephemeral public key for forward secrecy"
-    )
-    
-    # Encryption metadata
-    encryption_version = models.IntegerField(
-        default=1,
-        help_text="Encryption scheme version"
-    )
-    algorithm = models.CharField(
-        max_length=100,
-        default='ML-KEM-768-AES256-GCM',
-        help_text="Full encryption algorithm identifier; names the KEM used to decrypt"
-    )
-    
-    # Additional encrypted fields (JSON blob)
-    encrypted_metadata = models.BinaryField(
-        null=True,
-        blank=True,
-        help_text="Additional encrypted metadata (notes, tags, etc.)"
-    )
-    
-    # Timestamps
-    created_at = models.DateTimeField(default=timezone.now, db_index=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    last_accessed = models.DateTimeField(
-        auto_now=True,
-        help_text="Last time password was accessed"
-    )
-    
-    # Flags
-    is_favorite = models.BooleanField(default=False, db_index=True)
-    is_deleted = models.BooleanField(default=False, db_index=True)
-    
-    class Meta:
-        db_table = 'kyber_encrypted_passwords'
-        verbose_name = 'Kyber Encrypted Password'
-        verbose_name_plural = 'Kyber Encrypted Passwords'
-        ordering = ['-updated_at']
-        
-        indexes = [
-            models.Index(
-                fields=['user', 'service_name'],
-                name='idx_kyber_pwd_user_service'
-            ),
-            models.Index(
-                fields=['user', 'created_at'],
-                name='idx_kyber_pwd_user_created'
-            ),
-            models.Index(
-                fields=['user', 'is_deleted'],
-                name='idx_kyber_pwd_user_deleted'
-            ),
-            models.Index(
-                fields=['user', 'is_favorite'],
-                name='idx_kyber_pwd_user_favorite'
-            ),
-            models.Index(
-                fields=['encryption_version'],
-                name='idx_kyber_pwd_enc_version'
-            ),
-        ]
-        
-        constraints = [
-            # Unique service+username per user
-            models.UniqueConstraint(
-                fields=['user', 'service_name', 'username'],
-                condition=models.Q(is_deleted=False),
-                name='unique_service_username_per_user'
-            ),
-        ]
-    
-    def __str__(self):
-        return f"{self.service_name} ({self.username}) - {self.user.username}"
-    
-    def soft_delete(self):
-        """Soft delete the password entry."""
-        self.is_deleted = True
-        self.save(update_fields=['is_deleted', 'updated_at'])
-    
-    def restore(self):
-        """Restore a soft-deleted password entry."""
-        self.is_deleted = False
-        self.save(update_fields=['is_deleted', 'updated_at'])
 
 
 class KyberSession(models.Model):
@@ -474,8 +312,11 @@ class UserSalt(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='auth_salt')
     salt = models.BinaryField()
     auth_hash = models.BinaryField()  # For verifying master password
+    # Bumped by every completed email reset, which the reset token covers, so
+    # a link works once even when the reset keeps the same auth_hash
+    reset_generation = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     def __str__(self):
         return f"Salt for {self.user.username}"
         

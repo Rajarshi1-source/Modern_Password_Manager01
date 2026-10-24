@@ -57,15 +57,9 @@ Scans are required:
 - **Mitigation:** We do not perform P-256 signing operations directly; dependency usage is limited to non-signing contexts or verified safe paths.
 - **Status:** Accepted risk (Upstream considers side-channel out of scope)
 
-### 5️⃣ `nltk` – Model-Artifact Path Traversal (CVE-2026-81726)
-- **Source:** Declared in `requirements.txt` under "Security overrides for transitive dependencies" (`nltk>=3.9.4`), pinned `nltk==3.9.4` in `requirements-lock.txt`. The declaration exists only to raise the floor on a version a transitive dependency pulls in — it is not an imported dependency of this codebase.
-- **Severity (upstream):** High — the GitHub advisory GHSA-8mgp-746c-j5xp classifies it High. Recorded as the advisory states it, not as this repository experiences it.
-- **Severity (residual, this repository):** Medium — the affected model-artifact loaders are unreachable here (see Mitigation), so the arbitrary file read/write cannot be triggered by this codebase. The two lines are kept separate on purpose: collapsing them into one number silently overrides the advisory, and a reader comparing this file against the advisory has no way to tell a considered downgrade from a mistake.
-- **CVSS:** 8.3 (CVSS v4.0), vector `CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:H/VI:L/VA:L/SC:N/SI:N/SA:N`, as published on the GitHub advisory. Recorded verbatim from the advisory, which is also where the High rating above comes from; the Medium below is this repository's own residual judgement and is not a restatement of this score.
-- **Issue:** NLTK's model-artifact APIs bypass `pathsec` and can touch files outside their allowed roots. Tracked as PYSEC-2026-3740 / GHSA-8mgp-746c-j5xp.
-- **Mitigation:** Unreachable in this codebase — `import nltk`, `from nltk` and `nltk.` return zero matches across `password_manager/`, so none of the affected loaders is ever called, with or without an attacker-controlled path.
-- **Status:** Accepted risk (no upstream fix exists — the GHSA range is `introduced: 0` → `last_affected: 3.10.3`, i.e. every published release including the one CI resolves, and pip-audit reports `fix_versions: []`; pinning cannot help). Suppressed in `password_manager/pip-audit-ignores.txt` with a dated expiry, re-evaluated on each renewal.
-- **Note:** The PYSEC record for this CVE lists `fixed: 3.10.3` while the GHSA alias does not; pip-audit follows the wider GHSA range. Reading only the PYSEC half would suggest the finding is already resolved and lead to removing a suppression CI still needs.
+### 5️⃣ `nltk` – Model-Artifact Path Traversal (CVE-2026-81726) — RESOLVED 2026-10-24
+- **Advisory:** GHSA-8mgp-746c-j5xp / PYSEC-2026-3740, affecting every nltk release up to 3.10.3.
+- **Resolution:** nltk 3.10.4 fixes it; every nltk floor and pin now names 3.10.4, and the suppression was removed from `password_manager/pip-audit-ignores.txt` instead of renewed. Verified with pip-audit (no suppressions) on python:3.12-slim against the `requirements.txt` CI audits.
 
 ### 6️⃣ `Twisted` – IMAP LIST Wildcard ReDoS (CVE-2026-106454)
 - **Source:** Indirect dependency (daphne's ASGI server, scrapy); `Twisted>=26.4.0` in `requirements.txt` is a floor for an older, fixed advisory.
@@ -73,6 +67,18 @@ Scans are required:
 - **Issue:** `twisted.mail.imap4.wildcardToRegexp()` compiles an authenticated IMAP client's LIST/LSUB pattern as a regex, so a backtracking pattern can stall the reactor.
 - **Mitigation:** Unreachable in this codebase — no `twisted.mail`, `imap4` or IMAP service anywhere in `password_manager/`.
 - **Status:** Accepted risk (fix merged upstream but not released: twisted/twisted#12788 landed on trunk 2026-08-15, after 26.4.0; affected `<= 26.4.0`, which is the newest release, `fix_versions: []`). Suppressed in `password_manager/pip-audit-ignores.txt` with a short expiry; remove it and raise the `Twisted>=` floor once a fixed release ships.
+
+### 7️⃣ `Twisted` – 2026-10-23 batch, fixed only in 26.10.0rc1
+- **Source:** Indirect dependency (daphne's ASGI server, scrapy). 26.4.0 is the newest stable release; the first fix is the 26.10.0rc1 release candidate, which is not shipped to production.
+- **Advisories:** CVE-2026-115778 (conch telnet), CVE-2026-115774 (mail IMAP4), CVE-2026-115775 (words XML stream), CVE-2026-115776 (words IRC), and CVE-2026-115877 (`twisted.web.http` bare CR/LF in header values, request smuggling).
+- **Mitigation:** The first four are unreachable: no conch, mail, words, IMAP, telnet, IRC or XML-stream code in `password_manager/`. CVE-2026-115877's code is reachable, because daphne's HTTP server is built on `twisted.web.http`, but the smuggling needs a front end that ends header lines at a bare LF and forwards the raw request. The supported front end, nginx, parses the headers itself and re-serialises them with CRLF, so it creates no such mismatch; re-assess before putting daphne behind any other proxy or load balancer that passes raw HTTP through.
+- **Status:** Accepted risk with a short expiry (2026-11-23) in `password_manager/pip-audit-ignores.txt`; when 26.10.0 ships, remove the entries and raise the `Twisted>=` floor in every requirements file.
+
+### 8️⃣ `filelock` – lock-file handling (fixed only in 4.2.1)
+- **Source:** Indirect dependency (huggingface-hub, torch, transformers, safety). `safety` 3.8.1, the newest release, requires `filelock<4.0`, so 4.2.1 cannot be installed while `safety` is a runtime requirement.
+- **Advisories:** CVE-2026-112940 (`ReadWriteLock` symlink following on Linux), CVE-2026-112913 (the same locks' SQLite side files on Windows), CVE-2026-112907 (soft-lock markers read by path on Windows).
+- **Mitigation:** No code here or in the installed packages uses `ReadWriteLock`; the soft-lock advisory is Windows-only, and the backend runs in Linux containers (huggingface-hub falls back to a soft lock only on filesystems without `flock`).
+- **Status:** Accepted risk with a short expiry (2026-11-23) in `password_manager/pip-audit-ignores.txt`. Fix by moving `safety` out of the runtime requirements into the CI job that runs it, then raising `filelock` to `>=4.2.1` in every requirements file.
 
 ---
 
