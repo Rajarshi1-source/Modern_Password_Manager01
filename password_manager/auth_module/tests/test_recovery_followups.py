@@ -13,10 +13,13 @@ Follow-ups to the anonymous recovery hardening.
 import base64
 import os
 import re
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.core import mail
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -26,12 +29,20 @@ from auth_module.models import UserPasskey, UserSalt
 @override_settings(
     QUANTUM_CRYPTO={'ALLOW_SIMULATION': True, 'ENABLED': True},
     EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend',
+    FRONTEND_URL='https://app.example.com',
 )
 class RecoveryFollowupTests(TestCase):
     def setUp(self):
+        from auth_module.tasks import send_password_reset_email
+        from behavioral_recovery.tasks import start_behavioral_recovery
         self.owner = User.objects.create_user('owner', 'owner@example.com', 'Owner-Pass-1!')
         UserSalt.objects.create(user=self.owner, salt=os.urandom(16), auth_hash=b'original-hash')
         self.anon = APIClient()
+        # Run the account-dependent tasks in-process, as a worker would
+        for task in (send_password_reset_email, start_behavioral_recovery):
+            patcher = patch.object(task, 'delay', side_effect=lambda *a, _t=task: _t.apply(args=a))
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     # --- account existence ---------------------------------------------------
 
@@ -57,7 +68,32 @@ class RecoveryFollowupTests(TestCase):
         attempt = BehavioralRecoveryAttempt.objects.get(user=enrolled)
         links = [m for m in mail.outbox if 'behavioral_attempt=' in m.body]
         self.assertEqual([m.to for m in links], [['enrolled@example.com']])
-        self.assertIn(f'behavioral_attempt={attempt.attempt_id}', links[0].body)
+        # The link opens the frontend origin, and states the attempt's deadline
+        self.assertIn(
+            f'https://app.example.com/password-recovery?behavioral_attempt={attempt.attempt_id}',
+            links[0].body)
+        days = attempt.metadata['recovery_config']['days']
+        self.assertIn(f'over the next {days} days', links[0].body)
+
+    def _queries(self, url, email):
+        with CaptureQueriesContext(connection) as queries:
+            self.anon.post(url, {'email': email}, format='json')
+        return len(queries)
+
+    def test_initiate_and_reset_do_the_same_work_for_every_email(self):
+        # The account-dependent work runs in a task; with the task not run,
+        # the request itself is the same for known and unknown emails.
+        from auth_module.tasks import send_password_reset_email
+        from behavioral_recovery.models import BehavioralCommitment
+        from behavioral_recovery.tasks import start_behavioral_recovery
+        BehavioralCommitment.objects.create(
+            user=self.owner, encrypted_embedding=b'x', challenge_type='typing')
+        with patch.object(send_password_reset_email, 'delay') as reset,                 patch.object(start_behavioral_recovery, 'delay') as behavioral:
+            for url in ('/api/auth/request_password_reset/', '/api/behavioral-recovery/initiate/'):
+                self.assertEqual(self._queries(url, 'owner@example.com'),
+                                 self._queries(url, 'nobody@example.com'), url)
+        self.assertEqual(reset.call_count, 2)
+        self.assertEqual(behavioral.call_count, 2)
 
     def test_behavioral_challenge_errors_are_logged_not_crashed(self):
         # The audit log field is `details`; writing `event_data` raised a
@@ -129,6 +165,7 @@ class RecoveryFollowupTests(TestCase):
         # The outbox also holds the account's security-alert email
         links = [re.search(r'/reset-password/([^/]+)/([^/]+)/', m.body) for m in mail.outbox]
         uid, token = next(link for link in links if link).groups()
+        self.assertIn('https://app.example.com/reset-password/', mail.outbox[-1].body)
         new_hash = base64.b64encode(b'new-hash').decode()
         first = self.anon.post('/api/auth/reset_password/', {
             'uid': uid, 'token': token, 'new_auth_hash': new_hash}, format='json')
@@ -138,6 +175,48 @@ class RecoveryFollowupTests(TestCase):
             'new_auth_hash': base64.b64encode(b'other-hash').decode()}, format='json')
         self.assertEqual(again.status_code, 400, again.content)
         self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'new-hash')
+
+    def _reset_link(self):
+        self.anon.post('/api/auth/request_password_reset/', {'email': 'owner@example.com'}, format='json')
+        links = [re.search(r'/reset-password/([^/]+)/([^/]+)/', m.body) for m in mail.outbox]
+        return next(link for link in links if link).groups()
+
+    def test_password_reset_link_works_once_even_with_the_same_hash(self):
+        uid, token = self._reset_link()
+        same = base64.b64encode(b'original-hash').decode()
+        first = self.anon.post('/api/auth/reset_password/', {
+            'uid': uid, 'token': token, 'new_auth_hash': same}, format='json')
+        self.assertEqual(first.status_code, 200, first.content)
+        again = self.anon.post('/api/auth/reset_password/', {
+            'uid': uid, 'token': token,
+            'new_auth_hash': base64.b64encode(b'other-hash').decode()}, format='json')
+        self.assertEqual(again.status_code, 400, again.content)
+        self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'original-hash')
+
+    def test_undelivered_reset_email_is_audited_as_a_failure(self):
+        from vault.models import AuditLog
+        with patch('django.core.mail.send_mail', return_value=0):
+            self.anon.post('/api/auth/request_password_reset/', {'email': 'owner@example.com'}, format='json')
+        log = AuditLog.objects.get(user=self.owner, action='password_reset_request')
+        self.assertEqual(log.status, 'failure')
+
+    def test_passkey_backup_is_consumed_once_under_concurrency(self):
+        # A concurrent completion consumes the backup while this one is
+        # decrypting: this one must not also return the credential.
+        from auth_module.passkey_primary_recovery_models import PasskeyRecoveryBackup
+        from auth_module import passkey_primary_recovery_views as views
+        key = self._backup()
+        real_decrypt = views.recovery_service.decrypt_passkey_credential
+
+        def decrypt_while_another_request_wins(**kwargs):
+            PasskeyRecoveryBackup.objects.filter(user=self.owner).update(is_active=False)
+            return real_decrypt(**kwargs)
+
+        with patch.object(views.recovery_service, 'decrypt_passkey_credential',
+                          side_effect=decrypt_while_another_request_wins):
+            r = self._complete(self._initiate('owner'), key)
+        self.assertEqual(r.status_code, 401, r.content)
+        self.assertNotIn('passkey_credential', r.json())
 
     # --- KEM metrics ----------------------------------------------------------
 

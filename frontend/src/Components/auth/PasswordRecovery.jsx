@@ -289,7 +289,7 @@ const PasswordRecovery = () => {
   // The emailed behavioral-recovery link (?behavioral_attempt=<id>) reopens
   // the flow for that attempt
   if (behavioralAttemptId) {
-    return <BehavioralRecoveryFlow attemptId={behavioralAttemptId} />;
+    return <BehavioralRecoveryFlow key={behavioralAttemptId} attemptId={behavioralAttemptId} />;
   }
 
   // If showing behavioral recovery flow, render it

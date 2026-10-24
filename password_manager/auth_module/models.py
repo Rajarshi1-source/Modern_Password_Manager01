@@ -312,8 +312,11 @@ class UserSalt(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='auth_salt')
     salt = models.BinaryField()
     auth_hash = models.BinaryField()  # For verifying master password
+    # Bumped by every completed email reset, which the reset token covers, so
+    # a link works once even when the reset keeps the same auth_hash
+    reset_generation = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     def __str__(self):
         return f"Salt for {self.user.username}"
         
