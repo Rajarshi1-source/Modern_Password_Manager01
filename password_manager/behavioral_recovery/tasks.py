@@ -161,3 +161,58 @@ def preload_quantum_crypto():
         logger.error(f"Failed to preload quantum crypto: {e}")
         return None
 
+
+
+@shared_task
+def start_behavioral_recovery(email, ip_address, user_agent):
+    """
+    The account-dependent half of POST /api/behavioral-recovery/initiate/.
+
+    The view answers every email the same way and does the same synchronous
+    work for each (validate, enqueue this task), so neither the response nor
+    its timing says whether the email has an account. Here, an account with
+    behavioral commitments gets an attempt and, by email, the link to it.
+    """
+    from types import SimpleNamespace
+
+    from django.conf import settings
+    from django.contrib.auth.models import User
+    from django.core.mail import send_mail
+
+    from .models import BehavioralCommitment, RecoveryAuditLog
+    from .services import ChallengeGenerator, RecoveryOrchestrator
+
+    user = User.objects.filter(email=email).first()
+    if user is None or not BehavioralCommitment.objects.filter(user=user, is_active=True).exists():
+        return None
+
+    request_meta = SimpleNamespace(META={'REMOTE_ADDR': ip_address, 'HTTP_USER_AGENT': user_agent})
+    recovery_attempt = RecoveryOrchestrator().initiate_recovery(user, request_meta)
+    ChallengeGenerator().generate_challenge(recovery_attempt, 'typing')
+    RecoveryAuditLog.objects.create(
+        recovery_attempt=recovery_attempt,
+        event_type='recovery_initiated',
+        ip_address=ip_address,
+        user_agent=user_agent,
+        details={'email': email}
+    )
+
+    # The link opens the frontend, which may be on another origin than the API
+    link = (
+        f"{settings.FRONTEND_URL.rstrip('/')}/password-recovery"
+        f"?behavioral_attempt={recovery_attempt.attempt_id}"
+    )
+    days = (recovery_attempt.metadata or {}).get('recovery_config', {}).get('days', 5)
+    sent = send_mail(
+        'Behavioral recovery',
+        'Someone started behavioral recovery for your account. If it was you, '
+        f'open this link to complete the challenges over the next {days} days: {link}. '
+        'Behavioral checks cannot restore access on their own: you will still '
+        'need your recovery key. If it was not you, ignore this email.',
+        None,
+        [user.email],
+        fail_silently=True,
+    )
+    if not sent:
+        logger.warning(f"Behavioral recovery email not delivered for attempt {recovery_attempt.attempt_id}")
+    return str(recovery_attempt.attempt_id)

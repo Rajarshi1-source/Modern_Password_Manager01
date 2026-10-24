@@ -398,19 +398,24 @@ def complete_primary_passkey_recovery(request):
                 "message": "Could not decrypt backup. Would you like to try social mesh recovery?"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        # Mark recovery as complete
-        recovery_attempt.mark_complete()
-        
-        # A recovery key is single-use (NIST SP 800-63B): the backup it
-        # opened is consumed, so the same key cannot complete recovery again
-        matching_backup.last_verified_at = timezone.now()
-        matching_backup.is_active = False
-        matching_backup.save()
-        RecoveryKeyRevocation.objects.create(
-            backup=matching_backup,
-            revoked_by=user,
-            reason='Consumed by a successful recovery'
-        )
+        # A recovery key is single-use (NIST SP 800-63B): the backup it opened
+        # is consumed. The conditional update claims it, so of two concurrent
+        # completions with the same key only one returns the credential, and
+        # the attempt, backup and revocation are written together.
+        with transaction.atomic():
+            claimed = PasskeyRecoveryBackup.objects.filter(
+                pk=matching_backup.pk, is_active=True
+            ).update(is_active=False, last_verified_at=timezone.now())
+            if claimed:
+                recovery_attempt.mark_complete()
+                RecoveryKeyRevocation.objects.create(
+                    backup=matching_backup,
+                    revoked_by=user,
+                    reason='Consumed by a successful recovery'
+                )
+        if not claimed:
+            progressive_lockout.record_failure(request, 'invalid_key')
+            return Response(INVALID_KEY_RESPONSE, status=status.HTTP_401_UNAUTHORIZED)
         
         # Record success metrics
         duration = (timezone.now() - start_time).total_seconds()

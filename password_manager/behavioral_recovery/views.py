@@ -10,7 +10,6 @@ from rest_framework.throttling import AnonRateThrottle
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.models import User
-from django.core.mail import send_mail
 from django.utils import timezone
 import logging
 import uuid
@@ -29,6 +28,7 @@ from .serializers import (
     CommitmentSetupSerializer
 )
 from .services import RecoveryOrchestrator, ChallengeGenerator, CommitmentService
+from .tasks import start_behavioral_recovery
 from password_manager.api_utils import success_response, error_response
 from shared.log_safe import log_safe
 
@@ -68,42 +68,13 @@ def initiate_recovery(request):
         
         email = serializer.validated_data['email']
         
-        # Find user by email. An unknown email and an account without
-        # behavioral commitments get the same answer: don't reveal either.
-        user = User.objects.filter(email=email).first()
-        if user is None or not BehavioralCommitment.objects.filter(user=user, is_active=True).exists():
-            return success_response(message=INITIATE_MESSAGE)
-        
-        # Initialize recovery orchestrator
-        orchestrator = RecoveryOrchestrator()
-        recovery_attempt = orchestrator.initiate_recovery(user, request)
-        
-        # Generate first challenge
-        challenge_gen = ChallengeGenerator()
-        first_challenge = challenge_gen.generate_challenge(recovery_attempt, 'typing')
-        
-        # Log the initiation
-        RecoveryAuditLog.objects.create(
-            recovery_attempt=recovery_attempt,
-            event_type='recovery_initiated',
-            ip_address=request.META.get('REMOTE_ADDR'),
-            user_agent=request.META.get('HTTP_USER_AGENT', ''),
-            details={'email': email}
-        )
-        
-        link = (
-            f"{request.build_absolute_uri('/').rstrip('/')}/password-recovery"
-            f"?behavioral_attempt={recovery_attempt.attempt_id}"
-        )
-        send_mail(
-            'Behavioral recovery',
-            'Someone started behavioral recovery for your account. If it was you, '
-            f'open this link to complete the challenges over the next 5 days: {link}. '
-            'Behavioral checks cannot restore access on their own: you will still '
-            'need your recovery key. If it was not you, ignore this email.',
-            None,
-            [user.email],
-            fail_silently=True,
+        # Every email gets the same synchronous work (enqueue) and the same
+        # answer; the account lookup, the attempt and the email happen in the
+        # task, so neither the response nor its timing reveals the account.
+        start_behavioral_recovery.delay(
+            email,
+            request.META.get('REMOTE_ADDR'),
+            request.META.get('HTTP_USER_AGENT', ''),
         )
 
         return success_response(message=INITIATE_MESSAGE)
