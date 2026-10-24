@@ -46,13 +46,17 @@ PASSWORD_RESET_MESSAGE = 'If your email exists in our system, you will receive a
 
 class _PasswordResetTokenGenerator(PasswordResetTokenGenerator):
     """Django's reset token is bound to the login password and last login.
-    reset_password changes UserSalt instead, so the token also covers
-    UserSalt.reset_generation, which every completed reset bumps: a link
-    works once, even when the reset keeps the same auth_hash."""
+    The master credential lives in UserSalt instead, so the token also covers
+    UserSalt.reset_generation, which every completed reset bumps (a link works
+    once, even when the reset keeps the same auth_hash), and UserSalt.auth_hash,
+    which change_master replaces (a master-password change voids older links)."""
 
     def _make_hash_value(self, user, timestamp):
-        generation = UserSalt.objects.filter(user=user).values_list('reset_generation', flat=True).first()
-        return super()._make_hash_value(user, timestamp) + f'|{generation}'
+        generation, auth_hash = (
+            UserSalt.objects.filter(user=user).values_list('reset_generation', 'auth_hash').first()
+            or (None, b'')
+        )
+        return super()._make_hash_value(user, timestamp) + f'|{generation}|{bytes(auth_hash or b"").hex()}'
 
 
 password_reset_token_generator = _PasswordResetTokenGenerator()

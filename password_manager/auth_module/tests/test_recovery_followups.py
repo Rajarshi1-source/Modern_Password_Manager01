@@ -193,6 +193,20 @@ class RecoveryFollowupTests(TestCase):
         self.assertEqual(again.status_code, 400, again.content)
         self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'original-hash')
 
+    def test_master_password_change_voids_an_unused_reset_link(self):
+        uid, token = self._reset_link()
+        authed = APIClient()
+        authed.force_authenticate(self.owner)
+        changed = authed.post('/api/auth/change_master/', {
+            'current_auth_hash': base64.b64encode(b'original-hash').decode(),
+            'new_auth_hash': base64.b64encode(b'changed-hash').decode()}, format='json')
+        self.assertEqual(changed.status_code, 200, changed.content)
+        r = self.anon.post('/api/auth/reset_password/', {
+            'uid': uid, 'token': token,
+            'new_auth_hash': base64.b64encode(b'attacker-hash').decode()}, format='json')
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'changed-hash')
+
     def test_undelivered_reset_email_is_audited_as_a_failure(self):
         from vault.models import AuditLog
         with patch('django.core.mail.send_mail', return_value=0):

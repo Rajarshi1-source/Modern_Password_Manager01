@@ -71,7 +71,7 @@ Scans are required:
 ### 7️⃣ `Twisted` – 2026-10-23 batch, fixed only in 26.10.0rc1
 - **Source:** Indirect dependency (daphne's ASGI server, scrapy). 26.4.0 is the newest stable release; the first fix is the 26.10.0rc1 release candidate, which is not shipped to production.
 - **Advisories:** CVE-2026-115778 (conch telnet), CVE-2026-115774 (mail IMAP4), CVE-2026-115775 (words XML stream), CVE-2026-115776 (words IRC), and CVE-2026-115877 (`twisted.web.http` bare CR/LF in header values, request smuggling).
-- **Mitigation:** The first four are unreachable: no conch, mail, words, IMAP, telnet, IRC or XML-stream code in `password_manager/`. CVE-2026-115877 is reachable, because daphne's HTTP server is built on `twisted.web.http`; it is mitigated where nginx fronts daphne (nginx parses headers itself and re-serialises them with CRLF), and exposed where daphne's port is published directly, as in the local-development `docker-compose.yml`.
+- **Mitigation:** The first four are unreachable: no conch, mail, words, IMAP, telnet, IRC or XML-stream code in `password_manager/`. CVE-2026-115877's code is reachable, because daphne's HTTP server is built on `twisted.web.http`, but the smuggling needs a front end that ends header lines at a bare LF and forwards the raw request. The supported front end, nginx, parses the headers itself and re-serialises them with CRLF, so it creates no such mismatch; re-assess before putting daphne behind any other proxy or load balancer that passes raw HTTP through.
 - **Status:** Accepted risk with a short expiry (2026-11-23) in `password_manager/pip-audit-ignores.txt`; when 26.10.0 ships, remove the entries and raise the `Twisted>=` floor in every requirements file.
 
 ### 8️⃣ `filelock` – lock-file handling (fixed only in 4.2.1)
