@@ -585,14 +585,13 @@ class PredictiveIntentService:
         try:
             from vault.models import AuditLog
             AuditLog.objects.create(
+                # vault AuditLog has action (max 20 chars), item_type and status;
+                # it has no `details` field, so passing one raised a TypeError
+                # (swallowed below) and nothing was ever recorded.
                 user=user,
-                action='CREDENTIAL_PRELOADED',
-                details={
-                    'vault_item_id': str(vault_item.item_id),
-                    'prediction_id': str(prediction.id),
-                    'confidence': prediction.confidence_score,
-                    'reason': prediction.prediction_reason,
-                }
+                action='credential_preload',
+                item_type='predictive_intent',
+                status='success',
             )
         except Exception as e:
             logger.warning(f"Failed to log preload event: {e}")
@@ -602,13 +601,13 @@ class PredictiveIntentService:
         try:
             from vault.models import AuditLog
             AuditLog.objects.create(
+                # vault AuditLog has action (max 20 chars), item_type and status;
+                # it has no `details` field, so passing one raised a TypeError
+                # (swallowed below) and nothing was ever recorded.
                 user=user,
-                action='PRELOADED_CREDENTIAL_ACCESSED',
-                details={
-                    'preload_id': str(preload.id),
-                    'vault_item_id': str(preload.vault_item_id),
-                    'delivery_count': preload.delivery_count,
-                }
+                action='preload_access',
+                item_type='predictive_intent',
+                status='success',
             )
         except Exception as e:
             logger.warning(f"Failed to log credential access: {e}")
