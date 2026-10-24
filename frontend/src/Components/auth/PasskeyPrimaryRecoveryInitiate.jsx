@@ -472,7 +472,7 @@ const PasskeyPrimaryRecoveryInitiate = () => {
                 <strong>Next Steps:</strong>
                 <ul style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
                   <li>Log in with your recovered passkey</li>
-                  <li>Consider creating a new recovery backup</li>
+                  <li>Create a new recovery backup: your recovery key worked once and is now used up</li>
                   <li>Set up guardian-based recovery as a backup</li>
                   <li>Review your security settings</li>
                 </ul>

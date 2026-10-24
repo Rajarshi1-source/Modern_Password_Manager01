@@ -13,6 +13,7 @@ from django.utils import timezone
 import base64
 import logging
 import json
+import os
 import struct
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -44,9 +45,11 @@ _get_client_ip = get_client_ip
 
 # initiate answers every lookup the same way (OWASP Forgot Password): an
 # unknown account, an account without backups and one with backups all get a
-# recovery_attempt_id. It is an encrypted attempt id, so a decoy (id 0) is
-# indistinguishable from a real one, and complete/fallback need nothing else:
-# no user_id is handed out before the recovery key is proven.
+# recovery_attempt_id. It is an encrypted (user id, nonce) pair, so a decoy
+# (user id 0) is indistinguishable from a real one, and complete/fallback need
+# nothing else: no user_id is handed out before the recovery key is proven.
+# initiate writes nothing on either path (no timing difference); complete
+# creates the attempt row on the token's first use, keyed by its nonce.
 ATTEMPT_TOKEN_TTL_SECONDS = 3600
 INITIATE_MESSAGE = "If this account has a recovery backup, enter your recovery key to continue."
 INVALID_KEY_RESPONSE = {
@@ -67,15 +70,18 @@ def _attempt_fernet():
     return Fernet(base64.urlsafe_b64encode(key))
 
 
-def _attempt_token(attempt_id):
-    return _attempt_fernet().encrypt(struct.pack('>Q', attempt_id)).decode('ascii')
+def _attempt_token(user_id):
+    payload = struct.pack('>Q', user_id) + os.urandom(16)
+    return _attempt_fernet().encrypt(payload).decode('ascii')
 
 
-def _attempt_id_from_token(token):
-    """The attempt id in ``token``; 0 for a decoy, None if invalid or expired."""
+def _token_payload(token):
+    """(user id, nonce hex) in ``token``; user id 0 is a decoy. None if invalid or expired."""
     try:
         raw = _attempt_fernet().decrypt(str(token).encode('ascii'), ttl=ATTEMPT_TOKEN_TTL_SECONDS)
-        return struct.unpack('>Q', raw)[0]
+        if len(raw) != 24:
+            return None
+        return struct.unpack('>Q', raw[:8])[0], raw[8:].hex()
     except (InvalidToken, UnicodeEncodeError, struct.error, TypeError, ValueError):
         return None
 
@@ -253,32 +259,18 @@ def initiate_primary_passkey_recovery(request):
         user = User.objects.filter(username=username_or_email).first() or \
                User.objects.filter(email=username_or_email).first()
         
-        if not user or not PasskeyRecoveryBackup.objects.filter(user=user, is_active=True).exists():
-            # The same answer as a real attempt: don't reveal whether the
-            # account exists or has backups
-            if not user:
-                logger.warning(log_safe(f"Recovery initiated for non-existent user: {username_or_email}"))
-            return Response({
-                "message": INITIATE_MESSAGE,
-                "recovery_attempt_id": _attempt_token(0)
-            }, status=status.HTTP_200_OK)
-        
-        # Create recovery attempt
-        ip_address = _get_client_ip(request)
-        user_agent = request.META.get('HTTP_USER_AGENT', '')
-        
-        recovery_attempt = PasskeyRecoveryAttempt.objects.create(
-            user=user,
-            status='initiated',
-            ip_address=ip_address,
-            user_agent=user_agent
-        )
-        
-        logger.info(f"Primary passkey recovery initiated for user {user.username}, attempt ID: {recovery_attempt.id}")
-        
+        # One query on every path; user id 0 never matches a backup
+        has_backup = PasskeyRecoveryBackup.objects.filter(
+            user_id=user.id if user else 0, is_active=True
+        ).exists()
+        if not user:
+            logger.warning(log_safe(f"Recovery initiated for non-existent user: {username_or_email}"))
+
+        # The same answer, and no write, whether or not the account exists
+        # or has backups; the attempt row is created by complete
         return Response({
             "message": INITIATE_MESSAGE,
-            "recovery_attempt_id": _attempt_token(recovery_attempt.id)
+            "recovery_attempt_id": _attempt_token(user.id if has_backup else 0)
         }, status=status.HTTP_200_OK)
     
     except Exception as e:
@@ -329,10 +321,22 @@ def complete_primary_passkey_recovery(request):
         # exactly like a wrong key, so complete reveals neither. A wrong key
         # leaves the attempt retryable (key_invalid); progressive_lockout and
         # the completion throttle bound the retries.
-        recovery_attempt = PasskeyRecoveryAttempt.objects.filter(
-            id=_attempt_id_from_token(recovery_attempt_id) or 0,
-            status__in=('initiated', 'key_invalid')
-        ).first()
+        payload = _token_payload(recovery_attempt_id)
+        recovery_attempt = None
+        if payload and payload[0]:
+            token_user_id, nonce = payload
+            recovery_attempt, _ = PasskeyRecoveryAttempt.objects.get_or_create(
+                token_nonce=nonce,
+                defaults={
+                    'user_id': token_user_id,
+                    'status': 'initiated',
+                    'ip_address': _get_client_ip(request),
+                    'user_agent': request.META.get('HTTP_USER_AGENT', ''),
+                },
+            )
+            if (recovery_attempt.user_id != token_user_id
+                    or recovery_attempt.status not in ('initiated', 'key_invalid')):
+                recovery_attempt = None
         if recovery_attempt is None:
             progressive_lockout.record_failure(request, 'invalid_key')
             return Response(INVALID_KEY_RESPONSE, status=status.HTTP_401_UNAUTHORIZED)
@@ -397,9 +401,16 @@ def complete_primary_passkey_recovery(request):
         # Mark recovery as complete
         recovery_attempt.mark_complete()
         
-        # Update backup last verified
+        # A recovery key is single-use (NIST SP 800-63B): the backup it
+        # opened is consumed, so the same key cannot complete recovery again
         matching_backup.last_verified_at = timezone.now()
+        matching_backup.is_active = False
         matching_backup.save()
+        RecoveryKeyRevocation.objects.create(
+            backup=matching_backup,
+            revoked_by=user,
+            reason='Consumed by a successful recovery'
+        )
         
         # Record success metrics
         duration = (timezone.now() - start_time).total_seconds()
@@ -456,16 +467,16 @@ def fallback_to_social_mesh_recovery(request):
 
     try:
         # Find primary recovery attempt
-        attempt_pk = _attempt_id_from_token(primary_attempt_id)
-        if attempt_pk is None:
+        payload = _token_payload(primary_attempt_id)
+        if payload is None:
             return Response(
                 {"error": "Primary recovery attempt not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
         # Only an attempt whose recovery key failed may fall back; a fresh
-        # attempt stays in primary recovery.
+        # attempt stays in primary recovery (and a decoy has no attempt).
         primary_attempt = PasskeyRecoveryAttempt.objects.filter(
-            id=attempt_pk,
+            token_nonce=payload[1],
             status__in=('key_invalid', 'decryption_failed')
         ).first()
 

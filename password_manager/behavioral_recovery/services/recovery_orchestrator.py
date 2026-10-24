@@ -244,7 +244,7 @@ class RecoveryOrchestrator:
             RecoveryAuditLog.objects.create(
                 recovery_attempt=recovery_attempt,
                 event_type='challenge_completed' if similarity_result['passed'] else 'challenge_failed',
-                event_data={
+                details={
                     'challenge_type': challenge.challenge_type,
                     'similarity_score': similarity_result['similarity_score'],
                     'passed': similarity_result['passed']
@@ -266,7 +266,7 @@ class RecoveryOrchestrator:
             RecoveryAuditLog.objects.create(
                 recovery_attempt=challenge.recovery_attempt,
                 event_type='challenge_failed',
-                event_data={'error': str(e)}
+                details={'error': str(e)}
             )
             
             raise

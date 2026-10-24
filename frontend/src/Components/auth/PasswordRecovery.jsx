@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import styled from 'styled-components';
 import ApiService from '../../services/api';
 import { errorTracker } from '../../services/errorTracker';
@@ -201,6 +201,8 @@ const LoadingSpinner = styled.div`
  */
 const PasswordRecovery = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const behavioralAttemptId = searchParams.get('behavioral_attempt');
   
   // State for email-based recovery
   const [email, setEmail] = useState('');
@@ -282,6 +284,12 @@ const PasswordRecovery = () => {
         </Card>
       </Container>
     );
+  }
+
+  // The emailed behavioral-recovery link (?behavioral_attempt=<id>) reopens
+  // the flow for that attempt
+  if (behavioralAttemptId) {
+    return <BehavioralRecoveryFlow attemptId={behavioralAttemptId} />;
   }
 
   // If showing behavioral recovery flow, render it
