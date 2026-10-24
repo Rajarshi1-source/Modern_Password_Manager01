@@ -287,15 +287,18 @@ CVE-2026-115776 exp:2026-11-23
 #
 # CVE-2026-115877 / GHSA-q7qq-6mhp-9rc4: twisted.web.http.HTTPChannel accepts
 # a bare CR or LF inside a header value, which can hide the next header from
-# the parser (request smuggling, CWE-444). This one IS reachable: daphne's
-# HTTP server subclasses twisted.web.http.Request/HTTPFactory. Mitigated where
-# daphne sits behind docker/nginx: nginx parses the request headers itself
-# (a bare LF ends the header line, a bare CR is a 400) and sends the upstream
-# a re-serialised CRLF request, so daphne never receives a header value with
-# a bare CR or LF. Exposed wherever daphne's port is reachable without the
-# proxy: the root docker-compose.yml (local development, requires DEBUG)
-# publishes it as ${BACKEND_PORT:-8000}, so keep that stack off untrusted
-# networks. Same short expiry, same removal step.
+# the parser (request smuggling, CWE-444). The code is reachable (daphne's
+# HTTP server subclasses twisted.web.http.Request/HTTPFactory), but the
+# advisory's attack needs a FRONT END that frames the same bytes differently:
+# one that ends a header line at a bare LF and forwards the raw request, so it
+# and Twisted disagree about where the request ends. The supported front end,
+# docker/nginx, does not create that mismatch: it parses the headers itself
+# (a bare LF ends the header line, a bare CR is a 400) and sends daphne a
+# re-serialised CRLF request, so daphne never sees a bare CR or LF in a value.
+# A client talking to daphne directly has no second parser to desync from
+# (it already controls every header it sends), so that is not this attack.
+# Re-assess before putting daphne behind any other proxy or load balancer
+# that passes raw HTTP through. Same short expiry, same removal step.
 CVE-2026-115877 exp:2026-11-23
 
 # filelock batch (surfaced on PR #588's scan 2026-10-24), fixed in 4.2.1, a
