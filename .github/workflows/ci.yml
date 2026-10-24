@@ -888,7 +888,7 @@ jobs:
         # Skip if no webhook is configured (e.g., forks without secrets) or
         # if the deploy was skipped because KUBE_CONFIG_PRODUCTION is unset.
         if: success() && env.SLACK_WEBHOOK_URL != '' && steps.configure_kubectl.outputs.deploy_enabled == 'true'
-        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
@@ -915,7 +915,7 @@ jobs:
         # `!= 'false'` matches both 'true' AND '' (unset); only the
         # literal 'false' value (set by the "no secret" branch) skips.
         if: failure() && env.SLACK_WEBHOOK_URL != '' && steps.configure_kubectl.outputs.deploy_enabled != 'false'
-        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
