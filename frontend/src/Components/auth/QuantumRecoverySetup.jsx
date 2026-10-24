@@ -357,7 +357,7 @@ const QuantumRecoverySetup = () => {
       
       const validGuardians = guardians.filter(g => g.email && g.email.includes('@'));
       
-      const response = await ApiService.auth.setupQuantumRecovery({
+      const response = await ApiService.quantumRecovery.setupRecovery({
         total_shards: 5,
         threshold_shards: 3,
         guardians: validGuardians.map(g => ({
@@ -380,7 +380,7 @@ const QuantumRecoverySetup = () => {
     } catch (error) {
       console.error('Setup error:', error);
       errorTracker.captureError(error, 'QuantumRecoverySetup:Submit', {}, 'error');
-      toast.error(error.message || 'Failed to setup recovery system');
+      toast.error(error.response?.data?.error || error.message || 'Failed to setup recovery system');
     } finally {
       setLoading(false);
     }

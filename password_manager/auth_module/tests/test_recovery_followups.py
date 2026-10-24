@@ -8,6 +8,7 @@ Follow-ups to the anonymous recovery hardening.
   completes recovery once (single use).
 - The email password-reset link works once and its request is answered the
   same way for every email.
+- Global KEM metrics are staff only.
 """
 import base64
 import os
@@ -137,3 +138,15 @@ class RecoveryFollowupTests(TestCase):
             'new_auth_hash': base64.b64encode(b'other-hash').decode()}, format='json')
         self.assertEqual(again.status_code, 400, again.content)
         self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'new-hash')
+
+    # --- KEM metrics ----------------------------------------------------------
+
+    def test_kem_metrics_are_staff_only(self):
+        user = APIClient()
+        user.force_authenticate(self.owner)
+        self.assertEqual(user.get(reverse('kyber_metrics')).status_code, 403)
+        self.assertEqual(user.post(reverse('kyber_reset_metrics')).status_code, 403)
+        staff = User.objects.create_user('staff', 'staff@example.com', 'Staff-Pass-1!', is_staff=True)
+        admin = APIClient()
+        admin.force_authenticate(staff)
+        self.assertEqual(admin.get(reverse('kyber_metrics')).status_code, 200)
