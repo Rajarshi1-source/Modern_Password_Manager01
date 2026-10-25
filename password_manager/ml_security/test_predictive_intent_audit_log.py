@@ -57,10 +57,13 @@ class PredictiveIntentAuditLogTests(TestCase):
         self.assertEqual(self._preload(lambda **kwargs: stored), [stored])
         self.assertEqual(self._actions(), ['credential_preload'])
 
-    def test_every_action_fits_the_column(self):
-        max_length = AuditLog._meta.get_field('action').max_length
-        for action in ('predictive_export', 'predictive_delete', 'credential_preload', 'preload_access'):
-            self.assertLessEqual(len(action), max_length, action)
+    def test_every_action_fits_the_column_and_is_a_choice(self):
+        field = AuditLog._meta.get_field('action')
+        choices = dict(field.choices)
+        for action in ('predictive_export', 'predictive_delete', 'credential_preload', 'preload_access',
+                       'password_reset', 'password_reset_req'):
+            self.assertLessEqual(len(action), field.max_length, action)
+            self.assertIn(action, choices)
 
     def test_export_and_delete_are_recorded(self):
         client = APIClient()
