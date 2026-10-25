@@ -53,10 +53,9 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
       setVerificationLoading(true);
       setError(null);
       
-      // No server-side existence check: passkey sign-in is discoverable
-      // (authenticate/begin takes no email), and an "account exists" answer
-      // would let anyone enumerate accounts. A missing account simply has no
-      // passkey to offer.
+      // No server-side existence check here: an "account exists" answer
+      // would let anyone enumerate accounts. Account lookup belongs to
+      // authenticate/begin, which must answer unknown emails like known ones.
       setIsVerified(true);
 
       // If conditional UI is supported, try autofill immediately

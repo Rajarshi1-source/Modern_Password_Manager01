@@ -182,8 +182,12 @@ def start_behavioral_recovery(email, ip_address, user_agent):
     from .models import BehavioralCommitment, RecoveryAuditLog
     from .services import ChallengeGenerator, RecoveryOrchestrator
 
+    # The first challenge is a typing one, and evaluating it needs an active
+    # typing commitment: an account with only other commitment types could
+    # never pass it
     user = User.objects.filter(email=email).first()
-    if user is None or not BehavioralCommitment.objects.filter(user=user, is_active=True).exists():
+    if user is None or not BehavioralCommitment.objects.filter(
+            user=user, challenge_type='typing', is_active=True).exists():
         return None
 
     request_meta = SimpleNamespace(META={'REMOTE_ADDR': ip_address, 'HTTP_USER_AGENT': user_agent})
