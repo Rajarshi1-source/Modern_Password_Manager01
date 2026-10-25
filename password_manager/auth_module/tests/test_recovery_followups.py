@@ -57,9 +57,14 @@ class RecoveryFollowupTests(TestCase):
         enrolled = User.objects.create_user('enrolled', 'enrolled@example.com', 'Enrolled-Pass-1!')
         BehavioralCommitment.objects.create(
             user=enrolled, encrypted_embedding=b'x', challenge_type='typing')
+        # The first challenge is typing: a mouse-only account could not pass it
+        mouse_only = User.objects.create_user('mouse', 'mouse@example.com', 'Mouse-Pass-1!')
+        BehavioralCommitment.objects.create(
+            user=mouse_only, encrypted_embedding=b'x', challenge_type='mouse')
         url = '/api/behavioral-recovery/initiate/'
         answers = [self.anon.post(url, {'email': e}, format='json')
-                   for e in ('nobody@example.com', 'owner@example.com', 'enrolled@example.com')]
+                   for e in ('nobody@example.com', 'owner@example.com',
+                             'mouse@example.com', 'enrolled@example.com')]
         for r in answers:
             self.assertEqual(r.status_code, 200, r.content)
             self.assertEqual(r.json(), answers[0].json())

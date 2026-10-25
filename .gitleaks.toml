@@ -8,6 +8,11 @@ useDefault = true
 
 [[allowlists]]
 description = "Django migration dependency lines, e.g. ('auth_module', '0015_ml_kem_768_defaults'),"
+targetRules = ["generic-api-key"]
+# AND: the line must match AND be in a migration (the default, OR, would
+# allowlist every generic-api-key finding in any migration file)
+condition = "AND"
+paths = ['''(^|/)migrations/[^/]+\.py$''']
 regexTarget = "line"
 regexes = [
   '''^\s*\('[a-z][a-z0-9_]*',\s*'\d{4}_[a-z0-9_]+'\),?\s*$''',
