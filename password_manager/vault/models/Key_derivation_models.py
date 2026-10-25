@@ -41,6 +41,12 @@ class AuditLog(models.Model):
         ('password_change', 'Password Change'),
         ('export_data', 'Export Data'),
         ('import_data', 'Import Data'),
+        ('password_reset', 'Password Reset'),
+        ('password_reset_req', 'Password Reset Request'),
+        ('credential_preload', 'Credential Preload'),
+        ('preload_access', 'Preloaded Credential Access'),
+        ('predictive_export', 'Predictive Data Export'),
+        ('predictive_delete', 'Predictive Data Delete'),
     )
     
     STATUS_CHOICES = (
