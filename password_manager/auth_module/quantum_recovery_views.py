@@ -93,6 +93,15 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             return [AllowAny()]
         return super().get_permissions()
 
+    # auth_module/urls.py binds each action with as_view(), which ignores
+    # @action(throttle_classes=...), so the recovery limit is applied here.
+    RECOVERY_THROTTLED_ACTIONS = {'complete_recovery'}
+
+    def get_throttles(self):
+        if getattr(self, 'action', None) in self.RECOVERY_THROTTLED_ACTIONS:
+            return [RecoveryThrottle()]
+        return super().get_throttles()
+
     @action(detail=False, methods=['post'])
     def setup_recovery(self, request):
         """
@@ -752,8 +761,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 'error': 'Failed to enable travel lock'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-    @action(detail=False, methods=['post'], permission_classes=[AllowAny],
-            throttle_classes=[RecoveryThrottle])
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def complete_recovery(self, request):
         """
         Hand the requester the shares guardians re-sealed to its one-time key.
