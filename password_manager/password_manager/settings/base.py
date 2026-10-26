@@ -960,6 +960,10 @@ SECURITY_EMAIL = os.environ.get('SECURITY_EMAIL', 'security@securevault.com')
 
 # Frontend URL (for email links)
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
+# The emailed reset link (auth_module.tasks.send_password_reset_email) is
+# single-use and expires after an hour (OWASP Forgot Password Cheat Sheet);
+# Django's default is three days.
+PASSWORD_RESET_TIMEOUT = 60 * 60
 
 # AllAuth settings
 # Note: The UserWarnings from dj_rest_auth are from the dj-rest-auth library itself,

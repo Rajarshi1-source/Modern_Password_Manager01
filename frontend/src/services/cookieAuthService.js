@@ -51,13 +51,15 @@ const _commonHeaders = {
  * HttpOnly refresh cookie and returns the access token in the JSON
  * body; we store the access token in memory.
  *
- * @param {{username: string, password: string}} credentials
+ * @param {{username: string, password: string, legacy_password?: string}} credentials
+ *   `password` is the login verifier (services/loginVerifier.js);
+ *   `legacy_password` is sent only to switch a legacy account over.
  * @returns {Promise<{access: string, user?: object}>}
  */
-export async function loginWithCookie({ username, password }) {
+export async function loginWithCookie({ username, password, legacy_password }) {
   const resp = await axios.post(
     COOKIE_LOGIN_URL,
-    { username, password },
+    legacy_password ? { username, password, legacy_password } : { username, password },
     {
       // Include the (initially empty) cookie jar so the response
       // Set-Cookie is accepted by the browser.

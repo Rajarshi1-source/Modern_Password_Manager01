@@ -2,8 +2,46 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import { FaKey, FaShieldAlt, FaCheckCircle, FaExclamationTriangle, FaUsers } from 'react-icons/fa';
+import axios from 'axios';
 import ApiService from '../../services/api';
 import toast from 'react-hot-toast';
+import { base64urlToArrayBuffer, arrayBufferToBase64url } from '../../utils/webauthnBase64';
+
+// The recovery grant lives in the server session that complete opens, so
+// complete and the registration that follows go to the same origin with
+// cookies (as passkey sign-in does).
+const RECOVERY_URL = '/api/auth/passkey-recovery';
+const withSession = { withCredentials: true };
+
+/**
+ * Create the new passkey in the browser from the server's creation options
+ * and send the attestation back. The lost passkey was already revoked when
+ * the recovery key was accepted.
+ */
+async function registerReplacementPasskey(options) {
+  const credential = await navigator.credentials.create({
+    publicKey: {
+      ...options,
+      challenge: base64urlToArrayBuffer(options.challenge),
+      user: { ...options.user, id: base64urlToArrayBuffer(options.user.id) },
+      excludeCredentials: (options.excludeCredentials || []).map((cred) => ({
+        ...cred,
+        id: base64urlToArrayBuffer(cred.id),
+      })),
+    },
+  });
+  const response = await axios.post(`${RECOVERY_URL}/register/complete/`, {
+    id: credential.id,
+    rawId: arrayBufferToBase64url(credential.rawId),
+    type: credential.type,
+    response: {
+      clientDataJSON: arrayBufferToBase64url(credential.response.clientDataJSON),
+      attestationObject: arrayBufferToBase64url(credential.response.attestationObject),
+    },
+    clientExtensionResults: credential.getClientExtensionResults(),
+  }, withSession);
+  return response.data;
+}
 
 const Container = styled.div`
   min-height: 100vh;
@@ -193,13 +231,14 @@ const SuccessContainer = styled.div`
 `;
 
 const PasskeyPrimaryRecoveryInitiate = () => {
-  const [step, setStep] = useState(1); // 1: identify, 2: enter key, 3: success
+  const [step, setStep] = useState(1); // 1: identify, 2: enter key, 3: register new passkey, 4: success
   const [username, setUsername] = useState('');
   const [recoveryKey, setRecoveryKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [recoveryAttemptId, setRecoveryAttemptId] = useState(null);
-  const [recoveredCredential, setRecoveredCredential] = useState(null);
+  const [registrationOptions, setRegistrationOptions] = useState(null);
+  const [revokedDevice, setRevokedDevice] = useState('');
   const [fallbackAvailable, setFallbackAvailable] = useState(false);
   const navigate = useNavigate();
 
@@ -243,14 +282,16 @@ const PasskeyPrimaryRecoveryInitiate = () => {
     setError('');
 
     try {
-      const response = await ApiService.passkeyPrimaryRecovery.completeRecovery({
+      const response = await axios.post(`${RECOVERY_URL}/complete/`, {
         recovery_attempt_id: recoveryAttemptId,
         recovery_key: recoveryKey.replace(/-/g, '') // Remove hyphens
-      });
+      }, withSession);
 
-      setRecoveredCredential(response.data.passkey_credential);
+      setRecoveryKey('');
+      setRegistrationOptions(response.data.registration_options);
+      setRevokedDevice(response.data.revoked_device_name || '');
       setStep(3);
-      toast.success('Passkey recovered successfully!');
+      toast.success('Recovery key accepted. Now create your new passkey.');
     } catch (err) {
       const errorData = err.response?.data;
       const errorMsg = errorData?.error || 'Recovery failed. Please try again.';
@@ -262,6 +303,32 @@ const PasskeyPrimaryRecoveryInitiate = () => {
         // Show fallback option
         setError(errorData.message || errorMsg);
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegisterPasskey = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      let options = registrationOptions;
+      if (!options) {
+        // A cancelled or failed ceremony: ask for fresh options while the
+        // recovery grant is still valid.
+        const again = await axios.post(`${RECOVERY_URL}/register/begin/`, {}, withSession);
+        options = again.data.registration_options;
+      }
+      setRegistrationOptions(null); // options are single-use
+      await registerReplacementPasskey(options);
+      setStep(4);
+      toast.success('New passkey registered.');
+    } catch (err) {
+      const errorMsg = err.name === 'NotAllowedError'
+        ? 'The passkey prompt was cancelled or timed out. Try again.'
+        : (err.response?.data?.error || 'Registering the new passkey failed. Try again.');
+      setError(errorMsg);
+      toast.error(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -370,11 +437,11 @@ const PasskeyPrimaryRecoveryInitiate = () => {
             <h1>
               <FaKey /> Enter Recovery Key
             </h1>
-            <p>Decrypt your passkey backup</p>
+            <p>Prove you own this account</p>
           </Header>
           <Content>
             <p style={{ marginBottom: '24px', lineHeight: '1.6', color: '#666' }}>
-              If this account has a recovery backup, enter your recovery key to decrypt your passkey.
+              If this account has a recovery backup, enter your recovery key. You will then create a new passkey.
             </p>
 
             {error && (
@@ -404,7 +471,7 @@ const PasskeyPrimaryRecoveryInitiate = () => {
               </FormGroup>
 
               <Button type="submit" disabled={loading}>
-                {loading ? 'Decrypting...' : 'Recover Passkey'}
+                {loading ? 'Checking...' : 'Continue'}
               </Button>
             </form>
 
@@ -432,8 +499,41 @@ const PasskeyPrimaryRecoveryInitiate = () => {
     );
   }
 
-  // Render step 3: Success
+  // Render step 3: register the replacement passkey
   if (step === 3) {
+    return (
+      <Container>
+        <Card>
+          <Header>
+            <h1>
+              <FaKey /> Create a New Passkey
+            </h1>
+            <p>Your recovery key was accepted</p>
+          </Header>
+          <Content>
+            <p style={{ marginBottom: '24px', lineHeight: '1.6', color: '#666' }}>
+              Your lost passkey{revokedDevice ? ` (${revokedDevice})` : ''} no longer signs in to this account.
+              Create a new passkey on this device to finish recovery.
+            </p>
+
+            {error && (
+              <Alert type="error">
+                <FaExclamationTriangle />
+                <span>{error}</span>
+              </Alert>
+            )}
+
+            <Button onClick={handleRegisterPasskey} disabled={loading}>
+              {loading ? 'Waiting for your device...' : 'Create New Passkey'}
+            </Button>
+          </Content>
+        </Card>
+      </Container>
+    );
+  }
+
+  // Render step 4: Success
+  if (step === 4) {
     return (
       <Container>
         <Card>
@@ -441,29 +541,15 @@ const PasskeyPrimaryRecoveryInitiate = () => {
             <h1>
               <FaCheckCircle /> Recovery Complete!
             </h1>
-            <p>Your passkey has been restored</p>
+            <p>Your new passkey is registered</p>
           </Header>
           <Content>
             <SuccessContainer>
               <FaShieldAlt style={{ color: '#2a7f2a' }} />
-              <h2>Passkey Successfully Recovered!</h2>
+              <h2>New Passkey Registered</h2>
               <p>
-                Your passkey has been decrypted and restored. You can now use it to log in to your account.
+                Sign in with the passkey you just created. The lost passkey has been revoked.
               </p>
-              {recoveredCredential && (
-                <div style={{ background: '#f8f9fa', padding: '16px', borderRadius: '8px', marginBottom: '20px', textAlign: 'left' }}>
-                  <h4 style={{ margin: '0 0 12px 0' }}>Recovered Passkey Details:</h4>
-                  <p style={{ margin: '4px 0', fontSize: '14px' }}>
-                    <strong>Device:</strong> {recoveredCredential.device_type || 'Unknown'}
-                  </p>
-                  <p style={{ margin: '4px 0', fontSize: '14px' }}>
-                    <strong>Created:</strong> {new Date(recoveredCredential.created_at).toLocaleDateString()}
-                  </p>
-                  <p style={{ margin: '4px 0', fontSize: '14px' }}>
-                    <strong>RP ID:</strong> {recoveredCredential.rp_id}
-                  </p>
-                </div>
-              )}
             </SuccessContainer>
 
             <Alert type="warning">
@@ -471,9 +557,9 @@ const PasskeyPrimaryRecoveryInitiate = () => {
               <div>
                 <strong>Next Steps:</strong>
                 <ul style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
-                  <li>Log in with your recovered passkey</li>
+                  <li>Sign in with your new passkey</li>
                   <li>Create a new recovery backup: your recovery key worked once and is now used up</li>
-                  <li>Set up guardian-based recovery as a backup</li>
+                  <li>Your vault still opens with your master password; a passkey does not decrypt it</li>
                   <li>Review your security settings</li>
                 </ul>
               </div>

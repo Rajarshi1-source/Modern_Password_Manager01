@@ -22,6 +22,7 @@
  */
 import * as argon2 from 'argon2-browser';
 import axios from 'axios';
+import { deriveLoginVerifier } from './loginVerifier';
 
 const BLOB_VERSION = 'wdek-1';
 const PAYLOAD_VERSION = 'svc-gcm-2';
@@ -327,9 +328,10 @@ export async function unlockWithRecoveryFactor(blob, secret, dekId) {
  * is `IsAuthenticated`, but the recovery pages run BEFORE the user is
  * authenticated (they're recovering precisely because they can't log
  * in). The anonymous WRAPPED_DEK_RECOVER_ROTATE_URL accepts
- * (username, factor_type, dek_id, blob) and authorizes the rotation
- * through possession of `dek_id`, which is only obtainable via a
- * successful `recovery-factors/lookup/` call.
+ * (username, factor_type, dek_id, blob, auth_hash, login_verifier) and
+ * authorizes the rotation through `auth_hash`, which only the recovery
+ * secret produces. The same request sets the login verifier of the new
+ * master password, so the user signs in with it afterwards.
  *
  * The session DEK is also re-installed (non-extractable) so the user
  * can use the vault immediately without a separate unlock step.
@@ -375,6 +377,10 @@ export async function rewrapMasterPasswordFromRecovery({
   // matching proves the caller actually knew the recovery secret
   // (not just the dek_id, which is publicly leaked by lookup).
   const authHash = await computeAuthHash(recoverySecret);
+  // Sign-in must move to the new master password in the same server
+  // transaction as the envelope; rotating only the envelope left sign-in
+  // on the forgotten password and locked the user out.
+  const loginVerifier = await deriveLoginVerifier(newPassword, username);
 
   try {
     await axios.post(WRAPPED_DEK_RECOVER_ROTATE_URL, {
@@ -383,6 +389,7 @@ export async function rewrapMasterPasswordFromRecovery({
       dek_id: dekId,
       blob,
       auth_hash: authHash,
+      login_verifier: loginVerifier,
     });
   } catch (err) {
     // The server returns 409 with `re_enroll_required: true` for

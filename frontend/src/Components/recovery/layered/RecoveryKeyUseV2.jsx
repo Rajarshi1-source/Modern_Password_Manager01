@@ -176,7 +176,8 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
       // blob locally with the recovery key (guaranteed to succeed —
       // we just did the same unwrap in handleRecover), wraps the
       // resulting DEK under a new master-password KEK, and POSTs the
-      // rotation along with username + factor_type + auth_hash so
+      // rotation along with username + factor_type + auth_hash (and the
+      // login verifier of the new password, so sign-in moves too) so
       // the server can verify the caller actually possesses the
       // recovery secret (not just the dek_id which lookup discloses).
       // dek_id stays stable so other recovery factors are not
@@ -294,7 +295,7 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
   return (
     <section data-testid="recovery-key-use-v2">
       <h1>Recovery complete</h1>
-      <p data-testid="rk-use-success">Your vault is unlocked. You can continue normally.</p>
+      <p data-testid="rk-use-success">Your vault is unlocked and your master password is changed. Sign in with the new master password from now on; your other sessions were signed out.</p>
     </section>
   );
 }

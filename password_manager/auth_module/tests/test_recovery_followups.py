@@ -25,6 +25,9 @@ from rest_framework.test import APIClient
 
 from auth_module.models import UserPasskey, UserSalt
 
+# A login verifier: base64 of 32 bytes (auth_module/login_verifier.py)
+VERIFIER = base64.b64encode(b'v' * 32).decode()
+
 
 @override_settings(
     QUANTUM_CRYPTO={'ALLOW_SIMULATION': True, 'ENABLED': True},
@@ -173,10 +176,10 @@ class RecoveryFollowupTests(TestCase):
         self.assertIn('https://app.example.com/reset-password/', mail.outbox[-1].body)
         new_hash = base64.b64encode(b'new-hash').decode()
         first = self.anon.post('/api/auth/reset_password/', {
-            'uid': uid, 'token': token, 'new_auth_hash': new_hash}, format='json')
+            'uid': uid, 'token': token, 'new_login_verifier': VERIFIER, 'username': 'owner', 'new_auth_hash': new_hash}, format='json')
         self.assertEqual(first.status_code, 200, first.content)
         again = self.anon.post('/api/auth/reset_password/', {
-            'uid': uid, 'token': token,
+            'uid': uid, 'token': token, 'new_login_verifier': VERIFIER, 'username': 'owner',
             'new_auth_hash': base64.b64encode(b'other-hash').decode()}, format='json')
         self.assertEqual(again.status_code, 400, again.content)
         self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'new-hash')
@@ -190,10 +193,10 @@ class RecoveryFollowupTests(TestCase):
         uid, token = self._reset_link()
         same = base64.b64encode(b'original-hash').decode()
         first = self.anon.post('/api/auth/reset_password/', {
-            'uid': uid, 'token': token, 'new_auth_hash': same}, format='json')
+            'uid': uid, 'token': token, 'new_login_verifier': VERIFIER, 'username': 'owner', 'new_auth_hash': same}, format='json')
         self.assertEqual(first.status_code, 200, first.content)
         again = self.anon.post('/api/auth/reset_password/', {
-            'uid': uid, 'token': token,
+            'uid': uid, 'token': token, 'new_login_verifier': VERIFIER, 'username': 'owner',
             'new_auth_hash': base64.b64encode(b'other-hash').decode()}, format='json')
         self.assertEqual(again.status_code, 400, again.content)
         self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'original-hash')
@@ -204,10 +207,11 @@ class RecoveryFollowupTests(TestCase):
         authed.force_authenticate(self.owner)
         changed = authed.post('/api/auth/change_master/', {
             'current_auth_hash': base64.b64encode(b'original-hash').decode(),
-            'new_auth_hash': base64.b64encode(b'changed-hash').decode()}, format='json')
+            'new_auth_hash': base64.b64encode(b'changed-hash').decode(),
+            'new_login_verifier': VERIFIER}, format='json')
         self.assertEqual(changed.status_code, 200, changed.content)
         r = self.anon.post('/api/auth/reset_password/', {
-            'uid': uid, 'token': token,
+            'uid': uid, 'token': token, 'new_login_verifier': VERIFIER, 'username': 'owner',
             'new_auth_hash': base64.b64encode(b'attacker-hash').decode()}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
         self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'changed-hash')
@@ -220,22 +224,22 @@ class RecoveryFollowupTests(TestCase):
         self.assertEqual(log.status, 'failure')
 
     def test_passkey_backup_is_consumed_once_under_concurrency(self):
-        # A concurrent completion consumes the backup while this one is
-        # decrypting: this one must not also return the credential.
+        # A concurrent completion consumes the backup after this one checked
+        # the key: this one must not also start a registration.
         from auth_module.passkey_primary_recovery_models import PasskeyRecoveryBackup
-        from auth_module import passkey_primary_recovery_views as views
         key = self._backup()
-        real_decrypt = views.recovery_service.decrypt_passkey_credential
+        real_verify = PasskeyRecoveryBackup.verify_recovery_key
 
-        def decrypt_while_another_request_wins(**kwargs):
+        def verify_while_another_request_wins(backup, recovery_key):
+            matched = real_verify(backup, recovery_key)
             PasskeyRecoveryBackup.objects.filter(user=self.owner).update(is_active=False)
-            return real_decrypt(**kwargs)
+            return matched
 
-        with patch.object(views.recovery_service, 'decrypt_passkey_credential',
-                          side_effect=decrypt_while_another_request_wins):
+        with patch.object(PasskeyRecoveryBackup, 'verify_recovery_key',
+                          verify_while_another_request_wins):
             r = self._complete(self._initiate('owner'), key)
         self.assertEqual(r.status_code, 401, r.content)
-        self.assertNotIn('passkey_credential', r.json())
+        self.assertNotIn('registration_options', r.json())
 
     # --- KEM metrics ----------------------------------------------------------
 

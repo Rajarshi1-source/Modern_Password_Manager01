@@ -163,7 +163,7 @@ const ApiService = {
     listBackups: () => api.get('/auth/passkey-recovery/backups/'),
     // Initiate recovery (step 1: identify user)
     initiateRecovery: (data) => api.post('/auth/passkey-recovery/initiate/', data),
-    // Complete recovery (step 2: decrypt with recovery key)
+    // Complete recovery (step 2: prove the recovery key; starts a new-passkey registration)
     completeRecovery: (data) => api.post('/auth/passkey-recovery/complete/', data),
     // Fallback to social mesh recovery if primary fails
     fallbackToSocialMesh: (data) => api.post('/auth/passkey-recovery/fallback/', data),

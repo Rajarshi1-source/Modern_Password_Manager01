@@ -28,6 +28,11 @@ from auth_module.recovery_throttling import (
 )
 from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
 from auth_module.quantum_recovery_models import RecoveryAuditLog
+from auth_module.login_verifier import (
+    is_login_verifier,
+    revoke_sessions,
+    set_login_verifier,
+)
 from shared.client_ip import get_client_ip
 
 
@@ -119,7 +124,16 @@ class WrappedDEKRecoveryRotateView(APIView):
     server. Without this anonymous endpoint, the rotation would 401
     and the user would still be locked out on next login.
 
-    Request: ``{username, factor_type, dek_id, blob}``
+    Request: ``{username, factor_type, dek_id, blob, auth_hash, login_verifier}``
+
+    The new master password replaces two things, and both are written in
+    one transaction behind the same ``auth_hash`` proof: the
+    master-wrapped DEK (``blob``) and the credential sign-in checks
+    (``login_verifier``, derived in the browser from the new master
+    password, see ``auth_module/login_verifier.py``). Rotating only the
+    envelope left sign-in on the forgotten password, so the user was
+    locked out at the next sign-in. A successful rotation also ends the
+    account's existing sessions.
 
     Authorization model:
 
@@ -161,6 +175,7 @@ class WrappedDEKRecoveryRotateView(APIView):
         # disclose this value, so an attacker who only hit lookup has
         # everything *except* this hash and cannot rotate.
         auth_hash_in = request.data.get('auth_hash')
+        login_verifier = request.data.get('login_verifier')
 
         if (
             not isinstance(username, str)
@@ -170,9 +185,10 @@ class WrappedDEKRecoveryRotateView(APIView):
             or not dek_id_in
             or not isinstance(auth_hash_in, str)
             or len(auth_hash_in) != 64
+            or not is_login_verifier(login_verifier)
         ):
             return Response(
-                {'error': 'username, factor_type, dek_id, and auth_hash required'},
+                {'error': 'username, factor_type, dek_id, auth_hash, and login_verifier required'},
                 status=400,
             )
         if not _valid_envelope(blob):
@@ -288,6 +304,8 @@ class WrappedDEKRecoveryRotateView(APIView):
             wrapped_row.save(
                 update_fields=['blob', 'rotated_at', 'updated_at'],
             )
+            set_login_verifier(user, login_verifier)
+            revoke_sessions(user)
 
             RecoveryAuditLog.objects.create(
                 user=user,
@@ -297,6 +315,7 @@ class WrappedDEKRecoveryRotateView(APIView):
                     'dek_id': str(wrapped_row.dek_id),
                     'action': 'recovery_rotation',
                     'factor_type': factor_type,
+                    'login_verifier_rotated': True,
                 },
                 ip_address=_client_ip(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', '')[:1024],
