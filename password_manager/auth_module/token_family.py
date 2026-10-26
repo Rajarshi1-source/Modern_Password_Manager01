@@ -26,9 +26,10 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
+from rest_framework_simplejwt.settings import api_settings
 
-from .login_verifier import LEGACY_PASSWORD_FIELD, migrate_legacy_login
+from .login_verifier import LEGACY_PASSWORD_FIELD, lock_sessions, migrate_legacy_login
 
 logger = logging.getLogger(__name__)
 
@@ -138,3 +139,21 @@ class FamilyLimitedTokenObtainPairSerializer(TokenObtainPairSerializer):
             )
 
         return data
+
+
+class RevocationSafeTokenRefreshSerializer(TokenRefreshSerializer):
+    """TokenRefreshSerializer that rotates under the account lock
+    ``revoke_sessions`` also takes, re-checking the blacklist once it is
+    held. Otherwise a refresh that passed its blacklist check just before a
+    reset or recovery could still write a replacement token after the
+    revocation's scan, and that token would outlive the reset.
+
+        'TOKEN_REFRESH_SERIALIZER': 'auth_module.token_family.RevocationSafeTokenRefreshSerializer'
+    """
+
+    def validate(self, attrs):
+        refresh = self.token_class(attrs["refresh"])
+        with transaction.atomic():
+            lock_sessions(refresh.payload.get(api_settings.USER_ID_CLAIM))
+            refresh.check_blacklist()  # TokenError -> the view answers 401
+            return super().validate(attrs)

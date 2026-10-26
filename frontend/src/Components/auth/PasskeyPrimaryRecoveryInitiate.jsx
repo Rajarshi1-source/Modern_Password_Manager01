@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import { FaKey, FaShieldAlt, FaCheckCircle, FaExclamationTriangle, FaUsers } from 'react-icons/fa';
@@ -236,6 +236,22 @@ const PasskeyPrimaryRecoveryInitiate = () => {
   const [revokedDevice, setRevokedDevice] = useState('');
   const [fallbackAvailable, setFallbackAvailable] = useState(false);
   const navigate = useNavigate();
+
+  // A reload after the recovery key was accepted must not strand the user:
+  // the key is spent and the lost passkey revoked, but the server session
+  // still holds the registration grant. Ask for it once on open; without a
+  // grant the server answers 400 and the page starts at step 1 as usual.
+  useEffect(() => {
+    let cancelled = false;
+    ApiService.passkeyPrimaryRecovery.beginRegistration()
+      .then((response) => {
+        if (cancelled || !response.data?.registration_options) return;
+        setRegistrationOptions(response.data.registration_options);
+        setStep(3);
+      })
+      .catch(() => { /* no grant in this session: normal start */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleIdentifyUser = async (e) => {
     e.preventDefault();

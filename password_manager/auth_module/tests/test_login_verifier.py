@@ -355,3 +355,66 @@ class ChangeMasterTests(TestCase):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(_sign_in(APIClient(), 'owner', NEW_VERIFIER).status_code, 200)
         self.assertEqual(_sign_in(APIClient(), 'owner', OLD_VERIFIER).status_code, 401)
+
+
+class RefreshRevocationRaceTests(TestCase):
+    """A refresh that passed its blacklist check and then waited on the
+    account lock while a reset or recovery committed must not rotate: its
+    new token would never be in the revocation's scan."""
+
+    def setUp(self):
+        self.user = User.objects.create_user('owner', 'owner@example.com', OLD_VERIFIER)
+        self.anon = APIClient()
+
+    def _no_live_refresh_tokens(self):
+        from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
+        return not OutstandingToken.objects.filter(
+            user=self.user, blacklistedtoken__isnull=True).exists()
+
+    def test_json_refresh_still_rotates_normally(self):
+        refresh = _sign_in(self.anon, 'owner', OLD_VERIFIER).json()['refresh']
+        r = self.anon.post('/api/auth/token/refresh/', {'refresh': refresh}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_json_refresh_that_waited_on_a_revocation_is_refused(self):
+        # The revocation commits on its own, right after this refresh decoded
+        # and blacklist-checked its token and before it takes the lock. (The
+        # window between simplejwt's own re-check and outstand() is closed by
+        # the row lock, which SQLite does not implement; only PostgreSQL can
+        # show that one.)
+        from rest_framework_simplejwt.tokens import RefreshToken
+        from auth_module.login_verifier import revoke_sessions
+        from auth_module.token_family import RevocationSafeTokenRefreshSerializer
+        calls = []
+
+        def decode_then_revoke(raw):
+            token = RefreshToken(raw)
+            if not calls:
+                calls.append(raw)
+                revoke_sessions(self.user)
+            return token
+
+        refresh = _sign_in(self.anon, 'owner', OLD_VERIFIER).json()['refresh']
+        with patch.object(RevocationSafeTokenRefreshSerializer, 'token_class', staticmethod(decode_then_revoke)):
+            r = self.anon.post('/api/auth/token/refresh/', {'refresh': refresh}, format='json')
+        self.assertEqual(r.status_code, 401, r.content)
+        self.assertTrue(self._no_live_refresh_tokens())
+
+    def test_cookie_refresh_that_waited_on_a_revocation_is_refused(self):
+        signed_in = self.anon.post('/api/auth/cookie/token/', {
+            'username': 'owner', 'password': OLD_VERIFIER}, format='json')
+        self.assertEqual(signed_in.status_code, 200, signed_in.content)
+        # The revocation commits right after the view decoded and
+        # blacklist-checked the cookie's token, before it rotates it.
+        from rest_framework_simplejwt.tokens import RefreshToken
+        from auth_module.login_verifier import revoke_sessions
+
+        def decode_then_revoke(raw):
+            token = RefreshToken(raw)
+            revoke_sessions(self.user)
+            return token
+
+        with patch('auth_module.cookie_auth_view.RefreshToken', side_effect=decode_then_revoke):
+            r = self.anon.post('/api/auth/cookie/token/refresh/', HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+        self.assertEqual(r.status_code, 401, r.content)
+        self.assertTrue(self._no_live_refresh_tokens())

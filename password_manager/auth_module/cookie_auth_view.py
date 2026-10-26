@@ -68,6 +68,7 @@ from datetime import timedelta
 from typing import Optional
 
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from django.utils.module_loading import import_string
 from rest_framework import status
@@ -76,7 +77,10 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from .login_verifier import lock_sessions
 
 
 # ---------------------------------------------------------------------------
@@ -279,60 +283,75 @@ class CookieTokenRefreshView(APIView):
                 _clear_refresh_cookie(response)
             return response
 
-        new_access = str(refresh.access_token)
-
-        # Honour SIMPLE_JWT.ROTATE_REFRESH_TOKENS — the project sets this
-        # to True. We always rotate when called via this endpoint: a
-        # successful refresh issues a fresh refresh-token cookie and
-        # blacklists the old one (if the blacklist app is installed).
-        #
-        # ``new_refresh_value`` stays None when we did NOT rotate. We
-        # only ever re-write the cookie on actual rotation; this both
-        # (a) avoids the CodeQL "cookie constructed from user-supplied
-        # input" warning that fires when we'd re-set the same user-
-        # supplied token value verbatim, and (b) is a true reflection
-        # of the contract — if there's no rotation, there's no new
-        # cookie to set.
-        new_refresh_value: Optional[str] = None
-        if settings.SIMPLE_JWT.get("ROTATE_REFRESH_TOKENS", False):
+        # Rotate under the account lock that revoke_sessions also takes, and
+        # re-check the blacklist once it is held: a reset or recovery that
+        # committed while this request waited has blacklisted the presented
+        # token, and rotating it anyway would issue a token that outlives
+        # the reset.
+        with transaction.atomic():
+            lock_sessions(refresh.payload.get(api_settings.USER_ID_CLAIM))
             try:
-                if settings.SIMPLE_JWT.get("BLACKLIST_AFTER_ROTATION", False):
-                    try:
-                        refresh.blacklist()
-                    except AttributeError:
-                        # blacklist() is only available when the
-                        # token_blacklist app is installed. The project
-                        # installs it; fall through gracefully if a test
-                        # environment doesn't.
-                        pass
-                refresh.set_jti()
-                refresh.set_exp()
-                refresh.set_iat()
-                # Register the rotated token in the OutstandingToken
-                # table so ``enforce_token_family_limit`` (from
-                # auth_module.token_family) can count it. Without
-                # ``.outstand()`` SimpleJWT's family-limit enforcement
-                # would silently miss every refresh-rotated token
-                # issued through this endpoint and the device cap
-                # would drift relative to the JSON /token/refresh/
-                # path. Wrapped in AttributeError because the method
-                # only exists when the token_blacklist app is
-                # installed; the project installs it.
-                try:
-                    refresh.outstand()
-                except AttributeError:
-                    pass
-                new_refresh_value = str(refresh)
+                refresh.check_blacklist()
             except TokenError:
-                # If rotation fails (e.g. the existing token is exactly
-                # at expiry mid-rotation), respond as unauthenticated
-                # rather than silently leaving a half-rotated cookie.
-                response = Response(
-                    {"detail": "refresh rotation failed"},
+                return Response(
+                    {"detail": "refresh token invalid or expired"},
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
-                _clear_refresh_cookie(response)
-                return response
+
+            new_access = str(refresh.access_token)
+
+            # Honour SIMPLE_JWT.ROTATE_REFRESH_TOKENS — the project sets this
+            # to True. We always rotate when called via this endpoint: a
+            # successful refresh issues a fresh refresh-token cookie and
+            # blacklists the old one (if the blacklist app is installed).
+            #
+            # ``new_refresh_value`` stays None when we did NOT rotate. We
+            # only ever re-write the cookie on actual rotation; this both
+            # (a) avoids the CodeQL "cookie constructed from user-supplied
+            # input" warning that fires when we'd re-set the same user-
+            # supplied token value verbatim, and (b) is a true reflection
+            # of the contract — if there's no rotation, there's no new
+            # cookie to set.
+            new_refresh_value: Optional[str] = None
+            if settings.SIMPLE_JWT.get("ROTATE_REFRESH_TOKENS", False):
+                try:
+                    if settings.SIMPLE_JWT.get("BLACKLIST_AFTER_ROTATION", False):
+                        try:
+                            refresh.blacklist()
+                        except AttributeError:
+                            # blacklist() is only available when the
+                            # token_blacklist app is installed. The project
+                            # installs it; fall through gracefully if a test
+                            # environment doesn't.
+                            pass
+                    refresh.set_jti()
+                    refresh.set_exp()
+                    refresh.set_iat()
+                    # Register the rotated token in the OutstandingToken
+                    # table so ``enforce_token_family_limit`` (from
+                    # auth_module.token_family) can count it. Without
+                    # ``.outstand()`` SimpleJWT's family-limit enforcement
+                    # would silently miss every refresh-rotated token
+                    # issued through this endpoint and the device cap
+                    # would drift relative to the JSON /token/refresh/
+                    # path. Wrapped in AttributeError because the method
+                    # only exists when the token_blacklist app is
+                    # installed; the project installs it.
+                    try:
+                        refresh.outstand()
+                    except AttributeError:
+                        pass
+                    new_refresh_value = str(refresh)
+                except TokenError:
+                    # If rotation fails (e.g. the existing token is exactly
+                    # at expiry mid-rotation), respond as unauthenticated
+                    # rather than silently leaving a half-rotated cookie.
+                    response = Response(
+                        {"detail": "refresh rotation failed"},
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
+                    _clear_refresh_cookie(response)
+                    return response
 
         response = Response(
             {"access": new_access, "token_type": "Bearer"},

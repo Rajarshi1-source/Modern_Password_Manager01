@@ -71,6 +71,10 @@ data:
   # URLs
   FRONTEND_URL: "https://yourapp.com"
   CORS_ALLOWED_ORIGINS: "https://yourapp.com,https://www.yourapp.com"
+  # The SPA calls the API on another origin with cookies (cookie auth, and the
+  # passkey-recovery grant held in the server session), so credentialed CORS
+  # must be allowed for the origins listed above.
+  CORS_ALLOW_CREDENTIALS: "true"
   CSRF_TRUSTED_ORIGINS: "https://yourapp.com,https://www.yourapp.com"
   
   # Behavioral Recovery
