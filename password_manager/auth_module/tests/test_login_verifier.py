@@ -24,6 +24,8 @@ from django.core import mail
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
+from datetime import timedelta
 from rest_framework.test import APIClient
 
 from auth_module.login_verifier import uses_login_verifier
@@ -41,6 +43,7 @@ BLOB = {
 }
 NEW_BLOB = dict(BLOB, wrapped='bmV3LXdyYXBwZWQ=')
 AUTH_HASH = 'a' * 64
+NEW_MASTER_HASH = base64.b64encode(b'm' * 32).decode()
 
 
 def _sign_in(client, username, password, **extra):
@@ -134,6 +137,7 @@ class RecoverRotateTests(TestCase):
 
     def setUp(self):
         self.user = User.objects.create_user('owner@example.com', 'owner@example.com', OLD_VERIFIER)
+        UserSalt.objects.create(user=self.user, salt=os.urandom(16), auth_hash=b'old-hash')
         self.dek_id = uuid.uuid4()
         VaultWrappedDEK.objects.create(user=self.user, blob=BLOB, dek_id=self.dek_id)
         RecoveryWrappedDEK.objects.create(
@@ -145,7 +149,7 @@ class RecoverRotateTests(TestCase):
         body = {
             'username': 'owner@example.com', 'factor_type': 'recovery_key',
             'dek_id': str(self.dek_id), 'blob': NEW_BLOB, 'auth_hash': AUTH_HASH,
-            'login_verifier': NEW_VERIFIER,
+            'login_verifier': NEW_VERIFIER, 'new_auth_hash': NEW_MASTER_HASH,
         }
         body.update(overrides)
         body = {k: v for k, v in body.items() if v is not None}
@@ -172,10 +176,24 @@ class RecoverRotateTests(TestCase):
         self.assertEqual(_sign_in(self.anon, 'owner@example.com', OLD_VERIFIER).status_code, 200)
 
     def test_recovery_ends_existing_sessions(self):
-        refresh = _sign_in(self.anon, 'owner@example.com', OLD_VERIFIER).json()['refresh']
-        self.assertEqual(self._rotate().status_code, 200)
-        r = self.anon.post('/api/auth/token/refresh/', {'refresh': refresh}, format='json')
+        tokens = _sign_in(self.anon, 'owner@example.com', OLD_VERIFIER).json()
+        authed = APIClient()
+        authed.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+        self.assertEqual(authed.get('/api/auth/vault/wrapped-dek/').status_code, 200)
+        # iat has whole seconds; revoke a few seconds later than the sign-in
+        later = timezone.now() + timedelta(seconds=5)
+        with patch('auth_module.login_verifier.timezone.now', return_value=later):
+            self.assertEqual(self._rotate().status_code, 200)
+        r = self.anon.post('/api/auth/token/refresh/', {'refresh': tokens['refresh']}, format='json')
         self.assertEqual(r.status_code, 401)
+        # The access token issued before the recovery stops working too
+        self.assertEqual(authed.get('/api/auth/vault/wrapped-dek/').status_code, 401)
+
+    def test_recovery_moves_the_master_password_check(self):
+        self.assertEqual(self._rotate().status_code, 200)
+        self.assertEqual(bytes(UserSalt.objects.get(user=self.user).auth_hash), b'm' * 32)
+        self.assertEqual(self._rotate(new_auth_hash=None).status_code, 400)
+        self.assertEqual(self._rotate(new_auth_hash='bm90LTMyLWJ5dGVz').status_code, 400)
 
 
 @override_settings(
@@ -306,6 +324,16 @@ class PasskeyRecoveryRegistrationTests(TestCase):
         again = self.anon.post(reverse('begin_recovery_passkey_registration'))
         self.assertEqual(again.status_code, 200, again.content)
         self.assertEqual(self._register().status_code, 201)
+
+    def test_a_failed_registration_start_keeps_the_key_and_the_passkey(self):
+        from auth_module.passkey_primary_recovery_models import PasskeyRecoveryBackup
+        with patch('auth_module.passkey_views.server.register_begin', side_effect=RuntimeError):
+            self.assertEqual(self._recover().status_code, 500)
+        self.assertTrue(PasskeyRecoveryBackup.objects.get(user=self.owner).is_active)
+        self.assertTrue(UserPasskey.objects.filter(credential_id=b'lost-cred').exists())
+        self.assertEqual(self.anon.post(reverse('begin_recovery_passkey_registration')).status_code, 400)
+        # The same key works once the server can start the registration
+        self.assertEqual(self._recover().status_code, 200)
 
     def test_registration_needs_a_recovery_in_this_session(self):
         self.assertEqual(self.anon.post(reverse('begin_recovery_passkey_registration')).status_code, 400)

@@ -241,7 +241,12 @@ const _REFRESH_URLS = new Set([
   '/api/auth/cookie/token/refresh/',
 ]);
 
-function _isRefreshUrl(config) {
+const _SIGN_IN_URLS = new Set([
+  '/api/auth/token/',
+  '/api/auth/cookie/token/',
+]);
+
+function _urlIn(config, urls) {
   if (!config || !config.url) return false;
   // Compare on the path portion only — axios may give us a relative
   // path or a full URL depending on baseURL configuration.
@@ -249,11 +254,14 @@ function _isRefreshUrl(config) {
     const path = config.url.startsWith('http')
       ? new URL(config.url).pathname
       : config.url;
-    return _REFRESH_URLS.has(path);
+    return urls.has(path);
   } catch {
-    return _REFRESH_URLS.has(config.url);
+    return urls.has(config.url);
   }
 }
+
+const _isRefreshUrl = (config) => _urlIn(config, _REFRESH_URLS);
+const _isSignInUrl = (config) => _urlIn(config, _SIGN_IN_URLS);
 
 // Response interceptor: Handle 401 and auto-refresh
 axios.interceptors.response.use(
@@ -267,6 +275,14 @@ axios.interceptors.response.use(
     // must handle the rejection (initAuth / login flow), not bounce
     // back into another refresh attempt.
     if (_isRefreshUrl(originalRequest)) {
+      return Promise.reject(error);
+    }
+
+    // A 401 from a sign-in request is an answer for the caller, not an
+    // expired session: signInWithVerifier (services/loginVerifier.js)
+    // expects one for an account it still has to switch over, and retries
+    // with legacy_password. Refreshing here would hard-redirect first.
+    if (_isSignInUrl(originalRequest)) {
       return Promise.reject(error);
     }
 

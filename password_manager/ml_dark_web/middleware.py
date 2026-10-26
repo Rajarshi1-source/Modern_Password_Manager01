@@ -83,6 +83,10 @@ class TokenAuthMiddleware(BaseMiddleware):
                 access_token = AccessToken(token)
                 user_id = access_token['user_id']
                 user = User.objects.get(id=user_id)
+                from auth_module.login_verifier import access_token_revoked
+                if access_token_revoked(user, access_token):
+                    # Issued before a reset or recovery ended this account's sessions
+                    return AnonymousUser()
                 logger.info(f"Authenticated user {user.id} via JWT")
                 return user
                 

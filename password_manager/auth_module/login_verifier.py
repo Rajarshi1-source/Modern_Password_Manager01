@@ -85,9 +85,14 @@ def mark_login_verifier(user):
 
 def revoke_sessions(user):
     """End every session of ``user`` after its credential was replaced
-    through recovery or an email reset: blacklist its live refresh tokens
-    and drop its legacy DRF token."""
+    through recovery or an email reset: blacklist its live refresh tokens,
+    drop its legacy DRF token, and record the time so access tokens issued
+    before it are refused too (``access_token_revoked``)."""
     from rest_framework.authtoken.models import Token
+    from .models import LoginVerifierState
+    LoginVerifierState.objects.update_or_create(
+        user=user, defaults={'sessions_revoked_at': timezone.now()},
+    )
     try:
         from rest_framework_simplejwt.token_blacklist.models import (
             BlacklistedToken,
@@ -106,6 +111,24 @@ def revoke_sessions(user):
             ignore_conflicts=True,
         )
     Token.objects.filter(user=user).delete()
+
+
+def access_token_revoked(user, token):
+    """True if ``token`` (a validated simplejwt access token) was issued
+    before ``user``'s sessions were last revoked.
+
+    Compares whole seconds (``iat`` has no fraction), so a token issued in
+    the same second as the revocation is still accepted; that keeps a
+    sign-in right after a recovery working."""
+    from .models import LoginVerifierState
+    revoked_at = (
+        LoginVerifierState.objects.filter(user=user)
+        .values_list('sessions_revoked_at', flat=True).first()
+    )
+    if revoked_at is None:
+        return False
+    iat = token.get('iat')
+    return iat is None or int(iat) < int(revoked_at.timestamp())
 
 
 def migrate_legacy_login(username, verifier, legacy_password):
