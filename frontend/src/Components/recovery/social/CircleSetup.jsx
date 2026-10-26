@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import ApiService from '../../../services/api';
-import { sealSeedForGuardians } from '../../../services/recovery/sealedShareRecovery';
+import { keyFingerprint, sealSeedForGuardians } from '../../../services/recovery/sealedShareRecovery';
 import { hexToBytes } from '../../../utils/hex';
 import './CircleSetup.css';
 
@@ -14,6 +14,16 @@ const EMPTY_VOUCHER = () => ({
   vouch_weight: 1,
   stake_amount: 0,
 });
+
+// The server never relays a guardian key to the owner: the owner pastes it
+// from the guardian, and checks this fingerprint with them out of band.
+const safeFingerprint = (publicKeyB64) => {
+  try {
+    return keyFingerprint(publicKeyB64);
+  } catch {
+    return 'not a valid key';
+  }
+};
 
 const statusBadge = (status) => {
   const map = {
@@ -354,9 +364,15 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
                       onChange={(e) =>
                         updateVoucher(idx, 'hybrid_public_key', e.target.value.trim())
                       }
-                      placeholder="The voucher copies this from their invitation page"
+                      placeholder="The voucher copies this from /recovery/guardian-key"
                       required
                     />
+                    {v.hybrid_public_key ? (
+                      <small className="mono">
+                        Fingerprint: {safeFingerprint(v.hybrid_public_key)}. Check it
+                        with the voucher by phone or in person before you create the circle.
+                      </small>
+                    ) : null}
                   </div>
                   <div className="form-group">
                     <label>Relationship</label>

@@ -443,6 +443,7 @@ const SocialRecoveryCircleSetup = lazy(() => import('./Components/recovery/socia
 const SocialRecoveryInitiation = lazy(() => import('./Components/recovery/social/RecoveryInitiation'));
 const SocialRecoveryProgress = lazy(() => import('./Components/recovery/social/RecoveryProgress'));
 const SocialRecoveryVoucherAccept = lazy(() => import('./Components/recovery/social/VoucherAccept'));
+const SocialRecoveryGuardianKey = lazy(() => import('./Components/recovery/social/GuardianKey'));
 const SocialRecoveryAttestationForm = lazy(() => import('./Components/recovery/social/AttestationForm'));
 
 // Dead Drop Mesh (BLE mesh + Shamir fragments + geofenced collection).
@@ -2635,6 +2636,12 @@ function App() {
                 <Route path="/recovery/social/attest/:requestId" element={
                   <ErrorBoundary fallbackMessage="Failed to load Attestation Form">
                     <SocialRecoveryAttestationForm />
+                  </ErrorBoundary>
+                } />
+                {/* A guardian's key, made in their browser before any invitation */}
+                <Route path="/recovery/guardian-key" element={
+                  <ErrorBoundary fallbackMessage="Failed to load Guardian Key">
+                    <SocialRecoveryGuardianKey />
                   </ErrorBoundary>
                 } />
                 <Route path="/recovery/social/voucher/:invitationToken" element={
