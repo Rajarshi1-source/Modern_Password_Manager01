@@ -7,8 +7,8 @@ Passkey registration and sign-in against fido2 2.x.
   about any account (including through credential-id length).
 - authenticate/complete finds the credential by id, signs in with a real
   assertion and gives one answer for every failure (unknown credential, bad
-  signature, user-handle mismatch, another account's credential during
-  re-authentication, counter regression).
+  signature, no user verification, user-handle mismatch, another account's
+  credential during re-authentication, counter regression).
 """
 import hashlib
 import os
@@ -80,18 +80,17 @@ class SoftAuthenticator:
             'device_type': 'Test',
         }
 
-    def get(self, options, credential_id=None, user_handle=None):
+    def get(self, options, credential_id=None, user_handle=None, user_verified=True):
         self.counter += self.counter_step
         client_data = CollectedClientData.create(
             type=CollectedClientData.TYPE.GET,
             challenge=websafe_decode(options['challenge']),
             origin=ORIGIN,
         )
-        auth_data = AuthenticatorData.create(
-            self.rp_id_hash,
-            AuthenticatorData.FLAG.UP | AuthenticatorData.FLAG.UV,
-            self.counter,
-        )
+        flags = AuthenticatorData.FLAG.UP
+        if user_verified:
+            flags |= AuthenticatorData.FLAG.UV
+        auth_data = AuthenticatorData.create(self.rp_id_hash, flags, self.counter)
         signature = self.key.sign(auth_data + client_data.hash, ec.ECDSA(hashes.SHA256()))
         ids = self._credential_ids()
         if credential_id is not None:
@@ -268,6 +267,13 @@ class PasskeyViewTests(TestCase):
         client.force_authenticate(self.owner)
         options = self._begin(client)
         self._assert_uniform_failure(client.post(url, other_authenticator.get(options), format='json'))
+
+        # An assertion without user verification.
+        client = APIClient()
+        options = self._begin(client)
+        self.assertEqual(options['userVerification'], 'required')
+        unverified = owner_authenticator.get(options, user_verified=False)
+        self._assert_uniform_failure(client.post(url, unverified, format='json'))
 
         # A counter that does not increase.
         client = APIClient()
