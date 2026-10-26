@@ -201,6 +201,9 @@ urlpatterns = [
     path('quantum-recovery/approve_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'approve_recovery'}), name='quantum-recovery-approve'),
     path('quantum-recovery/enable_travel_lock/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'enable_travel_lock'}), name='quantum-recovery-travel-lock'),
     path('quantum-recovery/complete_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'complete_recovery'}), name='quantum-recovery-complete'),
+    path('quantum-recovery/guardian_share/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'guardian_share'}), name='quantum-recovery-guardian-share'),
+    path('quantum-recovery/guardian-invitation/', quantum_recovery_views.guardian_invitation, name='quantum-recovery-guardian-invitation'),
+    path('quantum-recovery/accept-guardian-invitation/', quantum_recovery_views.accept_guardian_invitation, name='quantum-recovery-accept-invitation'),
 
     # ==================== Layered Recovery Mesh Endpoints ====================
     # Unit 4 — wrapped DEK (master-password KEK over the user's vault DEK).

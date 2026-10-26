@@ -4,9 +4,8 @@ REST API Views for Behavioral Recovery
 Implements the behavioral biometric recovery flow endpoints
 """
 
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.throttling import AnonRateThrottle
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.models import User
@@ -17,24 +16,37 @@ import uuid
 from .models import (
     BehavioralCommitment,
     BehavioralRecoveryAttempt,
-    BehavioralChallenge,
     RecoveryAuditLog
 )
 from .serializers import (
     RecoveryAttemptStatusSerializer,
     RecoveryChallengeSerializer,
-    RecoveryInitiateSerializer,
-    ChallengeSubmitSerializer,
-    CommitmentSetupSerializer
 )
-from .services import RecoveryOrchestrator, ChallengeGenerator, CommitmentService
-from .tasks import start_behavioral_recovery
+from .services import ChallengeGenerator
 from password_manager.api_utils import success_response, error_response
 from shared.log_safe import log_safe
 
 logger = logging.getLogger(__name__)
 
-INITIATE_MESSAGE = "If an account exists with this email, recovery instructions will be sent"
+# Behavioral recovery sent raw behavioral data (the enrolment profile and every
+# challenge response) to the server, which a zero-knowledge design must not
+# receive. A behavioral match would also only ever be a risk signal next to a
+# real recovery factor, never the factor itself. The intake endpoints are
+# retired; vault recovery is the layered recovery-key, guardian and time-locked
+# flow.
+RETIRED_MESSAGE = (
+    "Behavioral recovery is no longer available. "
+    "Use your recovery key or your guardians instead."
+)
+
+
+def _retired():
+    return error_response(
+        RETIRED_MESSAGE,
+        code="behavioral_recovery_retired",
+        status_code=status.HTTP_410_GONE
+    )
+
 
 # Every endpoint here that the anonymous recovery caller uses serializes with
 # RecoveryAttemptStatusSerializer / RecoveryChallengeSerializer, which carry
@@ -44,47 +56,12 @@ INITIATE_MESSAGE = "If an account exists with this email, recovery instructions 
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
-@throttle_classes([AnonRateThrottle])
 def initiate_recovery(request):
     """
-    Initiate behavioral recovery process
-    
-    POST /api/behavioral-recovery/initiate/
-    Body: { "email": "user@example.com" }
-
-    Returns the same generic message for every email. For an account with
-    behavioral commitments, the attempt link goes to the account's email
-    (/password-recovery?behavioral_attempt=<attempt_id>), never into the
-    response: otherwise the response itself would say the account exists.
+    Retired: POST /api/behavioral-recovery/initiate/ returns 410 for every
+    email, so the answer says nothing about the account.
     """
-    try:
-        serializer = RecoveryInitiateSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response(
-                "Invalid request data",
-                details=serializer.errors,
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
-        
-        email = serializer.validated_data['email']
-        
-        # Every email gets the same synchronous work (enqueue) and the same
-        # answer; the account lookup, the attempt and the email happen in the
-        # task, so neither the response nor its timing reveals the account.
-        start_behavioral_recovery.delay(
-            email,
-            request.META.get('REMOTE_ADDR'),
-            request.META.get('HTTP_USER_AGENT', ''),
-        )
-
-        return success_response(message=INITIATE_MESSAGE)
-        
-    except Exception as e:
-        logger.error(f"Error initiating recovery: {e}", exc_info=True)
-        return error_response(
-            "Failed to initiate recovery",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    return _retired()
 
 
 @api_view(['GET'])
@@ -139,69 +116,10 @@ def get_recovery_status(request, attempt_id):
 @permission_classes([AllowAny])
 def submit_challenge(request):
     """
-    Submit behavioral challenge response
-    
-    POST /api/behavioral-recovery/submit-challenge/
-    Body: {
-        "attempt_id": "uuid",
-        "challenge_id": "uuid",
-        "behavioral_data": {...}
-    }
-    
-    Returns: {
-        "next_challenge": {...},
-        "challenges_remaining": 3
-    }
+    Retired: POST /api/behavioral-recovery/submit-challenge/ returns 410 and
+    reads nothing. It received raw keystroke and mouse data.
     """
-    try:
-        serializer = ChallengeSubmitSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response(
-                "Invalid request data",
-                details=serializer.errors,
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
-        
-        attempt_id = serializer.validated_data['attempt_id']
-        challenge_id = serializer.validated_data['challenge_id']
-        behavioral_data = serializer.validated_data['behavioral_data']
-        
-        # Get recovery attempt and challenge
-        try:
-            recovery_attempt = BehavioralRecoveryAttempt.objects.get(attempt_id=attempt_id)
-            challenge = BehavioralChallenge.objects.select_related(
-                'recovery_attempt__user'
-            ).get(challenge_id=challenge_id, recovery_attempt=recovery_attempt)
-        except (BehavioralRecoveryAttempt.DoesNotExist, BehavioralChallenge.DoesNotExist):
-            return error_response(
-                "Recovery attempt or challenge not found",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-        
-        # Use orchestrator to evaluate challenge
-        orchestrator = RecoveryOrchestrator()
-        orchestrator.evaluate_challenge(challenge, behavioral_data)
-        
-        # Generate next challenge if needed
-        next_challenge = None
-        if recovery_attempt.status == 'in_progress':
-            challenge_gen = ChallengeGenerator()
-            next_challenge = challenge_gen.get_next_challenge(recovery_attempt)
-        
-        return success_response(
-            data={
-                'next_challenge': RecoveryChallengeSerializer(next_challenge).data if next_challenge else None,
-                'challenges_remaining': recovery_attempt.challenges_total - recovery_attempt.challenges_completed
-            },
-            message="Challenge evaluated successfully"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error submitting challenge: {e}", exc_info=True)
-        return error_response(
-            "Failed to submit challenge",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    return _retired()
 
 
 @api_view(['POST'])
@@ -227,42 +145,10 @@ def complete_recovery(request):
 @permission_classes([IsAuthenticated])
 def setup_commitments(request):
     """
-    Set up behavioral commitments for future recovery
-    
-    POST /api/behavioral-recovery/setup-commitments/
-    Body: { "behavioral_profile": {...} }
-    
-    Returns: { "commitments_created": 12 }
+    Retired: POST /api/behavioral-recovery/setup-commitments/ returns 410 and
+    stores nothing. It received the raw behavioral profile.
     """
-    try:
-        serializer = CommitmentSetupSerializer(data=request.data)
-        if not serializer.is_valid():
-            return error_response(
-                "Invalid request data",
-                details=serializer.errors,
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
-        
-        behavioral_profile = serializer.validated_data['behavioral_profile']
-        
-        # Use commitment service to create commitments
-        commitment_service = CommitmentService()
-        commitments = commitment_service.create_commitments(request.user, behavioral_profile)
-        
-        return success_response(
-            data={
-                'commitments_created': len(commitments),
-                'profile_quality': commitment_service.assess_profile_quality(behavioral_profile)
-            },
-            message="Behavioral commitments created successfully"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error setting up commitments: {e}", exc_info=True)
-        return error_response(
-            "Failed to set up commitments",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    return _retired()
 
 
 @api_view(['GET'])

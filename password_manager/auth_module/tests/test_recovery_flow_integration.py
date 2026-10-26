@@ -4,7 +4,6 @@ Integration Tests for Complete Recovery Flow
 Tests end-to-end recovery scenarios including:
 - Recovery initiation
 - Challenge response
-- Shard collection
 - Guardian approval
 - Canary alerts
 - Rate limiting
@@ -29,7 +28,7 @@ from ..quantum_recovery_models import (
     RecoveryAuditLog,
     RecoveryShardType
 )
-from ..services.quantum_crypto_service import quantum_crypto_service
+from shared.tests import sealed_share_fixtures as fx
 
 User = get_user_model()
 
@@ -59,6 +58,7 @@ class TestRecoveryInitiation(TestCase):
         """Test successful recovery initiation"""
         response = self.client.post('/api/auth/quantum-recovery/initiate_recovery/', {
             'email': 'test@example.com',
+            'requester_public_key': fx.hybrid_public_key(),
             'device_fingerprint': 'test_fp_' + ('a' * 64)
         }, content_type='application/json')
         
@@ -75,6 +75,7 @@ class TestRecoveryInitiation(TestCase):
         """Test recovery initiation with non-existent email"""
         response = self.client.post('/api/auth/quantum-recovery/initiate_recovery/', {
             'email': 'nonexistent@example.com',
+            'requester_public_key': fx.hybrid_public_key(),
             'device_fingerprint': 'test_fp'
         }, content_type='application/json')
         
@@ -89,6 +90,7 @@ class TestRecoveryInitiation(TestCase):
         
         response = self.client.post('/api/auth/quantum-recovery/initiate_recovery/', {
             'email': 'test@example.com',
+            'requester_public_key': fx.hybrid_public_key(),
             'device_fingerprint': 'test_fp'
         }, content_type='application/json')
         
@@ -347,6 +349,7 @@ class TestRateLimiting(TestCase):
         # 4th attempt should be blocked (if rate limiting is implemented)
         response = self.client.post('/api/auth/quantum-recovery/initiate_recovery/', {
             'email': 'test@example.com',
+            'requester_public_key': fx.hybrid_public_key(),
             'device_fingerprint': 'test_fp_4'
         }, content_type='application/json')
         
@@ -409,7 +412,8 @@ class TestGuardianApproval(TestCase):
             '/api/auth/quantum-recovery/approve_recovery/',
             {
                 'approval_token': 'approval_token_123',
-                'approved': True
+                'approved': True,
+                'resealed_share': fx.sealed_share(),
             },
             content_type='application/json'
         )
@@ -448,7 +452,8 @@ class TestGuardianApproval(TestCase):
             '/api/auth/quantum-recovery/approve_recovery/',
             {
                 'approval_token': 'approval_token_123',
-                'approved': True
+                'approved': True,
+                'resealed_share': fx.sealed_share(),
             },
             content_type='application/json'
         )
@@ -457,104 +462,7 @@ class TestGuardianApproval(TestCase):
         self.assertIn(response.status_code, [400, 403])
 
 
-@pytest.mark.django_db
-class TestCompleteRecoveryFlow(TestCase):
-    """Test complete end-to-end recovery flow"""
-    
-    def setUp(self):
-        """Set up complete test environment"""
-        self.client = Client()
-        self.user = User.objects.create_user(
-            username='testuser',
-            email='test@example.com',
-            password='TestPassword123!'
-        )
-        
-        # Create recovery setup
-        self.recovery_setup = PasskeyRecoverySetup.objects.create(
-            user=self.user,
-            total_shards=5,
-            threshold_shards=3,
-            is_active=True
-        )
-        
-        # Generate master secret
-        self.master_secret = b"user_passkey_private_key_secret"
-        
-        # Split into shards
-        shards = quantum_crypto_service.shamir_split_secret(
-            self.master_secret,
-            self.recovery_setup.total_shards,
-            self.recovery_setup.threshold_shards
-        )
-        
-        # Store shards
-        self.shard_objects = []
-        for i, (index, shard_data) in enumerate(shards):
-            shard_obj = RecoveryShard.objects.create(
-                recovery_setup=self.recovery_setup,
-                shard_type=RecoveryShardType.GUARDIAN if i < 3 else RecoveryShardType.DEVICE,
-                shard_index=index,
-                encrypted_shard_data=shard_data,
-                encryption_metadata={'algorithm': 'aes-256-gcm'},
-                status='active'
-            )
-            self.shard_objects.append(shard_obj)
-    
-    def test_full_recovery_flow(self):
-        """Test complete recovery from initiation to completion"""
-        # Step 1: Initiate recovery
-        initiate_response = self.client.post(
-            '/api/auth/quantum-recovery/initiate_recovery/',
-            {
-                'email': 'test@example.com',
-                'device_fingerprint': 'test_fp'
-            },
-            content_type='application/json'
-        )
-        
-        attempt = RecoveryAttempt.objects.get(recovery_setup__user=self.user)
-        self.assertEqual(attempt.status, 'initiated')
-        
-        # Step 2: Complete challenges (simulated)
-        attempt.status = 'shard_collection'
-        attempt.challenges_sent = 5
-        attempt.challenges_completed = 5
-        attempt.trust_score = 0.9
-        attempt.save()
-        
-        # Step 3: Collect shards and complete recovery
-        collected_shards = [
-            {
-                'shard_id': str(self.shard_objects[0].id),
-                'decryption_context': {}
-            },
-            {
-                'shard_id': str(self.shard_objects[1].id),
-                'decryption_context': {}
-            },
-            {
-                'shard_id': str(self.shard_objects[2].id),
-                'decryption_context': {}
-            }
-        ]
-        
-        # Authenticate for complete_recovery endpoint
-        self.client.force_login(self.user)
-        
-        complete_response = self.client.post(
-            '/api/auth/quantum-recovery/complete_recovery/',
-            {
-                'attempt_id': str(attempt.id),
-                'collected_shards': collected_shards
-            },
-            content_type='application/json'
-        )
-        
-        # Verify recovery completion
-        attempt.refresh_from_db()
-        # Note: Actual status depends on implementation details
-        self.assertIsNotNone(attempt)
+# The end-to-end flow with client-sealed shares is in test_guardian_recovery_setup.py.
 
 
 if __name__ == '__main__':

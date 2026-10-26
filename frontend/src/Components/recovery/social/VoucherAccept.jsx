@@ -1,6 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
+import {
+  getOrCreateGuardianKeyPair,
+  saveSealedShare,
+} from '../../../services/recovery/holderKeyStore';
+import { proveShareHolding } from '../../../services/recovery/sealedShareRecovery';
 import './VoucherAccept.css';
 
 const VoucherAccept = () => {
@@ -9,6 +14,15 @@ const VoucherAccept = () => {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [guardianKey, setGuardianKey] = useState(null);
+
+  // The guardian key pair stays on this device; the owner needs its public
+  // half to seal a share to it.
+  useEffect(() => {
+    getOrCreateGuardianKeyPair()
+      .then(setGuardianKey)
+      .catch(() => setError('Could not create a guardian key on this device.'));
+  }, []);
 
   const handleAccept = async (e) => {
     e.preventDefault();
@@ -21,10 +35,19 @@ const VoucherAccept = () => {
 
     setSubmitting(true);
     try {
+      // Open the sealed share here to prove this device holds the key it
+      // was sealed to; keep the sealed copy for approving a recovery later.
+      const invitation = await ApiService.socialRecovery.getVoucherInvitation(invitationToken);
+      const keyPair = guardianKey || await getOrCreateGuardianKeyPair();
+      const shareProof = await proveShareHolding({
+        keyPair,
+        sealedShare: invitation.data.sealed_share,
+      });
       const resp = await ApiService.socialRecovery.acceptVoucher(
         invitationToken,
-        { signature_b64: signatureB64.trim() }
+        { signature_b64: signatureB64.trim(), share_proof: shareProof }
       );
+      saveSealedShare(resp.data.voucher_id, invitation.data.sealed_share);
       setResult(resp.data);
     } catch (err) {
       setError(ApiService.handleError(err).error || 'Failed to accept invitation.');
@@ -63,6 +86,15 @@ const VoucherAccept = () => {
         circle. To accept, sign the invitation token below with your Ed25519
         private key and paste the base64 signature.
       </p>
+
+      <div className="form-group">
+        <label>Your guardian key (give this to the circle owner)</label>
+        <textarea rows="3" readOnly className="mono" value={guardianKey?.publicKey || ''} />
+        <small>
+          Created on this device. The owner seals your share to it; only this
+          device can open that share, so keep using this browser.
+        </small>
+      </div>
 
       <form onSubmit={handleAccept}>
         <div className="form-group">

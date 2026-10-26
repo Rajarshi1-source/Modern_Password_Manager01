@@ -45,16 +45,9 @@ import { bytesToHex } from '../../../utils/hex';
 const RecoveryInitiation = lazy(() => import('../social/RecoveryInitiation'));
 const RecoveryProgress = lazy(() => import('../social/RecoveryProgress'));
 
-// Mirror of TIER2_ENROLL_BLOCKED on the enroll page. The tier-2
-// recover path is end-to-end blocked on the same client-side
-// Shamir + Kyber pipeline: the legacy poll endpoint
-// (RequestDetailView) does not surface `reconstructed_secret` /
-// `secret_bytes`, and the only endpoint that returns the secret
-// (CompleteRequestView) performs server-side Shamir, which would
-// violate the ZK invariant for the social-mesh DEK seed. Until the
-// client-side pipeline lands, this page short-circuits to a
-// "not yet available" notice rather than letting users initiate a
-// guardian recovery whose shards can never be combined client-side.
+// Mirror of TIER2_ENROLL_BLOCKED on the enroll page. RecoveryProgress
+// now opens the re-sealed shares and recombines the seed on this
+// device; lift both gates together after an end-to-end browser run.
 const TIER2_RECOVER_BLOCKED = true;
 
 /**

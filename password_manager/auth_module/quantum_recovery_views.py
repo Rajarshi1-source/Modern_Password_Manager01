@@ -19,8 +19,6 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import transaction
 from datetime import timedelta
-import base64
-import binascii
 import uuid
 import secrets
 import hashlib
@@ -38,10 +36,32 @@ from .quantum_recovery_models import (
     BehavioralBiometrics,
     RecoveryShardType
 )
-from .services.kyber_crypto import DEFAULT_KEM, ml_kem_768_public_key_is_valid
 from .services.quantum_crypto_service import quantum_crypto_service
+from shared import sealed_shares
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_sealed_guardian(g):
+    """Check one guardian entry of setup_recovery; raise ValueError."""
+    if not isinstance(g, dict):
+        raise ValueError('Each guardian must be an object')
+    email = g.get('email')
+    share_index = g.get('share_index')
+    if not isinstance(email, str) or '@' not in email:
+        raise ValueError("Each guardian needs an 'email'")
+    if not isinstance(share_index, int) or isinstance(share_index, bool) \
+            or not 1 <= share_index <= 255:
+        raise ValueError("Each guardian needs a 'share_index' (1-255)")
+    return {
+        'email': email,
+        'requires_video': bool(g.get('requires_video', False)),
+        'share_index': share_index,
+        'public_key': sealed_shares.decode_hybrid_public_key(g.get('public_key')),
+        'sealed_share': sealed_shares.decode_sealed_share(g.get('sealed_share')),
+        'share_proof_hash': sealed_shares.decode_digest(
+            g.get('share_proof_hash'), 'share_proof_hash'),
+    }
 
 
 class QuantumRecoveryViewSet(viewsets.ViewSet):
@@ -51,8 +71,11 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
     authentication_classes = [JWTAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
-    # These actions are called during recovery when the user has no session yet
-    PUBLIC_ACTIONS = {'initiate_recovery', 'respond_to_challenge', 'approve_recovery'}
+    # These actions are called during recovery when the user has no session
+    # yet. complete_recovery returns only shares re-sealed to the requester's
+    # one-time key, which nobody else can open.
+    PUBLIC_ACTIONS = {'initiate_recovery', 'respond_to_challenge', 'approve_recovery',
+                      'guardian_share', 'complete_recovery'}
 
     def get_permissions(self):
         if getattr(self, 'action', None) in self.PUBLIC_ACTIONS:
@@ -62,28 +85,31 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     def setup_recovery(self, request):
         """
-        Initialize recovery system for user
-        
+        Register guardians for a recovery seed split and sealed on the owner's
+        device.
+
         POST /api/auth/quantum-recovery/setup_recovery/
-        
-        Request body:
+
+        Request body (built by frontend/src/services/recovery/sealedShareRecovery.js):
         {
-            "total_shards": 5,
-            "threshold_shards": 3,
+            "threshold_shards": 2,
+            "secret_type": "vault_dek_seed",
+            "secret_check": "<base64 SHA-256 seed check>",
             "guardians": [
                 {"email": "guardian1@example.com", "requires_video": false,
-                 "public_key": "<base64 ML-KEM-768 public key>"},
-                {"email": "guardian2@example.com", "requires_video": true,
-                 "public_key": "<base64 ML-KEM-768 public key>"}
-            ],
-            "enable_temporal_shard": true,
-            "enable_biometric_shard": true,
-            "enable_device_shard": true
+                 "public_key": "<base64 X25519 + ML-KEM-768 public key>",
+                 "share_index": 1,
+                 "sealed_share": "<base64 share sealed to public_key>",
+                 "share_proof_hash": "<base64 SHA-256 of the share proof>"}
+            ]
         }
+
+        The server never sees the seed or a share: it stores the sealed shares
+        and relays them, and holds no key that opens them.
         """
         try:
             user = request.user
-            
+
             # Check if recovery already setup. A pending setup (guardians not
             # yet accepted) counts too: the user has one setup at most.
             if hasattr(user, 'passkey_recovery_setup'):
@@ -92,152 +118,84 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     if user.passkey_recovery_setup.is_active
                     else 'Recovery system already set up; waiting for guardians to accept'
                 }, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Validate request data
-            total_shards = request.data.get('total_shards', 5)
+
+            if any(k in request.data for k in ('secret', 'secret_hex', 'master_secret_hex')):
+                return Response({
+                    'error': 'Send sealed shares only; the recovery seed never leaves your device'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            guardians_data = request.data.get('guardians') or []
             threshold_shards = request.data.get('threshold_shards', 3)
-            guardians_data = request.data.get('guardians', [])
-            
-            if total_shards < 3 or total_shards > 10:
-                return Response({
-                    'error': 'total_shards must be between 3 and 10'
-                }, status=status.HTTP_400_BAD_REQUEST)
-            
-            if threshold_shards < 2 or threshold_shards > total_shards:
-                return Response({
-                    'error': 'threshold_shards must be between 2 and total_shards'
-                }, status=status.HTTP_400_BAD_REQUEST)
+            secret_type = request.data.get('secret_type', RecoveryShard.SecretType.VAULT_DEK_SEED)
 
-            # Each guardian's shard is sealed to a public key the guardian
-            # generated on their own device. The server never generates a
-            # guardian keypair: it would have to hold or discard the private
-            # key, and a discarded key makes the shard unrecoverable.
-            guardian_public_keys = []
-            for guardian_data in guardians_data[:total_shards]:
-                try:
-                    guardian_public_key = base64.b64decode(
-                        guardian_data.get('public_key') or '', validate=True
-                    )
-                except (binascii.Error, ValueError, TypeError, AttributeError):
-                    guardian_public_key = b''
-                if not ml_kem_768_public_key_is_valid(guardian_public_key):
-                    return Response({
-                        'error': "Each guardian needs a 'public_key' (base64 "
-                                 f"{DEFAULT_KEM} public key) from their own device"
-                    }, status=status.HTTP_400_BAD_REQUEST)
-                guardian_public_keys.append(guardian_public_key)
-
-            # Setup creates one shard per guardian (at most total_shards) plus
-            # an optional device shard. Fewer than threshold_shards of them
-            # could never reconstruct the secret.
-            usable_shards = len(guardian_public_keys) + (
-                1 if request.data.get('enable_device_shard', True)
-                and total_shards > len(guardians_data) else 0
-            )
-            if usable_shards < threshold_shards:
+            if not isinstance(guardians_data, list) or not 3 <= len(guardians_data) <= 10:
                 return Response({
-                    'error': f'{usable_shards} usable shard(s) (guardians plus device) '
-                             f'cannot meet threshold_shards={threshold_shards}'
+                    'error': 'Between 3 and 10 guardians are required'
                 }, status=status.HTTP_400_BAD_REQUEST)
+            if (not isinstance(threshold_shards, int)
+                    or not 2 <= threshold_shards <= len(guardians_data)):
+                return Response({
+                    'error': 'threshold_shards must be between 2 and the number of guardians'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            if secret_type not in RecoveryShard.SecretType.values:
+                return Response({'error': 'Unknown secret_type'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            # Each share is sealed on the owner's device to a public key the
+            # guardian generated on their own device.
+            try:
+                secret_check = sealed_shares.decode_digest(
+                    request.data.get('secret_check'), 'secret_check')
+                guardians = [_parse_sealed_guardian(g) for g in guardians_data]
+            except ValueError as e:
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            if len({g['share_index'] for g in guardians}) != len(guardians):
+                return Response({'error': 'share_index values must be distinct'},
+                                status=status.HTTP_400_BAD_REQUEST)
 
             with transaction.atomic():
-                # Generate post-quantum keypair
-                public_key, private_key = quantum_crypto_service.generate_kyber_keypair()
-                
-                # Encrypt private key with user's master password (simulated here)
-                # In production, derive key from user's master password
-                master_key_derived = secrets.token_bytes(32)  # Placeholder
-                encrypted_private_key = quantum_crypto_service.encrypt_with_password(
-                    private_key,
-                    master_key_derived.hex()
-                )
-                
-                # Create recovery setup
                 recovery_setup = PasskeyRecoverySetup.objects.create(
                     user=user,
-                    total_shards=total_shards,
+                    total_shards=len(guardians),
                     threshold_shards=threshold_shards,
-                    encryption_algorithm=DEFAULT_KEM,
-                    kyber_public_key=public_key,
-                    kyber_private_key_encrypted=quantum_crypto_service.serialize_encrypted_shard(encrypted_private_key),
+                    encryption_algorithm=sealed_shares.HYBRID_KEM_ALGORITHM,
+                    secret_check=secret_check,
                     is_active=False  # Will activate after guardian acceptance
                 )
-                
-                # Generate shards from user's passkey private key
-                # In production, this would be the actual passkey private key
-                passkey_secret = secrets.token_bytes(32)  # Placeholder
-                shards = quantum_crypto_service.shamir_split_secret(
-                    passkey_secret,
-                    total_shards,
-                    threshold_shards
-                )
-                
-                # Create distributed shards
+
                 created_shards = []
-                
-                # Create guardian shards
-                for i, guardian_data in enumerate(guardians_data):
-                    if i >= len(shards):
-                        break
-                    
-                    shard_index, shard_data = shards[i]
-
-                    guardian_public_key = guardian_public_keys[i]
-
-                    # Encrypt shard with guardian's public key
-                    encrypted_shard = quantum_crypto_service.encrypt_shard_hybrid(
-                        shard_data,
-                        guardian_public_key
-                    )
-                    
-                    # Create shard record
+                for i, g in enumerate(guardians):
                     shard = RecoveryShard.objects.create(
                         recovery_setup=recovery_setup,
                         shard_type=RecoveryShardType.GUARDIAN,
-                        shard_index=shard_index,
-                        encrypted_shard_data=quantum_crypto_service.serialize_encrypted_shard(encrypted_shard),
+                        shard_index=g['share_index'],
+                        secret_type=secret_type,
+                        encrypted_shard_data=g['sealed_share'],
+                        encryption_metadata={
+                            'algorithm': sealed_shares.HYBRID_KEM_ALGORITHM,
+                            'share_format': sealed_shares.SHARE_FORMAT,
+                        },
                         context_data={'guardian_index': i}
                     )
-                    
-                    # Create guardian invitation
+
                     invitation_token = secrets.token_urlsafe(32)
-                    guardian = RecoveryGuardian.objects.create(
+                    RecoveryGuardian.objects.create(
                         recovery_setup=recovery_setup,
-                        encrypted_guardian_info=guardian_data['email'].encode('utf-8'),  # Simplified
-                        guardian_public_key=guardian_public_key,
+                        encrypted_guardian_info=g['email'].encode('utf-8'),  # Simplified
+                        guardian_public_key=g['public_key'],
+                        share_proof_hash=g['share_proof_hash'],
                         shard=shard,
-                        requires_video_verification=guardian_data.get('requires_video', False),
+                        requires_video_verification=g['requires_video'],
                         invitation_token=invitation_token,
                         invitation_expires_at=timezone.now() + timedelta(days=7)
                     )
-                    
+
                     created_shards.append({
                         'type': 'guardian',
-                        'guardian_email': guardian_data['email'],
+                        'guardian_email': g['email'],
                         'invitation_token': invitation_token
                     })
-                
-                # Create device shard
-                if request.data.get('enable_device_shard', True) and len(shards) > len(guardians_data):
-                    shard_index, shard_data = shards[len(guardians_data)]
-                    
-                    # Encrypt with device fingerprint
-                    device_fingerprint = request.data.get('device_fingerprint', 'unknown')
-                    encrypted_shard = quantum_crypto_service.encrypt_with_password(
-                        shard_data,
-                        device_fingerprint
-                    )
-                    
-                    RecoveryShard.objects.create(
-                        recovery_setup=recovery_setup,
-                        shard_type=RecoveryShardType.DEVICE,
-                        shard_index=shard_index,
-                        encrypted_shard_data=quantum_crypto_service.serialize_encrypted_shard(encrypted_shard),
-                        context_data={'device_fingerprint': device_fingerprint}
-                    )
-                    
-                    created_shards.append({'type': 'device'})
-                
+
                 # Create honeypot shard
                 honeypot_shard_data = quantum_crypto_service.create_honeypot_shard(32)
                 RecoveryShard.objects.create(
@@ -248,15 +206,15 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     is_honeypot=True,
                     context_data={'purpose': 'detection'}
                 )
-                
+
                 # Log audit event
                 RecoveryAuditLog.objects.create(
                     user=user,
                     event_type='setup_created',
                     event_data={
-                        'total_shards': total_shards,
+                        'total_shards': len(guardians),
                         'threshold_shards': threshold_shards,
-                        'guardians_count': len(guardians_data)
+                        'guardians_count': len(guardians)
                     },
                     ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
                     user_agent=request.META.get('HTTP_USER_AGENT', ''),
@@ -264,20 +222,20 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                         f"{user.id}:{time.time()}".encode()
                     ).hexdigest(),
                 )
-            
+
             return Response({
                 'success': True,
                 'recovery_setup_id': str(recovery_setup.id),
                 'shards_created': created_shards,
                 'message': 'Recovery system initialized. Send guardian invitations to activate.'
             }, status=status.HTTP_201_CREATED)
-            
+
         except Exception as e:
             logger.error(f"Error setting up recovery for {request.user.username}: {str(e)}")
             return Response({
                 'error': 'Failed to setup recovery system'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+
     @action(detail=False, methods=['get'])
     def get_recovery_status(self, request):
         """
@@ -343,8 +301,12 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
         Request body:
         {
             "email": "user@example.com",
-            "device_fingerprint": "abc123..."
+            "device_fingerprint": "abc123...",
+            "requester_public_key": "<base64 one-time X25519 + ML-KEM-768 public key>"
         }
+
+        Guardians re-seal their shares to requester_public_key; the private
+        key stays on the requesting device.
         """
         try:
             email = request.data.get('email')
@@ -352,7 +314,12 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 return Response({
                     'error': 'Email required'
                 }, status=status.HTTP_400_BAD_REQUEST)
-            
+            try:
+                requester_public_key = sealed_shares.decode_hybrid_public_key(
+                    request.data.get('requester_public_key'), 'requester_public_key')
+            except ValueError as e:
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
             # Find user and recovery setup
             from django.contrib.auth import get_user_model
             User = get_user_model()
@@ -395,6 +362,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     recovery_setup=recovery_setup,
                     initiated_from_ip=request.META.get('REMOTE_ADDR', ''),
                     initiated_from_device_fingerprint=request.data.get('device_fingerprint', ''),
+                    requester_public_key=requester_public_key,
                     shards_required=recovery_setup.threshold_shards,
                     guardian_approvals_required=min(2, len(recovery_setup.guardians.filter(status='active'))),
                     expires_at=timezone.now() + timedelta(days=recovery_setup.decay_window_days)
@@ -608,8 +576,13 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
         Request body:
         {
             "approval_token": "token_string",
-            "approved": true | false
+            "approved": true | false,
+            "resealed_share": "<base64, required when approved>"
         }
+
+        On approval the guardian's device opens its share (from guardian_share)
+        and re-seals it to the requester's one-time key; the server stores
+        that value and never sees the share.
         """
         try:
             approval_token = request.data.get('approval_token')
@@ -619,6 +592,13 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 return Response({
                     'error': 'approval_token and approved are required'
                 }, status=status.HTTP_400_BAD_REQUEST)
+            resealed_share = b''
+            if approved:
+                try:
+                    resealed_share = sealed_shares.decode_sealed_share(
+                        request.data.get('resealed_share'), 'resealed_share')
+                except ValueError as e:
+                    return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
             try:
                 approval = GuardianApproval.objects.select_related(
@@ -643,6 +623,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     approval.status = 'approved'
                     approval.shard_released = True
                     approval.shard_released_at = timezone.now()
+                    approval.resealed_share = resealed_share
                 else:
                     approval.status = 'denied'
                     approval.shard_released = False
@@ -658,6 +639,39 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             return Response({
                 'error': 'Failed to process approval'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def guardian_share(self, request):
+        """
+        What a guardian's device needs to re-seal its share for a recovery.
+
+        POST /api/auth/quantum-recovery/guardian_share/
+        Body: {"approval_token": "token_string"}
+
+        Returns the guardian's sealed share (only the guardian's private key
+        opens it) and the requester's one-time public key.
+        """
+        approval = GuardianApproval.objects.select_related(
+            'recovery_attempt', 'guardian__shard'
+        ).filter(
+            approval_token=request.data.get('approval_token') or '', status='pending'
+        ).first()
+        if approval is None or approval.guardian.shard is None:
+            return Response({
+                'error': 'Invalid or already processed approval token'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        attempt = approval.recovery_attempt
+        if not bytes(attempt.requester_public_key):
+            return Response({
+                'error': 'This recovery attempt predates client-side sealing; start a new one'
+            }, status=status.HTTP_410_GONE)
+        shard = approval.guardian.shard
+        return Response({
+            'share_index': shard.shard_index,
+            'sealed_share': sealed_shares.b64(shard.encrypted_shard_data),
+            'requester_public_key': sealed_shares.b64(attempt.requester_public_key),
+            'algorithm': sealed_shares.HYBRID_KEM_ALGORITHM,
+        })
 
     @action(detail=False, methods=['post'])
     def enable_travel_lock(self, request):
@@ -709,142 +723,78 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 'error': 'Failed to enable travel lock'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def complete_recovery(self, request):
         """
-        Complete recovery by reconstructing passkey from collected shards
-        
+        Hand the requester the shares guardians re-sealed to its one-time key.
+
         POST /api/auth/quantum-recovery/complete_recovery/
-        
-        Request body:
-        {
-            "attempt_id": "uuid",
-            "collected_shards": [
-                {"shard_id": "uuid1", "decryption_context": {...}},
-                {"shard_id": "uuid2", "decryption_context": {...}},
-                {"shard_id": "uuid3", "decryption_context": {...}}
-            ]
-        }
+        Body: {"attempt_id": "uuid"}
+
+        Returns {"threshold", "secret_type", "secret_check", "sealed_shares"}.
+        The requester's device opens the shares, recombines the seed, checks
+        it against secret_check and uses it with the layered recovery flow
+        (vault/wrapped-dek/recover-rotate). The server never reconstructs
+        anything and grants no session here.
         """
         try:
-            attempt_id = request.data.get('attempt_id')
-            collected_shards_data = request.data.get('collected_shards', [])
-            
-            attempt = get_object_or_404(RecoveryAttempt, id=attempt_id)
+            attempt = RecoveryAttempt.objects.select_related('recovery_setup').filter(
+                id=request.data.get('attempt_id')
+            ).first() if _is_uuid(request.data.get('attempt_id')) else None
+            if attempt is None:
+                return Response({'error': 'Recovery attempt not found'},
+                                status=status.HTTP_404_NOT_FOUND)
             recovery_setup = attempt.recovery_setup
-            
+
+            if not bytes(recovery_setup.secret_check) or not bytes(attempt.requester_public_key):
+                return Response({
+                    'error': 'This recovery setup predates client-side sealing and '
+                             'cannot complete; set up guardian recovery again'
+                }, status=status.HTTP_410_GONE)
+
             # Verify attempt is in correct status
             if attempt.status not in ['shard_collection', 'guardian_approval', 'final_verification']:
                 return Response({
                     'error': 'Recovery not ready for completion'
                 }, status=status.HTTP_400_BAD_REQUEST)
-            
+            if attempt.is_expired():
+                return Response({'error': 'Recovery attempt expired'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
             # Verify trust score meets threshold
             if attempt.trust_score < recovery_setup.minimum_challenge_success_rate:
                 return Response({
                     'error': f'Insufficient trust score: {attempt.trust_score:.2f} (required: {recovery_setup.minimum_challenge_success_rate:.2f})'
                 }, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Verify enough shards collected
-            if len(collected_shards_data) < recovery_setup.threshold_shards:
+
+            released = GuardianApproval.objects.filter(
+                recovery_attempt=attempt,
+                status='approved',
+                shard_released=True,
+                guardian__shard__is_honeypot=False,
+            ).select_related('guardian__shard').order_by('guardian__shard__shard_index')
+            sealed = [
+                {'share_index': a.guardian.shard.shard_index,
+                 'sealed_share': sealed_shares.b64(a.resealed_share)}
+                for a in released if bytes(a.resealed_share)
+            ]
+            if len(sealed) < recovery_setup.threshold_shards:
                 return Response({
-                    'error': f'Insufficient shards: need {recovery_setup.threshold_shards}, have {len(collected_shards_data)}'
+                    'error': f'Insufficient shares: need {recovery_setup.threshold_shards}, have {len(sealed)}'
                 }, status=status.HTTP_400_BAD_REQUEST)
-            
+
             with transaction.atomic():
-                # Decrypt and collect shards
-                decrypted_shards = []
-                
-                for shard_data in collected_shards_data:
-                    shard = RecoveryShard.objects.get(id=shard_data['shard_id'])
-                    
-                    # Check for honeypot
-                    if shard.is_honeypot:
-                        attempt.honeypot_triggered = True
-                        attempt.suspicious_activity_detected = True
-                        attempt.status = 'failed'
-                        attempt.failure_reason = 'Honeypot shard accessed'
-                        attempt.save()
-                        
-                        # Log security event
-                        RecoveryAuditLog.objects.create(
-                            user=recovery_setup.user,
-                            event_type='honeypot_triggered',
-                            recovery_attempt_id=attempt.id,
-                            event_data={
-                                'shard_id': str(shard.id)
-                            },
-                            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
-                            cryptographic_hash=hashlib.sha256(
-                                f"{recovery_setup.user.id}:{time.time()}".encode()
-                            ).hexdigest(),
-                        )
-                        
-                        return Response({
-                            'error': 'Security violation detected'
-                        }, status=status.HTTP_403_FORBIDDEN)
-                    
-                    # Decrypt shard based on type
-                    from .services.quantum_crypto_service import quantum_crypto_service
-                    
-                    if shard.shard_type == RecoveryShardType.GUARDIAN:
-                        # Guardian shards are already released via approval
-                        guardian_approval = GuardianApproval.objects.filter(
-                            recovery_attempt=attempt,
-                            guardian__shard=shard,
-                            status='approved',
-                            shard_released=True
-                        ).first()
-                        
-                        if not guardian_approval:
-                            continue  # Skip if not approved
-                        
-                        # Decrypt with guardian's private key (simplified)
-                        encrypted_shard = quantum_crypto_service.deserialize_encrypted_shard(
-                            shard.encrypted_shard_data
-                        )
-                        # In production, proper key management would be implemented
-                        shard_plaintext = shard.encrypted_shard_data  # Simplified
-                    
-                    elif shard.shard_type == RecoveryShardType.DEVICE:
-                        # Decrypt with device fingerprint
-                        device_fp = shard_data.get('decryption_context', {}).get('device_fingerprint', '')
-                        encrypted_shard = quantum_crypto_service.deserialize_encrypted_shard(
-                            shard.encrypted_shard_data
-                        )
-                        shard_plaintext = quantum_crypto_service.decrypt_with_password(
-                            encrypted_shard,
-                            device_fp
-                        )
-                    else:
-                        # For other shard types, use appropriate decryption
-                        shard_plaintext = shard.encrypted_shard_data
-                    
-                    # Add to collection
-                    decrypted_shards.append((shard.shard_index, shard_plaintext))
-                
-                # Reconstruct secret using Shamir's Secret Sharing
-                passkey_secret = quantum_crypto_service.shamir_reconstruct_secret(
-                    decrypted_shards,
-                    recovery_setup.threshold_shards
-                )
-                
-                # Generate recovery token for passkey re-registration
-                recovery_token = secrets.token_urlsafe(64)
-                
-                # Mark recovery as complete
                 attempt.status = 'completed'
                 attempt.recovery_successful = True
                 attempt.completed_at = timezone.now()
-                attempt.save()
-                
-                # Log audit event
+                attempt.save(update_fields=['status', 'recovery_successful', 'completed_at'])
+
                 RecoveryAuditLog.objects.create(
                     user=recovery_setup.user,
                     event_type='recovery_completed',
                     recovery_attempt_id=attempt.id,
                     event_data={
-                        'shards_used': len(decrypted_shards),
+                        'shares_released': len(sealed),
                         'trust_score': attempt.trust_score
                     },
                     ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
@@ -852,13 +802,17 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                         f"{recovery_setup.user.id}:{time.time()}".encode()
                     ).hexdigest(),
                 )
-            
+
+            first_shard = recovery_setup.shards.filter(is_honeypot=False).first()
             return Response({
                 'success': True,
-                'recovery_token': recovery_token,
-                'message': 'Recovery completed successfully. Use token to re-register passkey.'
+                'threshold': recovery_setup.threshold_shards,
+                'secret_type': first_shard.secret_type if first_shard else None,
+                'secret_check': sealed_shares.b64(recovery_setup.secret_check),
+                'sealed_shares': sealed,
+                'algorithm': sealed_shares.HYBRID_KEM_ALGORITHM,
             })
-            
+
         except Exception as e:
             logger.error(f"Error completing recovery: {str(e)}")
             return Response({
@@ -866,63 +820,111 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+def _is_uuid(value):
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def guardian_invitation(request):
+    """
+    What an invited guardian's device needs before it accepts.
+
+    POST /api/auth/quantum-recovery/guardian-invitation/
+    Body: {"invitation_token": "token123"}
+
+    Returns the guardian's sealed share, which only the private key matching
+    the public key the guardian gave the owner can open.
+    """
+    guardian = RecoveryGuardian.objects.select_related('shard').filter(
+        invitation_token=request.data.get('invitation_token') or ''
+    ).first()
+    if guardian is None or not guardian.is_invitation_valid() or guardian.shard is None:
+        return Response({'error': 'Invitation expired or already used'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    return Response({
+        'share_index': guardian.shard.shard_index,
+        'sealed_share': sealed_shares.b64(guardian.shard.encrypted_shard_data),
+        'algorithm': sealed_shares.HYBRID_KEM_ALGORITHM,
+    })
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def accept_guardian_invitation(request):
     """
-    Guardian accepts invitation to hold recovery shard
-    
+    Guardian accepts invitation to hold a recovery share.
+
     POST /api/auth/quantum-recovery/accept-guardian-invitation/
-    
+
     Request body:
     {
         "invitation_token": "token123",
-        "guardian_public_key": "base64_encoded_key"
+        "share_proof": "<base64 share proof>"
     }
+
+    The share proof shows that the guardian's device opened its sealed share,
+    so it holds the private key and the share is intact
+    (shared/sealed_shares.py). Without it a guardian could accept a share it
+    can never open.
     """
     try:
-        invitation_token = request.data.get('invitation_token')
-        
-        guardian = get_object_or_404(RecoveryGuardian, invitation_token=invitation_token)
-        
-        # Check if invitation is valid
-        if not guardian.is_invitation_valid():
-            return Response({
-                'error': 'Invitation expired or already used'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Update guardian status
-        guardian.status = 'active'
-        guardian.accepted_at = timezone.now()
-        guardian.save()
-        
-        # Check if all guardians have accepted - if so, activate recovery
-        recovery_setup = guardian.recovery_setup
-        all_accepted = recovery_setup.guardians.filter(status='pending').count() == 0
-        
-        if all_accepted:
-            recovery_setup.is_active = True
-            recovery_setup.save()
-        
-        # Log audit event
-        RecoveryAuditLog.objects.create(
-            user=recovery_setup.user,
-            event_type='guardian_accepted',
-            event_data={
-                'guardian_id': str(guardian.id)
-            },
-            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
-            cryptographic_hash=hashlib.sha256(
-                f"{recovery_setup.user.id}:{time.time()}".encode()
-            ).hexdigest(),
-        )
-        
+        invitation_token = request.data.get('invitation_token') or ''
+
+        with transaction.atomic():
+            guardian = RecoveryGuardian.objects.select_for_update().filter(
+                invitation_token=invitation_token
+            ).first()
+
+            # Check if invitation is valid
+            if guardian is None or not guardian.is_invitation_valid():
+                return Response({
+                    'error': 'Invitation expired or already used'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            if not sealed_shares.share_proof_matches(
+                    request.data.get('share_proof'), guardian.share_proof_hash):
+                return Response({
+                    'error': 'share_proof does not match: open the sealed share with '
+                             'the key you gave the account owner'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Update guardian status
+            guardian.status = 'active'
+            guardian.accepted_at = timezone.now()
+            guardian.save(update_fields=['status', 'accepted_at', 'updated_at'])
+
+            # Check if all guardians have accepted - if so, activate recovery
+            recovery_setup = guardian.recovery_setup
+            all_accepted = recovery_setup.guardians.filter(status='pending').count() == 0
+
+            if all_accepted:
+                recovery_setup.is_active = True
+                recovery_setup.save()
+
+            # Log audit event
+            RecoveryAuditLog.objects.create(
+                user=recovery_setup.user,
+                event_type='guardian_accepted',
+                event_data={
+                    'guardian_id': str(guardian.id)
+                },
+                ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
+                cryptographic_hash=hashlib.sha256(
+                    f"{recovery_setup.user.id}:{time.time()}".encode()
+                ).hexdigest(),
+            )
+
         return Response({
             'success': True,
             'message': 'Guardian invitation accepted',
             'recovery_active': recovery_setup.is_active
         })
-        
+
     except Exception as e:
         logger.error(f"Error accepting guardian invitation: {str(e)}")
         return Response({
