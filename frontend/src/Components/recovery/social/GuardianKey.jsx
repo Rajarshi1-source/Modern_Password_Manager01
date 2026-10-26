@@ -1,0 +1,43 @@
+import React, { useEffect, useState } from 'react';
+import { getOrCreateGuardianKeyPair } from '../../../services/recovery/holderKeyStore';
+import { keyFingerprint } from '../../../services/recovery/sealedShareRecovery';
+
+/**
+ * A would-be guardian's key, before any invitation exists
+ * (/recovery/guardian-key). The guardian sends the public key to the account
+ * owner directly (not through this site), and reads the fingerprint to them
+ * so the owner can check the key they pasted. The private key stays in this
+ * browser; the owner's device seals a share to the public key.
+ */
+export default function GuardianKey() {
+  const [keyPair, setKeyPair] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    getOrCreateGuardianKeyPair()
+      .then(setKeyPair)
+      .catch(() => setError('Could not create a guardian key in this browser.'));
+  }, []);
+
+  if (error) return <p role="alert">{error}</p>;
+  if (!keyPair) return <p>Creating your guardian key…</p>;
+
+  return (
+    <section data-testid="guardian-key">
+      <h1>Your guardian key</h1>
+      <p>
+        Send this key to the person who asked you to be their guardian, by a
+        message or in person. Only this browser can open the share they seal
+        to it, so accept their invitation and approve recoveries from here.
+      </p>
+      <textarea rows="4" readOnly className="mono" value={keyPair.publicKey}
+        data-testid="guardian-public-key" />
+      <p>
+        Fingerprint, to read out so they can check the key they received:
+        {' '}<strong className="mono" data-testid="guardian-key-fingerprint">
+          {keyFingerprint(keyPair.publicKey)}
+        </strong>
+      </p>
+    </section>
+  );
+}

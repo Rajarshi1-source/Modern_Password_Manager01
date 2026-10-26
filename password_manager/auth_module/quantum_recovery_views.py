@@ -36,6 +36,7 @@ from .quantum_recovery_models import (
     BehavioralBiometrics,
     RecoveryShardType
 )
+from .recovery_throttling import RecoveryThrottle
 from .services.quantum_crypto_service import quantum_crypto_service
 from shared import sealed_shares
 
@@ -723,7 +724,8 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 'error': 'Failed to enable travel lock'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny],
+            throttle_classes=[RecoveryThrottle])
     def complete_recovery(self, request):
         """
         Hand the requester the shares guardians re-sealed to its one-time key.
@@ -735,7 +737,9 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
         The requester's device opens the shares, recombines the seed, checks
         it against secret_check and uses it with the layered recovery flow
         (vault/wrapped-dek/recover-rotate). The server never reconstructs
-        anything and grants no session here.
+        anything and grants no session here. A completed attempt answers
+        again with the same shares, so a lost response can be retried; they
+        open only with the requester's key.
         """
         try:
             attempt = RecoveryAttempt.objects.select_related('recovery_setup').filter(
@@ -753,7 +757,8 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 }, status=status.HTTP_410_GONE)
 
             # Verify attempt is in correct status
-            if attempt.status not in ['shard_collection', 'guardian_approval', 'final_verification']:
+            if attempt.status not in ['shard_collection', 'guardian_approval',
+                                      'final_verification', 'completed']:
                 return Response({
                     'error': 'Recovery not ready for completion'
                 }, status=status.HTTP_400_BAD_REQUEST)
@@ -783,25 +788,26 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     'error': f'Insufficient shares: need {recovery_setup.threshold_shards}, have {len(sealed)}'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            with transaction.atomic():
-                attempt.status = 'completed'
-                attempt.recovery_successful = True
-                attempt.completed_at = timezone.now()
-                attempt.save(update_fields=['status', 'recovery_successful', 'completed_at'])
+            if attempt.status != 'completed':
+                with transaction.atomic():
+                    attempt.status = 'completed'
+                    attempt.recovery_successful = True
+                    attempt.completed_at = timezone.now()
+                    attempt.save(update_fields=['status', 'recovery_successful', 'completed_at'])
 
-                RecoveryAuditLog.objects.create(
-                    user=recovery_setup.user,
-                    event_type='recovery_completed',
-                    recovery_attempt_id=attempt.id,
-                    event_data={
-                        'shares_released': len(sealed),
-                        'trust_score': attempt.trust_score
-                    },
-                    ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
-                    cryptographic_hash=hashlib.sha256(
-                        f"{recovery_setup.user.id}:{time.time()}".encode()
-                    ).hexdigest(),
-                )
+                    RecoveryAuditLog.objects.create(
+                        user=recovery_setup.user,
+                        event_type='recovery_completed',
+                        recovery_attempt_id=attempt.id,
+                        event_data={
+                            'shares_released': len(sealed),
+                            'trust_score': attempt.trust_score
+                        },
+                        ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
+                        cryptographic_hash=hashlib.sha256(
+                            f"{recovery_setup.user.id}:{time.time()}".encode()
+                        ).hexdigest(),
+                    )
 
             first_shard = recovery_setup.shards.filter(is_honeypot=False).first()
             return Response({

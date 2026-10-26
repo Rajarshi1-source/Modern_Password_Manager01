@@ -14,6 +14,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -165,6 +166,7 @@ class GuardianInvitationTests(TestCase):
 
 class GuardianRecoveryFlowTests(TestCase):
     def setUp(self):
+        cache.clear()  # completion throttle counters
         self.user = User.objects.create_user('owner', 'owner@example.com', 'Owner-Pass-1!')
         owner = APIClient()
         owner.force_authenticate(self.user)
@@ -257,9 +259,11 @@ class GuardianRecoveryFlowTests(TestCase):
         self.assertNotIn('recovery_token', body)
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, 'completed')
-        # Completed attempts do not release shares again.
+        # A retry (say, after a lost response) gets the same shares; they open
+        # only with the requester's key.
         r = self.anon.post(url, {'attempt_id': str(attempt.id)}, format='json')
-        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()['sealed_shares'], body['sealed_shares'])
 
     def test_low_trust_or_expired_attempts_release_nothing(self):
         attempt, _ = self._attempt_with_approvals()
