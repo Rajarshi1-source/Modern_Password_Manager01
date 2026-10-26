@@ -173,54 +173,6 @@ def create_circle(
 
 
 @transaction.atomic
-def add_voucher(
-    *,
-    circle: RecoveryCircle,
-    ed25519_public_key: str,
-    share_index: int,
-    encrypted_share: bytes,
-    did_string: str = "",
-    email: str = "",
-    display_name: str = "",
-    user=None,
-    vouch_weight: int = 1,
-    stake_amount: int = 0,
-) -> Voucher:
-    """Attach an additional voucher (used by tests and admin actions)."""
-    voucher = Voucher.objects.create(
-        circle=circle,
-        ed25519_public_key=ed25519_public_key,
-        did_string=did_string,
-        email=email,
-        display_name=display_name,
-        user=user,
-        share_index=share_index,
-        encrypted_shard_data=encrypted_share,
-        vouch_weight=vouch_weight,
-        stake_amount=stake_amount,
-        status="pending",
-        invitation_expires_at=timezone.now() + DEFAULT_INVITATION_TTL,
-    )
-    commit_bytes, _r, salt, salt_hash = _relationship_commitment(
-        ed25519_public_key, circle.circle_id
-    )
-    RelationshipCommitment.objects.create(
-        circle=circle,
-        voucher=voucher,
-        pedersen_commitment=commit_bytes,
-        salt=salt,
-        salt_hash=salt_hash,
-    )
-    record_event(
-        event_type="voucher_invited",
-        user=circle.user,
-        circle=circle,
-        event_data={"voucher_id": str(voucher.voucher_id)},
-    )
-    return voucher
-
-
-@transaction.atomic
 def revoke_voucher(*, voucher: Voucher, reason: str = "") -> None:
     voucher.status = "revoked"
     voucher.revoked_at = timezone.now()

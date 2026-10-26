@@ -2449,7 +2449,11 @@ function App() {
                     guardian emails without sealed shares, which the server
                     refuses; guardian shares are sealed on the owner's device
                     through the social-mesh pages. */}
-                <Route path="/recovery/social-mesh" element={<Navigate to="/recovery/social-mesh/recover-v2" replace />} />
+                <Route path="/recovery/social-mesh" element={
+                  isAuthenticated
+                    ? <Navigate to="/recovery/social-mesh/enroll-v2" replace />
+                    : <Navigate to="/recovery/social-mesh/recover-v2" replace />
+                } />
                 {/* Genetic Password OAuth callback */}
                 <Route path="/genetic-callback" element={<GeneticOAuthCallback />} />
                 {/* Natural Entropy Dashboard */}
