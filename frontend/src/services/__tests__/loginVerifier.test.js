@@ -67,12 +67,23 @@ describe('signInWithVerifier', () => {
     });
   });
 
-  it('retries once with the old password for an account not yet switched', async () => {
+  it('never sends the old password without the user confirming', async () => {
+    const { signInWithVerifier, LEGACY_SIGN_IN_CONFIRMATION } = await import('../loginVerifier.js');
+    const post = vi.fn().mockRejectedValue(rejection(401));
+    await expect(signInWithVerifier(post, { username: 'alice@example.com', masterPassword: MASTER }))
+      .rejects.toMatchObject({ code: LEGACY_SIGN_IN_CONFIRMATION });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(post.mock.calls)).not.toContain(MASTER);
+  });
+
+  it('retries once with the old password after the user confirms', async () => {
     const { signInWithVerifier } = await import('../loginVerifier.js');
     const post = vi.fn()
       .mockRejectedValueOnce(rejection(401))
       .mockResolvedValueOnce({ ok: true });
-    await signInWithVerifier(post, { username: 'alice@example.com', masterPassword: MASTER });
+    await signInWithVerifier(post, {
+      username: 'alice@example.com', masterPassword: MASTER, allowLegacy: true,
+    });
     expect(post).toHaveBeenCalledTimes(2);
     expect(post.mock.calls[0][0]).not.toHaveProperty('legacy_password');
     expect(post.mock.calls[1][0].legacy_password).toBe(MASTER);
@@ -82,8 +93,9 @@ describe('signInWithVerifier', () => {
     const { signInWithVerifier } = await import('../loginVerifier.js');
     await signInWithVerifier(vi.fn(async () => ({})), { username: 'alice@example.com', masterPassword: MASTER });
     const post = vi.fn().mockRejectedValue(rejection(401));
-    await expect(signInWithVerifier(post, { username: 'alice@example.com', masterPassword: 'typo' }))
-      .rejects.toThrow();
+    await expect(signInWithVerifier(post, {
+      username: 'alice@example.com', masterPassword: 'typo', allowLegacy: true,
+    })).rejects.toThrow();
     expect(post).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(post.mock.calls)).not.toContain('typo');
   });

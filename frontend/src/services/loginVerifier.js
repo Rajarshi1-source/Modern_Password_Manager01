@@ -17,9 +17,10 @@
  *
  * Migration: an account created before the verifier still signs in with
  * its master password. When a verifier sign-in fails and this browser has
- * never signed the account in with a verifier, `signInWithVerifier`
- * retries once with the old password as `legacy_password`; the server
- * checks it once and switches the account to the verifier.
+ * never signed the account in with a verifier, the user is asked whether
+ * this is their first sign-in since the change; only if they confirm is
+ * the old password sent once as `legacy_password`, which the server checks
+ * once before switching the account to the verifier.
  */
 import * as argon2 from 'argon2-browser';
 
@@ -87,15 +88,29 @@ async function rememberMigrated(username) {
 
 const isCredentialRejection = (err) => [400, 401].includes(err?.response?.status);
 
+// Thrown instead of retrying when a verifier sign-in is rejected and the
+// account may predate the verifier: the caller asks the user, and only on
+// their confirmation calls again with `allowLegacy: true`.
+export const LEGACY_SIGN_IN_CONFIRMATION = 'LEGACY_SIGN_IN_CONFIRMATION';
+
 /**
- * Sign in with the verifier, switching a legacy account over if needed.
+ * Sign in with the verifier, switching a legacy account over if the user
+ * confirms it.
+ *
+ * The old password is sent only with `allowLegacy: true`, which the caller
+ * sets after the user confirmed this is their first sign-in since the
+ * verifier was introduced. A server-side "this account still needs
+ * migrating" answer would tell anyone which accounts exist, so the client
+ * cannot learn it on its own; without the confirmation, a mistyped
+ * password for a switched account would be sent too.
  *
  * @param {(body: {username: string, password: string, legacy_password?: string}) => Promise<T>} post
  *   Sends one sign-in request with this body; rejects on failure.
+ * @param {{username: string, masterPassword: string, allowLegacy?: boolean}} credentials
  * @returns {Promise<T>}
  * @template T
  */
-export async function signInWithVerifier(post, { username, masterPassword }) {
+export async function signInWithVerifier(post, { username, masterPassword, allowLegacy = false }) {
   const verifier = await deriveLoginVerifier(masterPassword, username);
   try {
     const result = await post({ username, password: verifier });
@@ -103,9 +118,15 @@ export async function signInWithVerifier(post, { username, masterPassword }) {
     return result;
   } catch (err) {
     if (!isCredentialRejection(err) || (await isKnownMigrated(username))) throw err;
+    if (!allowLegacy) {
+      const ask = new Error('Sign-in rejected; the account may still use its old sign-in.');
+      ask.code = LEGACY_SIGN_IN_CONFIRMATION;
+      ask.cause = err;
+      throw ask;
+    }
   }
-  // One retry carrying the old password, for an account that has not been
-  // switched yet. The server ignores it for an account that has.
+  // One retry carrying the old password, which the user confirmed. The
+  // server ignores it for an account that has already switched.
   const result = await post({ username, password: verifier, legacy_password: masterPassword });
   await rememberMigrated(username);
   return result;

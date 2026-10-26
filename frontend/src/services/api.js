@@ -95,8 +95,10 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    // Handle authentication errors
-    if (error.response && error.response.status === 401) {
+    // Handle authentication errors. Anonymous recovery calls opt out
+    // (`_noAuthRedirect`): their 401 means "wrong recovery key", not an
+    // expired session, and the page shows it.
+    if (error.response && error.response.status === 401 && !error.config?._noAuthRedirect) {
       clearAuthState();
 
       // Redirect to login if not already there
@@ -163,8 +165,14 @@ const ApiService = {
     listBackups: () => api.get('/auth/passkey-recovery/backups/'),
     // Initiate recovery (step 1: identify user)
     initiateRecovery: (data) => api.post('/auth/passkey-recovery/initiate/', data),
-    // Complete recovery (step 2: prove the recovery key; starts a new-passkey registration)
-    completeRecovery: (data) => api.post('/auth/passkey-recovery/complete/', data),
+    // Complete recovery (step 2: prove the recovery key; starts a new-passkey
+    // registration). It and the two registration calls carry cookies: the
+    // server session holds the recovery grant between them.
+    completeRecovery: (data) => api.post('/auth/passkey-recovery/complete/', data, { withCredentials: true, _noAuthRedirect: true }),
+    // Restart the new-passkey registration while the recovery grant is valid
+    beginRegistration: () => api.post('/auth/passkey-recovery/register/begin/', {}, { withCredentials: true, _noAuthRedirect: true }),
+    // Finish registering the new passkey (WebAuthn attestation)
+    completeRegistration: (data) => api.post('/auth/passkey-recovery/register/complete/', data, { withCredentials: true, _noAuthRedirect: true }),
     // Fallback to social mesh recovery if primary fails
     fallbackToSocialMesh: (data) => api.post('/auth/passkey-recovery/fallback/', data),
     // Revoke a recovery backup

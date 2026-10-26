@@ -533,6 +533,7 @@ export const AuthProvider = ({ children }) => {
         const { user: userData } = await signInWithVerifier(loginWithCookie, {
           username: credentials.email || credentials.username,
           masterPassword: credentials.password,
+          allowLegacy: Boolean(credentials.allowLegacyMigration),
         });
         let userProfile = userData;
         if (!userProfile) {
@@ -558,6 +559,7 @@ export const AuthProvider = ({ children }) => {
         {
           username: credentials.email || credentials.username,
           masterPassword: credentials.password,
+          allowLegacy: Boolean(credentials.allowLegacyMigration),
         },
       );
 
