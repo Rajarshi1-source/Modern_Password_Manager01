@@ -290,9 +290,11 @@ def webauthn_begin_authentication(request):
                 UserPasskey.objects.filter(user=user).values_list('credential_id', flat=True)
             ]
 
+        # REQUIRED is recorded in the state, so complete rejects an assertion
+        # without the user-verified flag whatever the client asked for.
         options, state = server.authenticate_begin(
             credentials=credentials,
-            user_verification=UserVerificationRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.REQUIRED,
         )
 
         request.session[AUTHENTICATION_STATE_KEY] = {
