@@ -17,3 +17,13 @@ regexTarget = "line"
 regexes = [
   '''^\s*\('[a-z][a-z0-9_]*',\s*'\d{4}_[a-z0-9_]+'\),?\s*$''',
 ]
+
+[[allowlists]]
+description = "Base64 of the text 'not-32-bytes', a malformed-hash test input in commit 4551d2e (the test now computes it)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)auth_module/tests/test_login_verifier\.py$''']
+regexTarget = "line"
+regexes = [
+  '''new_auth_hash='bm90LTMyLWJ5dGVz'\)''',
+]
