@@ -44,25 +44,35 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_sealed_guardian(g):
-    """Check one guardian entry of setup_recovery; raise ValueError."""
+    """Check one guardian entry of setup_recovery.
+
+    Returns ``(guardian, None)`` or ``(None, error message)``; the messages
+    are fixed text.
+    """
     if not isinstance(g, dict):
-        raise ValueError('Each guardian must be an object')
+        return None, 'Each guardian must be an object'
     email = g.get('email')
     share_index = g.get('share_index')
     if not isinstance(email, str) or '@' not in email:
-        raise ValueError("Each guardian needs an 'email'")
+        return None, "Each guardian needs an 'email'"
     if not isinstance(share_index, int) or isinstance(share_index, bool) \
             or not 1 <= share_index <= 255:
-        raise ValueError("Each guardian needs a 'share_index' (1-255)")
-    return {
+        return None, "Each guardian needs a 'share_index' (1-255)"
+    guardian = {
         'email': email,
         'requires_video': bool(g.get('requires_video', False)),
         'share_index': share_index,
         'public_key': sealed_shares.decode_hybrid_public_key(g.get('public_key')),
         'sealed_share': sealed_shares.decode_sealed_share(g.get('sealed_share')),
-        'share_proof_hash': sealed_shares.decode_digest(
-            g.get('share_proof_hash'), 'share_proof_hash'),
+        'share_proof_hash': sealed_shares.decode_digest(g.get('share_proof_hash')),
     }
+    if guardian['public_key'] is None:
+        return None, f"Each guardian's 'public_key' {sealed_shares.INVALID_HYBRID_PUBLIC_KEY}"
+    if guardian['sealed_share'] is None:
+        return None, f"Each guardian's 'sealed_share' {sealed_shares.INVALID_SEALED_SHARE}"
+    if guardian['share_proof_hash'] is None:
+        return None, f"Each guardian's 'share_proof_hash' {sealed_shares.INVALID_DIGEST}"
+    return guardian, None
 
 
 class QuantumRecoveryViewSet(viewsets.ViewSet):
@@ -112,8 +122,15 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             user = request.user
 
             # Check if recovery already setup. A pending setup (guardians not
-            # yet accepted) counts too: the user has one setup at most.
+            # yet accepted) counts too: the user has one setup at most. A
+            # setup from before client-side sealing holds no recoverable
+            # secret (it cannot complete), so it is replaced once the new
+            # request is valid.
+            legacy_setup = None
             if hasattr(user, 'passkey_recovery_setup'):
+                if not bytes(user.passkey_recovery_setup.secret_check or b''):
+                    legacy_setup = user.passkey_recovery_setup
+            if hasattr(user, 'passkey_recovery_setup') and legacy_setup is None:
                 return Response({
                     'error': 'Recovery system already configured'
                     if user.passkey_recovery_setup.is_active
@@ -144,17 +161,23 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
 
             # Each share is sealed on the owner's device to a public key the
             # guardian generated on their own device.
-            try:
-                secret_check = sealed_shares.decode_digest(
-                    request.data.get('secret_check'), 'secret_check')
-                guardians = [_parse_sealed_guardian(g) for g in guardians_data]
-            except ValueError as e:
-                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            secret_check = sealed_shares.decode_digest(request.data.get('secret_check'))
+            if secret_check is None:
+                return Response({'error': f"'secret_check' {sealed_shares.INVALID_DIGEST}"},
+                                status=status.HTTP_400_BAD_REQUEST)
+            guardians = []
+            for g in guardians_data:
+                guardian, problem = _parse_sealed_guardian(g)
+                if problem:
+                    return Response({'error': problem}, status=status.HTTP_400_BAD_REQUEST)
+                guardians.append(guardian)
             if len({g['share_index'] for g in guardians}) != len(guardians):
                 return Response({'error': 'share_index values must be distinct'},
                                 status=status.HTTP_400_BAD_REQUEST)
 
             with transaction.atomic():
+                if legacy_setup is not None:
+                    legacy_setup.delete()
                 recovery_setup = PasskeyRecoverySetup.objects.create(
                     user=user,
                     total_shards=len(guardians),
@@ -315,11 +338,12 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 return Response({
                     'error': 'Email required'
                 }, status=status.HTTP_400_BAD_REQUEST)
-            try:
-                requester_public_key = sealed_shares.decode_hybrid_public_key(
-                    request.data.get('requester_public_key'), 'requester_public_key')
-            except ValueError as e:
-                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            requester_public_key = sealed_shares.decode_hybrid_public_key(
+                request.data.get('requester_public_key'))
+            if requester_public_key is None:
+                return Response({
+                    'error': f"'requester_public_key' {sealed_shares.INVALID_HYBRID_PUBLIC_KEY}"
+                }, status=status.HTTP_400_BAD_REQUEST)
 
             # Find user and recovery setup
             from django.contrib.auth import get_user_model
@@ -365,7 +389,10 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     initiated_from_device_fingerprint=request.data.get('device_fingerprint', ''),
                     requester_public_key=requester_public_key,
                     shards_required=recovery_setup.threshold_shards,
-                    guardian_approvals_required=min(2, len(recovery_setup.guardians.filter(status='active'))),
+                    # Every active guardian is asked: completion needs
+                    # threshold_shards re-sealed shares, and asking more than
+                    # the threshold lets recovery finish if one does not answer.
+                    guardian_approvals_required=recovery_setup.guardians.filter(status='active').count(),
                     expires_at=timezone.now() + timedelta(days=recovery_setup.decay_window_days)
                 )
                 
@@ -595,11 +622,12 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 }, status=status.HTTP_400_BAD_REQUEST)
             resealed_share = b''
             if approved:
-                try:
-                    resealed_share = sealed_shares.decode_sealed_share(
-                        request.data.get('resealed_share'), 'resealed_share')
-                except ValueError as e:
-                    return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+                resealed_share = sealed_shares.decode_sealed_share(
+                    request.data.get('resealed_share'))
+                if resealed_share is None:
+                    return Response({
+                        'error': f"'resealed_share' {sealed_shares.INVALID_SEALED_SHARE}"
+                    }, status=status.HTTP_400_BAD_REQUEST)
 
             try:
                 approval = GuardianApproval.objects.select_related(

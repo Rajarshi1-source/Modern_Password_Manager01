@@ -8,13 +8,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { behavioralCaptureEngine } from '../services/behavioralCapture';
-import { behavioralDNAModel } from '../ml/behavioralDNA';
 import { secureBehavioralStorage } from '../services/SecureBehavioralStorage';
-// Direct import instead of re-export via index — kyberService was removed from
-// quantum/index.js to prevent it being bundled into the main chunk (it is
-// lazy-loaded by App.jsx). BehavioralContext runs only after login, so a
-// direct static import here is safe and does not affect initial load time.
-import { kyberService } from '../services/quantum/kyberService';
 import axios from 'axios';
 
 const BehavioralContext = createContext(null);
@@ -69,11 +63,6 @@ export const BehavioralProvider = ({ children }) => {
       const statsInterval = setInterval(() => {
         const stats = behavioralCaptureEngine.getProfileStatistics();
         setProfileStats(stats);
-
-        // Auto-create commitments when profile is ready
-        if (stats.isReady && !commitmentStatus?.has_commitments) {
-          createBehavioralCommitments();
-        }
       }, 60000); // Update every minute
 
       // Store interval in ref for cleanup
@@ -82,7 +71,7 @@ export const BehavioralProvider = ({ children }) => {
     } catch (error) {
       console.error('Error starting behavioral capture:', error);
     }
-  }, [isCapturing, commitmentStatus?.has_commitments, createBehavioralCommitments]);
+  }, [isCapturing]);
 
   /**
    * Stop behavioral capture

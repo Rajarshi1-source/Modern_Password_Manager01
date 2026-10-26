@@ -2,8 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
 import {
-  getGuardianKeyPair,
   getSealedShare,
+  loadGuardianKeyPair,
 } from '../../../services/recovery/holderKeyStore';
 import {
   fromB64,
@@ -48,13 +48,13 @@ const AttestationForm = () => {
 
   const prepareReseal = async () => {
     setError(null);
-    const keyPair = getGuardianKeyPair();
-    const sealedShare = getSealedShare(voucherId);
-    if (!keyPair || !sealedShare) {
-      setError('This device does not hold the guardian key and share for that voucher ID.');
-      return;
-    }
     try {
+      const keyPair = await loadGuardianKeyPair();
+      const sealedShare = getSealedShare(voucherId);
+      if (!keyPair || !sealedShare) {
+        setError('This device does not hold the guardian key and share for that voucher ID.');
+        return;
+      }
       setResealedShare(await resealShareForRequester({
         keyPair,
         sealedShare,

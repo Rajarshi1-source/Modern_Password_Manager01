@@ -31,8 +31,8 @@ def _ed25519():
 class ClientSealedCircleApiTests(TestCase):
     def setUp(self):
         cache.clear()
-        self.owner = User.objects.create_user(username="owner", email="owner@example.com",
-                                              password="owner-pass-1234")
+        # force_authenticate below: the account needs no usable password
+        self.owner = User.objects.create_user(username="owner", email="owner@example.com")
         self.client = APIClient()
         self.client.force_authenticate(self.owner)
         self.keys = [_ed25519() for _ in range(3)]

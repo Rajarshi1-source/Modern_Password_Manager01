@@ -113,6 +113,19 @@ class GuardianRecoverySetupTests(TestCase):
         self.assertEqual(self._setup(dup).status_code, 400)
         self.assertFalse(PasskeyRecoverySetup.objects.filter(user=self.user).exists())
 
+    def test_a_setup_from_before_client_sealing_is_replaced(self):
+        legacy = PasskeyRecoverySetup.objects.create(
+            user=self.user, total_shards=3, threshold_shards=2, is_active=True,
+            kyber_public_key=b'old', kyber_private_key_encrypted=b'old')
+        # An invalid request leaves the old setup alone.
+        self.assertEqual(self._setup([_guardian(1)[0]]).status_code, 400)
+        self.assertTrue(PasskeyRecoverySetup.objects.filter(pk=legacy.pk).exists())
+        r = self._setup([_guardian(i)[0] for i in (1, 2, 3)])
+        self.assertEqual(r.status_code, 201, r.content)
+        setup = PasskeyRecoverySetup.objects.get(user=self.user)
+        self.assertNotEqual(setup.pk, legacy.pk)
+        self.assertEqual(len(bytes(setup.secret_check)), 32)
+
     def test_retrying_a_pending_setup_is_a_clear_400(self):
         guardians = [_guardian(i)[0] for i in (1, 2, 3)]
         self.assertEqual(self._setup(guardians).status_code, 201)
@@ -197,6 +210,12 @@ class GuardianRecoveryFlowTests(TestCase):
         self.assertEqual(r.status_code, 200, r.content)
         attempt = RecoveryAttempt.objects.get()
         self.assertEqual(bytes(attempt.requester_public_key), base64.b64decode(self.requester_key))
+        # Every active guardian is asked, so the threshold can be met.
+        self.assertEqual(attempt.guardian_approvals_required, 3)
+        self.assertGreaterEqual(attempt.guardian_approvals_required, self.setup.threshold_shards)
+        from auth_module.quantum_recovery_tasks import request_guardian_approvals
+        request_guardian_approvals(str(attempt.id))
+        self.assertEqual(GuardianApproval.objects.filter(recovery_attempt=attempt).count(), 3)
 
     def _attempt_with_approvals(self):
         self._initiate(requester_public_key=self.requester_key)

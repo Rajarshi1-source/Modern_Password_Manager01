@@ -96,6 +96,25 @@ describe('guardian recovery on the client', () => {
     })).rejects.toThrow(/fingerprint/);
   });
 
+  it('recovers when one of more-than-threshold shares is wrong', async () => {
+    const guardians = await Promise.all([1, 2, 3].map(() => newHolderKeyPair()));
+    const keys = guardians.map((g) => g.publicKey);
+    const good = await sealSeedForGuardians({ seed: new Uint8Array(32).fill(7), threshold: 2, guardianPublicKeys: keys });
+    const bad = await sealSeedForGuardians({ seed: new Uint8Array(32).fill(8), threshold: 2, guardianPublicKeys: keys });
+    const requester = await newHolderKeyPair();
+    const fingerprint = keyFingerprint(requester.publicKey);
+    // Guardian 1 hands over a share from another split: subsets {1,2} and
+    // {1,3} fail the check, {2,3} recovers.
+    const resealed = await Promise.all([[bad, 0], [good, 1], [good, 2]].map(([setup, i]) => resealShareForRequester({
+      keyPair: guardians[i], sealedShare: setup.shares[i].sealedShare,
+      requesterPublicKey: requester.publicKey, confirmedFingerprint: fingerprint,
+    })));
+    const seed = await recoverSeed({
+      keyPair: requester, sealedShares: resealed, threshold: 2, secretCheck: good.secretCheck,
+    });
+    expect(Array.from(seed)).toEqual(Array.from(new Uint8Array(32).fill(7)));
+  });
+
   it('refuses a seed that does not match the seed check', async () => {
     const guardians = await Promise.all([1, 2].map(() => newHolderKeyPair()));
     const a = await sealSeedForGuardians({

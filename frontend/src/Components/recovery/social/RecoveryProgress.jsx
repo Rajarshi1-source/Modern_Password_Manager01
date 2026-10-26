@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
 import {
   forgetRequesterKeyPair,
-  getRequesterKeyPair,
+  loadRequesterKeyPair,
 } from '../../../services/recovery/holderKeyStore';
 import { recoverSeed } from '../../../services/recovery/sealedShareRecovery';
 import './RecoveryProgress.css';
@@ -100,22 +100,31 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
       const polledStatus = normalizeStatus(resp.data?.status);
       const isFinal = polledStatus === 'approved' || polledStatus === 'completed';
       if (isFinal && typeof onSecretReconstructed === 'function' && !reconstructedFiredRef.current) {
-        const keyPair = getRequesterKeyPair(requestId);
+        // Set the guard BEFORE the async work so the 5-second poll cannot
+        // start a second recombination; reset it on a failure that a
+        // later poll can fix (network, a parent lookup).
+        reconstructedFiredRef.current = true;
+        let keyPair;
+        let done;
+        try {
+          keyPair = await loadRequesterKeyPair(requestId);
+          if (keyPair) done = await ApiService.socialRecovery.completeRequest(requestId);
+        } catch (fetchErr) {
+          // Storage or network: completion is idempotent, so a later poll
+          // retries.
+          reconstructedFiredRef.current = false;
+          console.warn('RecoveryProgress: fetching shares failed, will retry:', fetchErr);
+          return;
+        }
         if (!keyPair) {
-          reconstructedFiredRef.current = true;
           setError(
             'This device does not hold the key this recovery was started with. '
             + 'Start recovery again from this device.',
           );
           return;
         }
-        // Set the guard BEFORE the async work so the 5-second poll cannot
-        // start a second recombination; reset it on a failure that a
-        // later poll can fix (network, a parent lookup).
-        reconstructedFiredRef.current = true;
         let seed;
         try {
-          const done = await ApiService.socialRecovery.completeRequest(requestId);
           seed = await recoverSeed({
             keyPair,
             sealedShares: done.data.sealed_shares.map((s) => s.sealed_share),
@@ -124,8 +133,10 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
           });
         } catch (recombineErr) {
           // A share that does not open or a seed that fails its check
-          // will fail the same way on every poll: latch and tell the user.
+          // fails the same way on every poll: latch, drop the one-time
+          // key (this request cannot use it again) and tell the user.
           console.warn('RecoveryProgress: recombination failed:', recombineErr);
+          forgetRequesterKeyPair(requestId);
           setError(
             'Your shares could not be recombined on this device. '
             + 'Please try restarting recovery.',

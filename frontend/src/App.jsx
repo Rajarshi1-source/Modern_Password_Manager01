@@ -341,7 +341,6 @@ export const VaultItemsSection = () => {
 const PasskeyPrimaryRecoverySetup = lazy(() => import('./Components/auth/PasskeyPrimaryRecoverySetup'));
 const PasskeyPrimaryRecoveryInitiate = lazy(() => import('./Components/auth/PasskeyPrimaryRecoveryInitiate'));
 // Quantum (Social Mesh) Recovery component
-const QuantumRecoverySetup = lazy(() => import('./Components/auth/QuantumRecoverySetup'));
 // Genetic Password OAuth callback
 const GeneticOAuthCallback = lazy(() => import('./Components/auth/GeneticOAuthCallback'));
 // Natural Entropy Dashboard
@@ -2446,8 +2445,11 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : <PasskeyPrimaryRecoverySetup />
                 } />
                 <Route path="/passkey-recovery/recover" element={<PasskeyPrimaryRecoveryInitiate />} />
-                {/* Quantum (Social Mesh) Recovery route */}
-                <Route path="/recovery/social-mesh" element={<QuantumRecoverySetup />} />
+                {/* Guardian (social-mesh) recovery. The old setup page here sent
+                    guardian emails without sealed shares, which the server
+                    refuses; guardian shares are sealed on the owner's device
+                    through the social-mesh pages. */}
+                <Route path="/recovery/social-mesh" element={<Navigate to="/recovery/social-mesh/recover-v2" replace />} />
                 {/* Genetic Password OAuth callback */}
                 <Route path="/genetic-callback" element={<GeneticOAuthCallback />} />
                 {/* Natural Entropy Dashboard */}
