@@ -193,7 +193,8 @@ class RecoverRotateTests(TestCase):
         self.assertEqual(self._rotate().status_code, 200)
         self.assertEqual(bytes(UserSalt.objects.get(user=self.user).auth_hash), b'm' * 32)
         self.assertEqual(self._rotate(new_auth_hash=None).status_code, 400)
-        self.assertEqual(self._rotate(new_auth_hash='bm90LTMyLWJ5dGVz').status_code, 400)
+        short = base64.b64encode(b'not-32-bytes').decode()
+        self.assertEqual(self._rotate(new_auth_hash=short).status_code, 400)
 
 
 @override_settings(
