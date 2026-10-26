@@ -10,7 +10,7 @@
 Django==5.2.18
 djangorestframework==3.18.3
 djangorestframework-simplejwt==5.5.1
-fido2>=1.1.3
+fido2>=2.2.1,<3  # passkey_views uses the 2.x register_*/authenticate_* API
 # asgiref>=3.9.1 required by channels-redis 4.3.0 (Django 5.1 allows <4,>=3.8.1)
 asgiref==3.9.1
 
