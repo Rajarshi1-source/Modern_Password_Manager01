@@ -300,6 +300,13 @@ class GuardianRecoveryFlowTests(TestCase):
         self.assertEqual(self.anon.post(url, {'attempt_id': str(attempt.id)}, format='json').status_code, 400)
         self.assertEqual(self.anon.post(url, {'attempt_id': 'not-a-uuid'}, format='json').status_code, 404)
 
+    def test_completion_is_rate_limited_at_its_url(self):
+        url = reverse('quantum-recovery-complete')
+        codes = [self.anon.post(url, {'attempt_id': 'not-a-uuid'}, format='json').status_code
+                 for _ in range(4)]
+        self.assertEqual(codes[:3], [404, 404, 404])
+        self.assertEqual(codes[3], 429)
+
     def test_a_setup_from_before_client_sealing_cannot_complete(self):
         attempt, _ = self._attempt_with_approvals()
         self.setup.secret_check = b''
