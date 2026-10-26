@@ -50,6 +50,8 @@ const SocialMeshDEKRecover = lazy(() => import('./Components/recovery/layered/So
 // Layered Recovery Mesh (Unit 13) — tier-3 self-time-locked
 const TimeLockedEnroll = lazy(() => import('./Components/recovery/layered/TimeLockedEnroll'));
 const TimeLockedRecover = lazy(() => import('./Components/recovery/layered/TimeLockedRecover'));
+const RecoveryNoticeCancel = lazy(() => import('./Components/recovery/notices/RecoveryNoticeCancel'));
+const RecoveryNotices = lazy(() => import('./Components/recovery/notices/RecoveryNotices'));
 const PasskeyManagement = lazy(() => import('./Components/auth/PasskeyManagement'));
 const CircadianSettings = lazy(() => import('./Components/settings/CircadianSettings'));
 const CircadianTOTPSetup = lazy(() => import('./Components/auth/CircadianTOTPSetup'));
@@ -2062,6 +2064,7 @@ function App() {
               <Link to="/security/honeypots" className="nav-link">🍯 Honeypots</Link>
               <Link to="/security/zk-verify" className="nav-link">ZK Verify</Link>
               <Link to="/security/zk-sessions" className="nav-link">ZK Sessions</Link>
+              <Link to="/security/recovery-notices" className="nav-link">Recovery Activity</Link>
               <Link to="/security/reputation" className="nav-link">Reputation</Link>
               <Link to="/security/ambient" className="nav-link">Ambient</Link>
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
@@ -2292,6 +2295,12 @@ function App() {
                 {/* Legacy recovery-key setup is retired; enrollment is the layered v2 flow. */}
                 <Route path="/recovery-key-setup" element={<Navigate to="/recovery/key/enroll-v2" replace />} />
                 {/* Layered Recovery Mesh (Unit 11) — tier-1 printable recovery key */}
+                {/* "This wasn't me" link from recovery notice emails; it
+                    works signed in or not. */}
+                <Route path="/recovery/cancel" element={<RecoveryNoticeCancel />} />
+                <Route path="/security/recovery-notices" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <RecoveryNotices />
+                } />
                 <Route path="/recovery/key/enroll-v2" element={
                   !isAuthenticated ? <Navigate to="/" /> : <RecoveryKeyEnrollV2 />
                 } />

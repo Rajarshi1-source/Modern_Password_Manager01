@@ -23,6 +23,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework.test import APIClient
 
+from auth_module.auth_hash import check_auth_hash
 from auth_module.models import UserPasskey, UserSalt
 
 # A login verifier: base64 of 32 bytes (auth_module/login_verifier.py)
@@ -182,7 +183,7 @@ class RecoveryFollowupTests(TestCase):
             'uid': uid, 'token': token, 'new_login_verifier': VERIFIER, 'username': 'owner',
             'new_auth_hash': base64.b64encode(b'other-hash').decode()}, format='json')
         self.assertEqual(again.status_code, 400, again.content)
-        self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'new-hash')
+        self.assertTrue(check_auth_hash(UserSalt.objects.get(user=self.owner).auth_hash, b'new-hash'))
 
     def _reset_link(self):
         self.anon.post('/api/auth/request_password_reset/', {'email': 'owner@example.com'}, format='json')
@@ -199,7 +200,7 @@ class RecoveryFollowupTests(TestCase):
             'uid': uid, 'token': token, 'new_login_verifier': VERIFIER, 'username': 'owner',
             'new_auth_hash': base64.b64encode(b'other-hash').decode()}, format='json')
         self.assertEqual(again.status_code, 400, again.content)
-        self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'original-hash')
+        self.assertTrue(check_auth_hash(UserSalt.objects.get(user=self.owner).auth_hash, b'original-hash'))
 
     def test_master_password_change_voids_an_unused_reset_link(self):
         uid, token = self._reset_link()
@@ -214,7 +215,7 @@ class RecoveryFollowupTests(TestCase):
             'uid': uid, 'token': token, 'new_login_verifier': VERIFIER, 'username': 'owner',
             'new_auth_hash': base64.b64encode(b'attacker-hash').decode()}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
-        self.assertEqual(bytes(UserSalt.objects.get(user=self.owner).auth_hash), b'changed-hash')
+        self.assertTrue(check_auth_hash(UserSalt.objects.get(user=self.owner).auth_hash, b'changed-hash'))
 
     def test_undelivered_reset_email_is_audited_as_a_failure(self):
         from vault.models import AuditLog

@@ -26,6 +26,8 @@ from auth_module.recovery_throttling import (
     RecoveryThrottle,
     RecoveryCompleteThrottle,
 )
+from auth_module.auth_hash import make_auth_hash_record
+from auth_module.recovery_notice import notify as notify_recovery
 from auth_module.models import UserSalt
 from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
 from auth_module.quantum_recovery_models import RecoveryAuditLog
@@ -326,8 +328,10 @@ class WrappedDEKRecoveryRotateView(APIView):
                 update_fields=['blob', 'rotated_at', 'updated_at'],
             )
             set_login_verifier(user, login_verifier)
-            UserSalt.objects.filter(user=user).update(auth_hash=new_auth_hash)
+            UserSalt.objects.filter(user=user).update(
+                auth_hash=make_auth_hash_record(new_auth_hash))
             revoke_sessions(user)
+            notify_recovery(user, 'recovery_completed', request)
 
             RecoveryAuditLog.objects.create(
                 user=user,

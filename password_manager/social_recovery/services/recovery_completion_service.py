@@ -14,6 +14,8 @@ from zk_proofs.crypto import secp256k1 as ec
 from zk_proofs.crypto import schnorr
 
 from ..models import SocialRecoveryRequest, VouchAttestation, Voucher
+from auth_module.recovery_notice import notify as notify_recovery
+
 from .audit_service import record_event
 from .stake_service import release_stake, slash_stake
 from .web_of_trust_service import evaluate_quorum
@@ -63,6 +65,10 @@ def complete_request(
     that arrive inside a signed envelope from the voucher's device; the
     service then ensures the submitting voucher actually approved the request.
     """
+    # Lock the row and re-read it: a cancel (from a recovery notice or the
+    # owner) that committed after the caller loaded the request must win.
+    SocialRecoveryRequest.objects.select_for_update().get(pk=request.pk)
+    request.refresh_from_db()
     if request.status not in ("approved", "completed"):
         raise ValueError("request must be approved before completion")
 
@@ -118,6 +124,7 @@ def complete_request(
     request.status = "completed"
     request.completed_at = timezone.now()
     request.save(update_fields=["status", "completed_at"])
+    notify_recovery(request.circle.user, "social_recovery_completed")
 
     # Release stake for approving vouchers, on the assumption that a
     # successful recovery implies those vouchers behaved honestly. Vouchers

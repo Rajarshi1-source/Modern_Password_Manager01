@@ -191,7 +191,10 @@ class RecoverRotateTests(TestCase):
 
     def test_recovery_moves_the_master_password_check(self):
         self.assertEqual(self._rotate().status_code, 200)
-        self.assertEqual(bytes(UserSalt.objects.get(user=self.user).auth_hash), b'm' * 32)
+        from auth_module.auth_hash import check_auth_hash, is_hashed_record
+        stored = UserSalt.objects.get(user=self.user).auth_hash
+        self.assertTrue(is_hashed_record(stored))
+        self.assertTrue(check_auth_hash(stored, b'm' * 32))
         self.assertEqual(self._rotate(new_auth_hash=None).status_code, 400)
         short = base64.b64encode(b'not-32-bytes').decode()
         self.assertEqual(self._rotate(new_auth_hash=short).status_code, 400)

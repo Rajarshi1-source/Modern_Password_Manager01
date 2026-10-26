@@ -109,3 +109,7 @@ faf2b0ec8862c784605e403242c9c4355b44564f:password_manager/password_manager/tests
 # 404bc59 entries above.
 8d1ad241e4d0f0900152e220a56e78b3639929b1:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:35
 8d1ad241e4d0f0900152e220a56e78b3639929b1:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:324
+
+# test_client_sealed_api.py (PR #594) has no password literal since 3fd39040
+# (the test account gets no usable password); only history retains it.
+058f77db5b86bfa4da9d46883b1437cbf501a8cf:password_manager/social_recovery/tests/test_client_sealed_api.py:generic-api-key:35
