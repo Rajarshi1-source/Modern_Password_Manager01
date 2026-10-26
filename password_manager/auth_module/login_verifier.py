@@ -90,6 +90,10 @@ def revoke_sessions(user):
     before it are refused too (``access_token_revoked``)."""
     from rest_framework.authtoken.models import Token
     from .models import LoginVerifierState
+    # Taken before the scan below, so a refresh in flight either finishes
+    # first (and its new token is in the scan) or waits and then finds its
+    # presented token blacklisted (see lock_sessions).
+    lock_sessions(user.pk)
     LoginVerifierState.objects.update_or_create(
         user=user, defaults={'sessions_revoked_at': timezone.now()},
     )
@@ -111,6 +115,19 @@ def revoke_sessions(user):
             ignore_conflicts=True,
         )
     Token.objects.filter(user=user).delete()
+
+
+def lock_sessions(user_id):
+    """Row-lock the account so a refresh-token rotation and
+    ``revoke_sessions`` run one after the other instead of interleaving.
+
+    Without it, a refresh that checked its token before a revocation could
+    write its replacement token after the revocation's scan, and that token
+    would outlive the reset. A refresh takes this lock and then re-checks
+    the presented token against the blacklist. Must run inside
+    ``transaction.atomic()`` (SQLite ignores the lock)."""
+    from django.contrib.auth import get_user_model
+    get_user_model().objects.select_for_update().filter(pk=user_id).exists()
 
 
 def access_token_revoked(user, token):

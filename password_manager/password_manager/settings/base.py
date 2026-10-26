@@ -1084,6 +1084,8 @@ SIMPLE_JWT = {
     # exceeds REFRESH_TOKEN_FAMILY_MAX_SIZE. Oldest is determined by
     # OutstandingToken.created_at timestamp.
     'TOKEN_OBTAIN_SERIALIZER': 'auth_module.token_family.FamilyLimitedTokenObtainPairSerializer',
+    # Rotates under the account lock a reset or recovery takes (see the class)
+    'TOKEN_REFRESH_SERIALIZER': 'auth_module.token_family.RevocationSafeTokenRefreshSerializer',
 }
 
 
