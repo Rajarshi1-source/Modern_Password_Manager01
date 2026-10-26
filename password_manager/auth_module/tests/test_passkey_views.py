@@ -233,6 +233,27 @@ class PasskeyViewTests(TestCase):
         self.assertEqual(client.post(url, authenticator.get(options), format='json').status_code, 200)
         self.assertEqual(client.post(url, authenticator.get(options), format='json').status_code, 400)
 
+    def test_complete_answers_malformed_input_uniformly_without_logging_an_error(self):
+        url = reverse('authenticate_passkey_complete')
+        for body in ([], {'response': 'x'}, {'rawId': 5, 'response': {'signature': None}}):
+            client = APIClient()
+            self._begin(client)
+            with self.assertNoLogs('auth_module', level='ERROR'):
+                self._assert_uniform_failure(client.post(url, body, format='json'))
+
+    def test_complete_logs_an_unexpected_verification_error(self):
+        authenticator = SoftAuthenticator()
+        self._register(self.owner, authenticator)
+        client = APIClient()
+        options = self._begin(client)
+
+        with patch.object(passkey_views.server, 'authenticate_complete', side_effect=RuntimeError('boom')):
+            with self.assertLogs('auth_module', level='ERROR'):
+                r = client.post(
+                    reverse('authenticate_passkey_complete'), authenticator.get(options), format='json'
+                )
+        self._assert_uniform_failure(r)
+
     def _assert_uniform_failure(self, response):
         self.assertEqual(response.status_code, 401, response.content)
         self.assertEqual(response.json()['message'], passkey_views.AUTHENTICATION_FAILED)

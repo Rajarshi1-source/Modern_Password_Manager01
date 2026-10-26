@@ -322,9 +322,11 @@ def webauthn_complete_authentication(request):
                 status_code=status.HTTP_400_BAD_REQUEST
             )
 
+        # Malformed input is an expected failure: answer it like any other,
+        # without a traceback.
         try:
             response = AuthenticationResponse.from_dict(_authentication_payload(request.data))
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return _authentication_failed()
 
         # The credential names its account: look it up by id, then require it
@@ -342,9 +344,14 @@ def webauthn_complete_authentication(request):
             except Exception:
                 logger.warning("Stored passkey %s could not be parsed", passkey.pk)
 
+        # fido2 reports every verification failure as ValueError. Anything else
+        # is a server-side defect: log it, but keep the answer uniform.
         try:
             matched = server.authenticate_complete(pending['state'], credentials, response)
+        except ValueError:
+            return _authentication_failed()
         except Exception:
+            logger.exception("Unexpected error verifying a passkey assertion")
             return _authentication_failed()
 
         passkey = next(
