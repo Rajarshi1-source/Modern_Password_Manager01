@@ -40,13 +40,14 @@ def send_password_reset_email(email, ip_address, user_agent):
     reset_url = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password/{uid}/{token}/"
 
     # fail_silently: a mail error must not surface as an error only real
-    # accounts produce. The link resets the login only: in a zero-knowledge
-    # vault it cannot decrypt the vault.
+    # accounts produce. The wording promises nothing the link does not do:
+    # sign-in still checks the Django password, which this reset does not
+    # change, and in a zero-knowledge vault the link cannot decrypt the vault.
     sent = send_mail(
         'Password Reset Request',
-        f'Click the following link to reset your master password: {reset_url} '
-        'This link works once. It resets your sign-in only and cannot '
-        'decrypt your vault: to restore vault access, use your recovery key.',
+        f'A password reset was requested for your account: {reset_url} '
+        'This link works once and cannot decrypt your vault: to restore '
+        'vault access, use your recovery key.',
         'noreply@yourpasswordmanager.com',
         [user.email],
         fail_silently=True,
