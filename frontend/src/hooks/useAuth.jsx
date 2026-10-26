@@ -48,6 +48,7 @@ import {
   clearAccessToken,
 } from '../services/tokenStore';
 import { setSessionToken, clearStoredTokens } from '../utils/authStorage';
+import { signInWithVerifier } from '../services/loginVerifier';
 
 // Opt-in feature flag for the HttpOnly-cookie refresh-token flow.
 // When true, the SPA:
@@ -511,9 +512,11 @@ export const AuthProvider = ({ children }) => {
           storage.clearAll();
         } catch { /* never let cleanup throw */ }
 
-        const { user: userData } = await loginWithCookie({
+        // The master password never leaves the browser: sign-in sends the
+        // login verifier derived from it (services/loginVerifier.js).
+        const { user: userData } = await signInWithVerifier(loginWithCookie, {
           username: credentials.email || credentials.username,
-          password: credentials.password,
+          masterPassword: credentials.password,
         });
         let userProfile = userData;
         if (!userProfile) {
@@ -534,10 +537,13 @@ export const AuthProvider = ({ children }) => {
       // Legacy localStorage flow — unchanged so existing sessions
       // and clients that haven't flipped the feature flag keep
       // working exactly as before.
-      const response = await axios.post('/api/auth/token/', {
-        username: credentials.email || credentials.username,
-        password: credentials.password
-      });
+      const response = await signInWithVerifier(
+        (body) => axios.post('/api/auth/token/', body),
+        {
+          username: credentials.email || credentials.username,
+          masterPassword: credentials.password,
+        },
+      );
 
       const { access, refresh, user: userData } = response.data;
 

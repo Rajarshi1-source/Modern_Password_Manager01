@@ -325,6 +325,19 @@ class UserSalt(models.Model):
         import base64
         return base64.b64encode(self.salt).decode('utf-8')
 
+class LoginVerifierState(models.Model):
+    """Marks an account whose Django password is a client-derived login
+    verifier (see ``auth_module/login_verifier.py``) rather than the raw
+    master password. No row: the account has not signed in since the
+    verifier was introduced."""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='login_verifier_state')
+    scheme = models.CharField(max_length=16, default='lv1')
+    set_at = models.DateTimeField(default=timezone.now)
+
+    def __str__(self):
+        return f"Login verifier ({self.scheme}) for {self.user.username}"
+
+
 class PushAuth(models.Model):
     """Model for storing push authentication requests"""
     STATUS_CHOICES = (

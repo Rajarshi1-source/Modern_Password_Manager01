@@ -6,6 +6,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.authtoken.models import Token
 from .models import TwoFactorAuth, UserSalt, PushAuth, RecoveryKey
 from .serializers import RegisterSerializer, LoginSerializer, MasterPasswordSerializer
+from .login_verifier import is_login_verifier, revoke_sessions, set_login_verifier
 from .utils import (
     generate_totp_secret, verify_totp_code, generate_backup_codes, 
     initiate_push_auth, check_push_auth_status
@@ -14,6 +15,7 @@ from vault.models import AuditLog
 import os
 import logging
 import base64
+import hmac
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
@@ -42,6 +44,13 @@ from django.utils.decorators import method_decorator
 logger = logging.getLogger(__name__)
 
 PASSWORD_RESET_MESSAGE = 'If your email exists in our system, you will receive a password reset link'
+# An email reset proves control of the inbox, not of any vault key, so it
+# changes only how the account signs in.
+PASSWORD_RESET_DONE_MESSAGE = (
+    'Your sign-in password was reset. Items saved before the reset stay encrypted '
+    'with your previous master password: open them with a recovery factor such as '
+    'your recovery key, or they cannot be recovered.'
+)
 
 
 class _PasswordResetTokenGenerator(PasswordResetTokenGenerator):
@@ -331,24 +340,31 @@ class AuthViewSet(viewsets.ViewSet):
         # Verify the current master password first
         current_auth_hash = request.data.get('current_auth_hash')
         new_auth_hash = request.data.get('new_auth_hash')
+        # Sign-in has to move to the new master password together with the
+        # auth hash, or the next sign-in still wants the old one.
+        new_login_verifier = request.data.get('new_login_verifier')
         
-        if not current_auth_hash or not new_auth_hash:
-            return Response({'error': 'Both current and new password hashes are required'}, 
+        if not current_auth_hash or not new_auth_hash or not new_login_verifier:
+            return Response({'error': 'current_auth_hash, new_auth_hash and new_login_verifier are required'}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        if not is_login_verifier(new_login_verifier):
+            return Response({'error': 'new_login_verifier is not a login verifier'},
                            status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            # Get user's salt
-            salt_obj = UserSalt.objects.get(user=request.user)
-            
-            # Verify current password
-            current_auth_hash_bytes = base64.b64decode(current_auth_hash)
-            if current_auth_hash_bytes != salt_obj.auth_hash:
-                return Response({'error': 'Current master password is incorrect'}, 
-                              status=status.HTTP_400_BAD_REQUEST)
-            
-            # Update to new password
-            salt_obj.auth_hash = base64.b64decode(new_auth_hash)
-            salt_obj.save()
+            with transaction.atomic():
+                salt_obj = UserSalt.objects.select_for_update().get(user=request.user)
+
+                # Verify current password (constant time)
+                current_auth_hash_bytes = base64.b64decode(current_auth_hash)
+                if not hmac.compare_digest(current_auth_hash_bytes, bytes(salt_obj.auth_hash)):
+                    return Response({'error': 'Current master password is incorrect'}, 
+                                  status=status.HTTP_400_BAD_REQUEST)
+
+                # Update to new password
+                salt_obj.auth_hash = base64.b64decode(new_auth_hash)
+                salt_obj.save()
+                set_login_verifier(request.user, new_login_verifier)
             
             # Enhanced security analysis for password change - Option B: Parallel services
             try:
@@ -839,13 +855,28 @@ class AuthViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['post'])
     def reset_password(self, request):
-        """Reset password using token from email"""
+        """Reset the sign-in credential using the token from the email.
+
+        Sets the login verifier (and the auth hash) derived in the browser
+        from the new master password. It cannot re-key the vault: the vault
+        key stays wrapped under the previous master password and its
+        recovery factors, and the response says so."""
         uid = request.data.get('uid')
         token = request.data.get('token')
         new_auth_hash = request.data.get('new_auth_hash')
+        new_login_verifier = request.data.get('new_login_verifier')
         
-        if not uid or not token or not new_auth_hash:
+        if not uid or not token or not new_auth_hash or not new_login_verifier:
             return Response({'error': 'All fields are required'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        if not is_login_verifier(new_login_verifier):
+            return Response({'error': 'new_login_verifier is not a login verifier'},
+                          status=status.HTTP_400_BAD_REQUEST)
+        # The verifier's salt is the username the browser typed; one derived
+        # for another spelling would never match at sign-in.
+        username = request.data.get('username')
+        if not isinstance(username, str) or not username.strip():
+            return Response({'error': 'username is required'},
                           status=status.HTTP_400_BAD_REQUEST)
         
         try:
@@ -860,9 +891,18 @@ class AuthViewSet(viewsets.ViewSet):
                 if not password_reset_token_generator.check_token(user, token):
                     return Response({'error': 'Invalid or expired token'}, 
                                   status=status.HTTP_400_BAD_REQUEST)
+                # Checked after the token, so only the link's holder learns
+                # whether the name matches; the link stays usable.
+                if username.strip().lower() != user.username.strip().lower():
+                    return Response({'error': 'This is not the account the reset link was sent for'},
+                                  status=status.HTTP_400_BAD_REQUEST)
                 salt_obj.auth_hash = base64.b64decode(new_auth_hash)
                 salt_obj.reset_generation += 1
                 salt_obj.save(update_fields=['auth_hash', 'reset_generation'])
+                # Also changes the Django password the base token covers, so
+                # the link is spent twice over.
+                set_login_verifier(user, new_login_verifier)
+                revoke_sessions(user)
             
             # Enhanced security analysis for password reset - Option B: Parallel services
             try:
@@ -897,7 +937,11 @@ class AuthViewSet(viewsets.ViewSet):
                 status='success'
             )
             
-            return Response({'success': True, 'message': 'Password reset successful'})
+            return Response({
+                'success': True,
+                'message': PASSWORD_RESET_DONE_MESSAGE,
+                'vault_recovered': False,
+            })
             
         except (TypeError, ValueError, OverflowError, User.DoesNotExist, UserSalt.DoesNotExist):
             return Response({'error': 'Invalid reset link'}, 

@@ -33,6 +33,7 @@ import {
   V3_UNLOCK_DESYNC,
 } from './services/vaultV3UnlockClassifier';
 import { decryptEnvelope, encryptEnvelope, hasVaultSessionKey } from './services/vaultEnvelope';
+import { LOGIN_VERIFIER_SCHEME, deriveAuthHash, deriveLoginVerifier } from './services/loginVerifier';
 import VaultUnlockModal from './Components/auth/VaultUnlockModal';
 import zkProof from './services/zkProof';
 
@@ -62,6 +63,7 @@ const VerifyIdentity = lazy(() => import('./Components/security/components/Verif
 const OAuthCallback = lazy(() => import('./Components/auth/OAuthCallback'));
 const PerformanceMonitoring = lazy(() => import('./Components/admin/PerformanceMonitoring'));
 const PasswordRecoveryPage = lazy(() => import('./Components/auth/PasswordRecovery'));
+const ResetPasswordPage = lazy(() => import('./Components/auth/ResetPassword'));
 const BreachAlertsDashboard = lazy(() => import('./Components/security/components/BreachAlertsDashboard'));
 const SettingsPage = lazy(() => import('./Components/settings/SettingsPage'));
 const EmailMaskingDashboard = lazy(() => import('./Components/emailmasking/EmailMaskingDashboard'));
@@ -1765,37 +1767,20 @@ function App() {
       // Note: Signup still uses the old endpoint (/auth/register/)
       // You may need to create a JWT signup endpoint or modify this
       //
-      // Derive a salted, stretched `auth_hash` with PBKDF2-SHA256 instead of
-      // a raw SHA-256(password). The raw variant offered no work factor and
-      // was trivially rainbow-table-able. The salt is bound to the account
-      // email so the backend can recompute the same hash deterministically.
-      const encoder = new TextEncoder();
-      const saltBytes = encoder.encode(`pwm-auth|${signupData.email.toLowerCase()}`);
-      const keyMaterial = await crypto.subtle.importKey(
-        'raw',
-        encoder.encode(signupData.password),
-        { name: 'PBKDF2' },
-        false,
-        ['deriveBits']
-      );
-      const hashBuffer = await crypto.subtle.deriveBits(
-        {
-          name: 'PBKDF2',
-          salt: saltBytes,
-          iterations: 310000,
-          hash: 'SHA-256',
-        },
-        keyMaterial,
-        256
-      );
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      const auth_hash = btoa(String.fromCharCode(...hashArray));
+      // Neither value below is the master password: `auth_hash` is the
+      // PBKDF2 master-password check stored in UserSalt, and the login
+      // verifier is what sign-in checks (services/loginVerifier.js).
+      const [auth_hash, loginVerifier] = await Promise.all([
+        deriveAuthHash(signupData.password, signupData.email),
+        deriveLoginVerifier(signupData.password, signupData.email),
+      ]);
 
       await axios.post('/auth/register/', {
         username: signupData.email,
         email: signupData.email,
-        password: signupData.password,
-        password_confirm: signupData.confirmPassword,  // FIX: Backend expects password_confirm
+        password: loginVerifier,
+        password_confirm: loginVerifier,  // the passwords were compared above
+        login_verifier: LOGIN_VERIFIER_SCHEME,
         auth_hash: auth_hash,
         rememberMe: signupData.rememberMe
       });
@@ -2285,6 +2270,8 @@ function App() {
                 <Route path="/password-recovery" element={
                   isAuthenticated ? <Navigate to="/" /> : <PasswordRecoveryPage />
                 } />
+                {/* The emailed reset link (auth_module/tasks.py send_password_reset_email) */}
+                <Route path="/reset-password/:uid/:token" element={<ResetPasswordPage />} />
                 {/* Legacy recovery-key setup is retired; enrollment is the layered v2 flow. */}
                 <Route path="/recovery-key-setup" element={<Navigate to="/recovery/key/enroll-v2" replace />} />
                 {/* Layered Recovery Mesh (Unit 11) — tier-1 printable recovery key */}

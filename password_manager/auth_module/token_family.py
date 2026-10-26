@@ -28,6 +28,8 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from .login_verifier import LEGACY_PASSWORD_FIELD, migrate_legacy_login
+
 logger = logging.getLogger(__name__)
 
 
@@ -115,6 +117,14 @@ class FamilyLimitedTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
 
     def validate(self, attrs):
+        # An account still on its master password switches to the login
+        # verifier here, before the normal check runs on the verifier.
+        migrate_legacy_login(
+            attrs.get(self.username_field),
+            attrs.get('password'),
+            self.initial_data.get(LEGACY_PASSWORD_FIELD),
+        )
+
         # Standard validation + token generation
         data = super().validate(attrs)
 

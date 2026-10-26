@@ -10,6 +10,7 @@ from rest_framework import status
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
+from datetime import timedelta
 import base64
 import logging
 import json
@@ -33,6 +34,7 @@ from .recovery_throttling import (
     progressive_lockout
 )
 from .recovery_monitoring import metrics_collector
+from password_manager.throttling import PasskeyThrottle
 from shared.client_ip import get_client_ip
 from shared.log_safe import log_safe
 
@@ -63,6 +65,66 @@ FALLBACK_RESPONSE = {
                     "They need to verify their identity to help you recover.",
     "estimated_time": "3-7 days"
 }
+
+
+# After a successful recovery the session holds a grant to register one new
+# passkey for the recovered account; the registration ceremony itself keeps
+# its fido2 state under its own key, as the signed-in registration does.
+RECOVERY_REGISTRATION_TTL_SECONDS = 900
+RECOVERY_REGISTRATION_GRANT_KEY = 'passkey_recovery_grant'
+RECOVERY_REGISTRATION_STATE_KEY = 'passkey_recovery_registration'
+RECOVERY_GRANT_INVALID = "Recovery registration expired or invalid. Start recovery again."
+
+
+def _revoke_lost_passkey(user, credential_id):
+    """Delete the lost passkey and deactivate any other backup of it."""
+    UserPasskey.objects.filter(user=user, credential_id=credential_id).delete()
+    for backup in PasskeyRecoveryBackup.objects.filter(user=user, is_active=True):
+        if bytes(backup.passkey_credential_id) == credential_id:
+            backup.is_active = False
+            backup.save(update_fields=['is_active', 'updated_at'])
+            RecoveryKeyRevocation.objects.create(
+                backup=backup,
+                revoked_by=user,
+                reason='Its passkey was revoked by a recovery'
+            )
+
+
+def _recovery_grant_user(request):
+    """The account this session may register a recovery passkey for, or None."""
+    grant = request.session.get(RECOVERY_REGISTRATION_GRANT_KEY)
+    if not isinstance(grant, dict) or grant.get('expires_at', 0) < timezone.now().timestamp():
+        return None
+    return User.objects.filter(pk=grant.get('user_id'), is_active=True).first()
+
+
+def _begin_recovery_registration(request, user):
+    """Start a WebAuthn registration for ``user``; returns the creation options."""
+    from fido2.webauthn import (
+        PublicKeyCredentialUserEntity,
+        ResidentKeyRequirement,
+        UserVerificationRequirement,
+    )
+    from .passkey_views import AUTHENTICATOR_ATTACHMENT, _descriptor, server
+
+    options, state = server.register_begin(
+        user=PublicKeyCredentialUserEntity(
+            id=str(user.id).encode(),
+            name=user.username,
+            display_name=user.email or user.username,
+        ),
+        credentials=[
+            _descriptor(bytes(cid)) for cid in
+            UserPasskey.objects.filter(user=user).values_list('credential_id', flat=True)
+        ],
+        resident_key_requirement=ResidentKeyRequirement.REQUIRED,
+        # The recovery key was the first factor; the new passkey must be
+        # user-verified so it is a full sign-in factor on its own.
+        user_verification=UserVerificationRequirement.REQUIRED,
+        authenticator_attachment=AUTHENTICATOR_ATTACHMENT,
+    )
+    request.session[RECOVERY_REGISTRATION_STATE_KEY] = {'state': state, 'user_id': user.id}
+    return dict(options.public_key)
 
 
 def _attempt_fernet():
@@ -287,15 +349,17 @@ def initiate_primary_passkey_recovery(request):
 def complete_primary_passkey_recovery(request):
     """
     Complete primary passkey recovery using recovery key.
-    Step 2: User provides recovery key, system decrypts backup.
+    Step 2: User provides recovery key; the backup is consumed, the lost
+    passkey is revoked, and a registration of a new passkey begins.
     
     Request body:
         - recovery_attempt_id: Token from initiate step
         - recovery_key: User's recovery key
     
     Response:
-        - passkey_credential: Decrypted passkey credential data
-        - message: Success message
+        - registration_options: WebAuthn creation options for the new
+          passkey; finish with passkey-recovery/register/complete/
+        - message: Next step
     """
     # Check progressive lockout first
     if not progressive_lockout.allow_request(request, None):
@@ -368,55 +432,41 @@ def complete_primary_passkey_recovery(request):
             
             return Response(INVALID_KEY_RESPONSE, status=status.HTTP_401_UNAUTHORIZED)
         
-        # Update recovery attempt
-        recovery_attempt.status = 'key_verified'
-        recovery_attempt.backup = matching_backup
-        recovery_attempt.save()
-        
-        # Decrypt credential data
-        try:
-            decrypted_credential = recovery_service.decrypt_passkey_credential(
-                encrypted_data=matching_backup.encrypted_credential_data,
-                recovery_key=recovery_key,
-                encryption_metadata=matching_backup.encryption_metadata
-            )
-            
-            recovery_attempt.status = 'decryption_success'
-            recovery_attempt.save()
-            
-        except Exception as decrypt_error:
-            recovery_attempt.status = 'decryption_failed'
-            recovery_attempt.failed_at = timezone.now()
-            recovery_attempt.failure_reason = str(decrypt_error)
-            recovery_attempt.save()
-            
-            logger.error(f"Decryption failed for user {user.username}: {decrypt_error}", exc_info=True)
-            
-            return Response({
-                "error": "Decryption failed",
-                "fallback_available": True,
-                "message": "Could not decrypt backup. Would you like to try social mesh recovery?"
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
         # A recovery key is single-use (NIST SP 800-63B): the backup it opened
-        # is consumed. The conditional update claims it, so of two concurrent
-        # completions with the same key only one returns the credential, and
-        # the attempt, backup and revocation are written together.
+        # is consumed, and the passkey it backed up is revoked, because the
+        # user reports it lost (FIDO account recovery: the lost credential
+        # must stop working). The conditional update claims the backup, so of
+        # two concurrent completions with the same key only one succeeds, and
+        # the attempt, backup, revocation and passkey removal are written
+        # together.
         with transaction.atomic():
             claimed = PasskeyRecoveryBackup.objects.filter(
                 pk=matching_backup.pk, is_active=True
             ).update(is_active=False, last_verified_at=timezone.now())
             if claimed:
+                recovery_attempt.backup = matching_backup
                 recovery_attempt.mark_complete()
                 RecoveryKeyRevocation.objects.create(
                     backup=matching_backup,
                     revoked_by=user,
                     reason='Consumed by a successful recovery'
                 )
+                _revoke_lost_passkey(user, bytes(matching_backup.passkey_credential_id))
         if not claimed:
             progressive_lockout.record_failure(request, 'invalid_key')
             return Response(INVALID_KEY_RESPONSE, status=status.HTTP_401_UNAUTHORIZED)
-        
+
+        # The recovery restores access by registering a NEW passkey: the
+        # backup holds only the lost passkey's public data, which signs
+        # nobody in. This session may now run one registration ceremony for
+        # this account within RECOVERY_REGISTRATION_TTL_SECONDS.
+        request.session[RECOVERY_REGISTRATION_GRANT_KEY] = {
+            'user_id': user.id,
+            'expires_at': (timezone.now() + timedelta(
+                seconds=RECOVERY_REGISTRATION_TTL_SECONDS)).timestamp(),
+        }
+        registration_options = _begin_recovery_registration(request, user)
+
         # Record success metrics
         duration = (timezone.now() - start_time).total_seconds()
         progressive_lockout.record_success(request)
@@ -435,10 +485,10 @@ def complete_primary_passkey_recovery(request):
         logger.info(f"Primary passkey recovery completed for user {user.username}, attempt ID: {recovery_attempt.id}")
         
         return Response({
-            "message": "Passkey recovered successfully!",
-            "passkey_credential": decrypted_credential,
-            "device_name": matching_backup.device_name,
-            "backup_verified": True
+            "message": "Recovery key accepted. Register a new passkey to finish.",
+            "registration_options": registration_options,
+            "registration_expires_in": RECOVERY_REGISTRATION_TTL_SECONDS,
+            "revoked_device_name": matching_backup.device_name,
         }, status=status.HTTP_200_OK)
     
     except Exception as e:
@@ -447,6 +497,90 @@ def complete_primary_passkey_recovery(request):
             {"error": "An error occurred during recovery. Please try again."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@throttle_classes([PasskeyThrottle])
+def begin_recovery_passkey_registration(request):
+    """Start the new-passkey registration again (e.g. after the user
+    cancelled the browser prompt) while this session's recovery grant is
+    valid."""
+    user = _recovery_grant_user(request)
+    if user is None:
+        return Response({"error": RECOVERY_GRANT_INVALID}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        return Response({
+            "registration_options": _begin_recovery_registration(request, user),
+        }, status=status.HTTP_200_OK)
+    except Exception:
+        logger.exception("Recovery passkey registration could not start")
+        return Response(
+            {"error": "An error occurred. Please try again."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@throttle_classes([PasskeyThrottle])
+def complete_recovery_passkey_registration(request):
+    """Finish registering the new passkey of a recovered account.
+
+    Request body: the WebAuthn attestation response (id, rawId, type,
+    response.clientDataJSON, response.attestationObject), plus an optional
+    device_type label. Stores only public material, as the signed-in
+    registration does, and spends the session's recovery grant.
+    """
+    from fido2 import cbor
+    from .passkey_views import RP_ID, server
+
+    pending = request.session.pop(RECOVERY_REGISTRATION_STATE_KEY, None)
+    user = _recovery_grant_user(request)
+    if not pending or user is None or pending.get('user_id') != user.id:
+        return Response({"error": RECOVERY_GRANT_INVALID}, status=status.HTTP_400_BAD_REQUEST)
+
+    data = request.data
+    response = data.get('response') or {}
+    payload = {
+        'id': data.get('id'),
+        'rawId': data.get('rawId'),
+        'type': data.get('type', 'public-key'),
+        'response': {
+            'clientDataJSON': response.get('clientDataJSON'),
+            'attestationObject': response.get('attestationObject'),
+        },
+        'clientExtensionResults': data.get('clientExtensionResults') or {},
+    }
+    try:
+        auth_data = server.register_complete(pending['state'], payload)
+    except Exception:
+        logger.warning("Recovery passkey registration verification failed", exc_info=True)
+        # The grant stays, so the user can begin the registration again.
+        return Response({"error": "Passkey verification failed"}, status=status.HTTP_400_BAD_REQUEST)
+
+    credential = auth_data.credential_data
+    credential_id = bytes(credential.credential_id)
+    device_type = str(data.get('device_type') or 'Unknown Device')[:255]
+    with transaction.atomic():
+        if UserPasskey.objects.filter(credential_id=credential_id).exists():
+            return Response({"error": "This passkey is already registered"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        passkey = UserPasskey.objects.create(
+            user=user,
+            credential_id=credential_id,
+            public_key=cbor.encode(credential.public_key),
+            sign_count=auth_data.counter,
+            rp_id=RP_ID,
+            device_type=device_type,
+        )
+    request.session.pop(RECOVERY_REGISTRATION_GRANT_KEY, None)
+    logger.info(log_safe(f"Recovery passkey registered for user_id={user.id} (device: {device_type})"))
+    return Response({
+        "message": "New passkey registered. Sign in with it, then create a new recovery backup.",
+        "passkey_id": passkey.id,
+        "device_type": device_type,
+    }, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])

@@ -346,7 +346,7 @@ export default function TimeLockedRecover({ onSuccess }) {
   return (
     <section data-testid="time-locked-recover">
       <h1>Recovery complete</h1>
-      <p data-testid="tl-recover-success">Your vault is unlocked.</p>
+      <p data-testid="tl-recover-success">Your vault is unlocked and your master password is changed. Sign in with the new master password from now on; your other sessions were signed out.</p>
     </section>
   );
 }

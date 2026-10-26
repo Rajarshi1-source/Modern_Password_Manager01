@@ -182,6 +182,9 @@ urlpatterns = [
     path('passkey-recovery/initiate/', passkey_primary_recovery_views.initiate_primary_passkey_recovery, name='initiate_primary_passkey_recovery'),
     # Complete recovery (step 2: decrypt with recovery key)
     path('passkey-recovery/complete/', passkey_primary_recovery_views.complete_primary_passkey_recovery, name='complete_primary_passkey_recovery'),
+    # Register the replacement passkey after a successful recovery
+    path('passkey-recovery/register/begin/', passkey_primary_recovery_views.begin_recovery_passkey_registration, name='begin_recovery_passkey_registration'),
+    path('passkey-recovery/register/complete/', passkey_primary_recovery_views.complete_recovery_passkey_registration, name='complete_recovery_passkey_registration'),
     # Fallback to social mesh recovery if primary fails
     path('passkey-recovery/fallback/', passkey_primary_recovery_views.fallback_to_social_mesh_recovery, name='fallback_to_social_mesh_recovery'),
     # Revoke a recovery backup
