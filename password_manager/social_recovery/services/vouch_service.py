@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from django.db import transaction
 from django.utils import timezone
 
+from shared import sealed_shares
 from zk_proofs.crypto import secp256k1 as ec
 from zk_proofs.crypto import schnorr
 
@@ -69,9 +70,14 @@ def _scalar_from_bytes(blob: bytes) -> int:
 
 @transaction.atomic
 def accept_invitation(
-    *, invitation_token: str, signature: bytes, extra_data: Optional[dict] = None
+    *, invitation_token: str, signature: bytes, share_proof: str = "",
+    extra_data: Optional[dict] = None
 ) -> Voucher:
-    """Voucher accepts their invitation by signing ``invitation_token``."""
+    """Voucher accepts their invitation by signing ``invitation_token``.
+
+    ``share_proof`` (base64) shows the voucher's device opened its sealed
+    share, so it holds the hybrid private key and the share is intact.
+    """
     voucher = (
         Voucher.objects.select_for_update()
         .filter(invitation_token=invitation_token)
@@ -86,6 +92,8 @@ def accept_invitation(
         voucher.ed25519_public_key, invitation_token.encode("utf-8"), signature
     ):
         raise ValueError("signature does not match voucher public key")
+    if not sealed_shares.share_proof_matches(share_proof, voucher.share_proof_hash):
+        raise ValueError("share proof does not match the sealed share")
 
     voucher.status = "accepted"
     voucher.accepted_at = timezone.now()
@@ -114,6 +122,7 @@ def accept_invitation(
 def initiate_request(
     *,
     circle: RecoveryCircle,
+    requester_public_key: bytes,
     initiator_email: str = "",
     initiator_ip: Optional[str] = None,
     device_fingerprint: str = "",
@@ -145,6 +154,7 @@ def initiate_request(
         initiator_ip=initiator_ip,
         device_fingerprint=device_fingerprint or "",
         geo=geo or {},
+        requester_public_key=bytes(requester_public_key),
         required_approvals=circle.threshold,
         challenge_nonce=_secrets.token_hex(32),
         risk_score=float(risk_score or 0.0),
@@ -176,11 +186,18 @@ def submit_attestation(
     fresh_commitment: Optional[bytes] = None,
     proof_T: Optional[bytes] = None,
     proof_s: Optional[bytes] = None,
+    resealed_share: Optional[bytes] = None,
     stake_amount: int = 0,
     ip_address: Optional[str] = None,
     user_agent: str = "",
 ) -> VouchAttestation:
-    """Record a voucher's attestation on a live recovery request."""
+    """Record a voucher's attestation on a live recovery request.
+
+    An approval carries the voucher's share re-sealed on its device to the
+    request's ``requester_public_key``; the signature covers its digest. The
+    requester's device checks the recombined seed against the circle's seed
+    check, so a share that is not genuine is caught there.
+    """
     if request.circle_id != voucher.circle_id:
         raise ValueError("voucher does not belong to this request's circle")
     if decision not in ("approve", "deny"):
@@ -194,8 +211,12 @@ def submit_attestation(
         request.save(update_fields=["status"])
         raise ValueError("request has expired")
 
+    if decision == "approve" and not resealed_share:
+        raise ValueError("approval must include the share re-sealed to the requester")
+    share_digest = hashlib.sha256(bytes(resealed_share)).hexdigest() if resealed_share else ""
     signed_message = (
-        f"pwm-social-recovery-v1|{request.request_id}|{decision}|{request.challenge_nonce}"
+        f"pwm-social-recovery-v2|{request.request_id}|{decision}|{request.challenge_nonce}"
+        f"|{share_digest}"
     ).encode("utf-8")
 
     if not _verify_ed25519(voucher.ed25519_public_key, signed_message, signature):
@@ -248,6 +269,7 @@ def submit_attestation(
             zk_proof_T=bytes(proof_T) if proof_T else None,
             zk_proof_s=bytes(proof_s) if proof_s else None,
             fresh_commitment=bytes(fresh_commitment) if fresh_commitment else None,
+            resealed_share=bytes(resealed_share) if decision == "approve" else None,
             decision=decision,
             stake_committed=int(stake_amount or 0),
             ip_address=ip_address,

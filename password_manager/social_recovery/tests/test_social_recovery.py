@@ -3,11 +3,11 @@
 These tests exercise the full web-of-trust recovery flow end to end:
 
 * Ed25519 key generation + did:key registration
-* Circle creation with Shamir shards
-* Invitation acceptance by Ed25519-signed tokens
+* Circle creation from shares split and sealed on the owner's device
+* Invitation acceptance by Ed25519-signed tokens plus a share proof
 * Schnorr equality proof construction and verification at attestation time
 * Quorum evaluation, stake commitment / release / slashing
-* Shamir reconstruction on completion
+* Completion releases only shares re-sealed to the requester
 * Append-only audit log hash chain
 """
 from __future__ import annotations
@@ -28,7 +28,6 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
 )
 
-from auth_module.services.shamir_py3 import ShamirSecretSharer
 from decentralized_identity.services.did_service import (
     multibase_encode_ed25519_pub,
 )
@@ -55,6 +54,7 @@ from social_recovery.services.recovery_completion_service import (
     reject_fraudulent_attestation,
 )
 from social_recovery.services.web_of_trust_service import evaluate_quorum
+from shared.tests import sealed_share_fixtures as fx
 
 
 User = get_user_model()
@@ -69,6 +69,50 @@ def _make_voucher_keypair():
 
 def _sign(private_key: Ed25519PrivateKey, message: bytes) -> bytes:
     return private_key.sign(message)
+
+
+# share proof (base64) per voucher Ed25519 key, as the voucher's device
+# would compute it after opening its sealed share
+_PROOFS: dict = {}
+
+
+def _sealed(vouchers):
+    """Add what the owner's device sends for each voucher."""
+    out = []
+    for i, spec in enumerate(vouchers, start=1):
+        proof, proof_hash = fx.share_proof()
+        _PROOFS[spec["ed25519_public_key"]] = proof
+        out.append({
+            **spec,
+            "hybrid_public_key": base64.b64decode(fx.hybrid_public_key()),
+            "share_index": i,
+            "sealed_share": base64.b64decode(fx.sealed_share()),
+            "share_proof_hash": base64.b64decode(proof_hash),
+        })
+    return out
+
+
+def _accept(voucher, private_key):
+    return accept_invitation(
+        invitation_token=voucher.invitation_token,
+        signature=_sign(private_key, voucher.invitation_token.encode("utf-8")),
+        share_proof=_PROOFS[voucher.ed25519_public_key],
+    )
+
+
+def _initiate(circle, **kwargs):
+    return initiate_request(
+        circle=circle,
+        requester_public_key=base64.b64decode(fx.hybrid_public_key()),
+        **kwargs,
+    )
+
+
+def _approval_message(request, resealed: bytes) -> bytes:
+    return (
+        f"pwm-social-recovery-v2|{request.request_id}|approve|{request.challenge_nonce}"
+        f"|{hashlib.sha256(resealed).hexdigest()}"
+    ).encode("utf-8")
 
 
 def _scalar_from_bytes(blob: bytes) -> int:
@@ -127,7 +171,6 @@ class SocialRecoveryFullFlowTests(TestCase):
         self.voucher_keypairs = [_make_voucher_keypair() for _ in range(3)]
 
     def _build_circle(self, threshold: int = 2):
-        master_secret_hex = _secrets.token_hex(32)
         vouchers = []
         for i, (private, pub_mb) in enumerate(self.voucher_keypairs):
             vouchers.append(
@@ -141,18 +184,12 @@ class SocialRecoveryFullFlowTests(TestCase):
             )
         circle = create_circle(
             user=self.owner,
-            master_secret_hex=master_secret_hex,
+            secret_check=base64.b64decode(fx.seed_check()),
             threshold=threshold,
-            vouchers=vouchers,
+            vouchers=_sealed(vouchers),
             min_total_stake=0,
         )
-        return master_secret_hex, circle
-
-    def test_shamir_split_and_recover_round_trip(self):
-        secret = _secrets.token_hex(32)
-        shares = ShamirSecretSharer.split_secret(secret, 2, 3)
-        recovered = ShamirSecretSharer.recover_secret(shares[:2])
-        assert recovered == secret
+        return None, circle
 
     def test_schnorr_equality_proof_verifies(self):
         # Both commitments commit to the same scalar but with different
@@ -176,8 +213,8 @@ class SocialRecoveryFullFlowTests(TestCase):
             ec.encode_point(c1), ec.encode_point(c2), T, s
         )
 
-    def test_create_circle_persists_shamir_shares_and_commitments(self):
-        master, circle = self._build_circle()
+    def test_create_circle_stores_the_sealed_shares_as_sent(self):
+        _, circle = self._build_circle()
         assert circle.status == "draft"
         assert circle.total_vouchers == 3
         assert circle.vouchers.count() == 3
@@ -185,16 +222,18 @@ class SocialRecoveryFullFlowTests(TestCase):
         # Each voucher must receive a distinct share index.
         indices = sorted(circle.vouchers.values_list("share_index", flat=True))
         assert indices == [1, 2, 3]
+        # No server-side commitment to the seed: the server never had it.
+        assert bytes(circle.secret_commitment) == b""
+        assert len(bytes(circle.secret_check)) == 32
+        for v in circle.vouchers.all():
+            assert v.encryption_metadata["algorithm"].startswith("X25519MLKEM768")
 
     def test_invitation_acceptance_activates_circle(self):
         _, circle = self._build_circle()
         for (private, _pub), voucher in zip(
             self.voucher_keypairs, circle.vouchers.order_by("share_index")
         ):
-            signature = _sign(private, voucher.invitation_token.encode("utf-8"))
-            accepted = accept_invitation(
-                invitation_token=voucher.invitation_token, signature=signature
-            )
+            accepted = _accept(voucher, private)
             assert accepted.status == "accepted"
         circle.refresh_from_db()
         assert circle.status == "active"
@@ -209,32 +248,72 @@ class SocialRecoveryFullFlowTests(TestCase):
             accept_invitation(
                 invitation_token=voucher.invitation_token,
                 signature=bad_signature,
+                share_proof=_PROOFS[voucher.ed25519_public_key],
             )
 
+    def test_invitation_acceptance_requires_the_share_proof(self):
+        _, circle = self._build_circle()
+        voucher = circle.vouchers.order_by("share_index").first()
+        private, _pub = self.voucher_keypairs[0]
+        signature = _sign(private, voucher.invitation_token.encode("utf-8"))
+        for proof in ("", fx.share_proof()[0], _PROOFS[self.voucher_keypairs[1][1]]):
+            with pytest.raises(ValueError):
+                accept_invitation(
+                    invitation_token=voucher.invitation_token,
+                    signature=signature,
+                    share_proof=proof,
+                )
+        voucher.refresh_from_db()
+        assert voucher.status == "pending"
+
     def test_attestation_rejects_without_zk_proof_on_approve(self):
-        master_hex, circle = self._build_circle()
+        _, circle = self._build_circle()
         # accept all invites
         for (private, _pub), voucher in zip(
             self.voucher_keypairs, circle.vouchers.order_by("share_index")
         ):
-            accept_invitation(
-                invitation_token=voucher.invitation_token,
-                signature=_sign(private, voucher.invitation_token.encode("utf-8")),
-            )
+            _accept(voucher, private)
         circle.refresh_from_db()
-        request = initiate_request(circle=circle, initiator_email="x@example.com")
+        request = _initiate(circle, initiator_email="x@example.com")
         voucher = circle.vouchers.order_by("share_index").first()
         private, _pub = self.voucher_keypairs[0]
-        signed_message = (
-            f"pwm-social-recovery-v1|{request.request_id}|approve|{request.challenge_nonce}"
-        ).encode("utf-8")
+        resealed = base64.b64decode(fx.sealed_share())
         with pytest.raises(ValueError):
             submit_attestation(
                 request=request,
                 voucher=voucher,
                 decision="approve",
-                signature=_sign(private, signed_message),
+                signature=_sign(private, _approval_message(request, resealed)),
+                resealed_share=resealed,
             )
+
+    def test_approval_requires_a_resealed_share_its_signature_covers(self):
+        _, circle = self._build_circle()
+        for (private, _pub), voucher in zip(
+            self.voucher_keypairs, circle.vouchers.order_by("share_index")
+        ):
+            _accept(voucher, private)
+        circle.refresh_from_db()
+        request = _initiate(circle)
+        voucher = circle.vouchers.order_by("share_index").first()
+        private, _pub = self.voucher_keypairs[0]
+        fresh, T, s, _ = _build_equality_proof(voucher.ed25519_public_key, voucher.circle_id)
+        resealed = base64.b64decode(fx.sealed_share())
+        proof = dict(fresh_commitment=fresh, proof_T=T, proof_s=s)
+        # No re-sealed share: refused.
+        with pytest.raises(ValueError):
+            submit_attestation(request=request, voucher=voucher, decision="approve",
+                               signature=_sign(private, _approval_message(request, b"")),
+                               **proof)
+        # A share swapped after signing: refused.
+        with pytest.raises(ValueError):
+            submit_attestation(request=request, voucher=voucher, decision="approve",
+                               signature=_sign(private, _approval_message(request, resealed)),
+                               resealed_share=base64.b64decode(fx.sealed_share()), **proof)
+        att = submit_attestation(request=request, voucher=voucher, decision="approve",
+                                 signature=_sign(private, _approval_message(request, resealed)),
+                                 resealed_share=resealed, **proof)
+        assert bytes(att.resealed_share) == resealed
 
 
 @pytest.mark.django_db
@@ -251,7 +330,6 @@ class QuorumAndStakeTests(TestCase):
         ]
         self.voucher_keypairs = [_make_voucher_keypair() for _ in range(3)]
 
-        master = _secrets.token_hex(32)
         vouchers = [
             {
                 "user": self.voucher_users[i],
@@ -263,24 +341,20 @@ class QuorumAndStakeTests(TestCase):
         ]
         self.circle = create_circle(
             user=self.owner,
-            master_secret_hex=master,
+            secret_check=base64.b64decode(fx.seed_check()),
             threshold=2,
-            vouchers=vouchers,
+            vouchers=_sealed(vouchers),
             min_total_stake=15,
         )
         for (private, _), voucher in zip(
             self.voucher_keypairs, self.circle.vouchers.order_by("share_index")
         ):
-            accept_invitation(
-                invitation_token=voucher.invitation_token,
-                signature=_sign(private, voucher.invitation_token.encode("utf-8")),
-            )
+            _accept(voucher, private)
         self.circle.refresh_from_db()
 
-    def _submit_approval(self, request, voucher, private_key, stake=8):
-        signed_message = (
-            f"pwm-social-recovery-v1|{request.request_id}|approve|{request.challenge_nonce}"
-        ).encode("utf-8")
+    def _submit_approval(self, request, voucher, private_key, stake=8, resealed=None):
+        resealed = resealed or base64.b64decode(fx.sealed_share())
+        signed_message = _approval_message(request, resealed)
         fresh_bytes, T, s, _stored = _build_equality_proof(
             voucher.ed25519_public_key, voucher.circle_id
         )
@@ -293,11 +367,12 @@ class QuorumAndStakeTests(TestCase):
             fresh_commitment=fresh_bytes,
             proof_T=T,
             proof_s=s,
+            resealed_share=resealed,
             stake_amount=stake,
         )
 
     def test_quorum_satisfied_once_threshold_reached(self):
-        request = initiate_request(circle=self.circle)
+        request = _initiate(self.circle)
         vouchers = list(self.circle.vouchers.order_by("share_index"))
         self._submit_approval(request, vouchers[0], self.voucher_keypairs[0][0])
         request.refresh_from_db()
@@ -311,7 +386,7 @@ class QuorumAndStakeTests(TestCase):
         assert evaluate_quorum(request).quorum_met
 
     def test_stake_slash_on_cancel(self):
-        request = initiate_request(circle=self.circle)
+        request = _initiate(self.circle)
         vouchers = list(self.circle.vouchers.order_by("share_index"))
         self._submit_approval(request, vouchers[0], self.voucher_keypairs[0][0], stake=10)
         self._submit_approval(request, vouchers[1], self.voucher_keypairs[1][0], stake=10)
@@ -320,82 +395,28 @@ class QuorumAndStakeTests(TestCase):
         request.refresh_from_db()
         assert request.status == "cancelled"
 
-    def test_complete_request_recovers_secret(self):
-        # Rebuild a circle where we know the master secret.
-        master = _secrets.token_hex(32)
-        vouchers = [
-            {
-                "user": self.voucher_users[i],
-                "ed25519_public_key": self.voucher_keypairs[i][1],
-                "vouch_weight": 1,
-                "stake_amount": 0,
-            }
-            for i in range(3)
-        ]
-        circle = create_circle(
-            user=self.owner,
-            master_secret_hex=master,
-            threshold=2,
-            vouchers=vouchers,
-        )
-        vouchers_qs = list(circle.vouchers.order_by("share_index"))
-        for (private, _), v in zip(self.voucher_keypairs, vouchers_qs):
-            accept_invitation(
-                invitation_token=v.invitation_token,
-                signature=_sign(private, v.invitation_token.encode("utf-8")),
-            )
-            v.refresh_from_db()
-        circle.refresh_from_db()
-        request = initiate_request(circle=circle)
-        # Approve with first two vouchers.
-        for v, (private, _) in list(zip(vouchers_qs, self.voucher_keypairs))[:2]:
-            fresh_bytes, T, s, _stored = _build_equality_proof(
-                v.ed25519_public_key, v.circle_id
-            )
-
-            signed_message = (
-                f"pwm-social-recovery-v1|{request.request_id}|approve|{request.challenge_nonce}"
-            ).encode("utf-8")
-            submit_attestation(
-                request=request,
-                voucher=v,
-                decision="approve",
-                signature=_sign(private, signed_message),
-                fresh_commitment=fresh_bytes,
-                proof_T=T,
-                proof_s=s,
-                stake_amount=0,
-            )
+    def test_complete_request_returns_only_the_resealed_shares(self):
+        request = _initiate(self.circle)
+        vouchers = list(self.circle.vouchers.order_by("share_index"))
+        with pytest.raises(ValueError):
+            complete_request(request=request)  # not approved yet
+        resealed = [base64.b64decode(fx.sealed_share()) for _ in range(2)]
+        for v, (private, _), r in zip(vouchers, self.voucher_keypairs, resealed):
+            self._submit_approval(request, v, private, resealed=r)
         request.refresh_from_db()
         assert request.status == "approved"
-        # Each voucher decrypts their own shard using the X25519 scheme: we
-        # simulate their device by handing the Ed25519 private seed to the
-        # shard_crypto helper.
-        from cryptography.hazmat.primitives.serialization import (
-            Encoding, NoEncryption, PrivateFormat,
-        )
-        from social_recovery.services.shard_crypto import decrypt_shard
 
-        def _decrypt(voucher, private_key):
-            seed = private_key.private_bytes(
-                Encoding.Raw, PrivateFormat.Raw, NoEncryption()
-            )
-            return decrypt_shard(
-                bytes(voucher.encrypted_shard_data),
-                voucher.ed25519_public_key,
-                seed,
-            )
-
-        decrypted = [
-            {"voucher_id": v.voucher_id, "share": _decrypt(v, private)}
-            for v, (private, _) in list(zip(vouchers_qs, self.voucher_keypairs))[:2]
-        ]
-        secret_hex = complete_request(
-            request=request, decrypted_shares=decrypted
-        )
-        assert secret_hex == master
+        result = complete_request(request=request)
+        assert result["threshold"] == 2
+        assert base64.b64decode(result["secret_check"]) == bytes(self.circle.secret_check)
+        assert [base64.b64decode(x["sealed_share"]) for x in result["sealed_shares"]] == resealed
+        assert [x["share_index"] for x in result["sealed_shares"]] == [1, 2]
+        # The server holds no share or secret to return.
+        assert "secret_hex" not in result
         request.refresh_from_db()
         assert request.status == "completed"
+        # Completing again returns the same shares without a second stake release.
+        assert complete_request(request=request)["sealed_shares"] == result["sealed_shares"]
 
 
 @pytest.mark.django_db
@@ -409,12 +430,11 @@ class AuditLogHashChainTests(TestCase):
             for i in range(3)
         ]
         kp = [_make_voucher_keypair() for _ in range(3)]
-        master = _secrets.token_hex(32)
         circle = create_circle(
             user=owner,
-            master_secret_hex=master,
+            secret_check=base64.b64decode(fx.seed_check()),
             threshold=2,
-            vouchers=[
+            vouchers=_sealed([
                 {
                     "user": vouchers[i],
                     "ed25519_public_key": kp[i][1],
@@ -422,14 +442,11 @@ class AuditLogHashChainTests(TestCase):
                     "stake_amount": 0,
                 }
                 for i in range(3)
-            ],
+            ]),
         )
         # Accept one voucher so we append another audit entry.
         v = circle.vouchers.order_by("share_index").first()
-        accept_invitation(
-            invitation_token=v.invitation_token,
-            signature=_sign(kp[0][0], v.invitation_token.encode("utf-8")),
-        )
+        _accept(v, kp[0][0])
         entries = list(
             SocialRecoveryAuditLog.objects.all().order_by("created_at")
         )
@@ -463,12 +480,11 @@ class StakeSlashTests(TestCase):
             email="fraudv@example.com", password="x-pass-1234"
         )
         kp = _make_voucher_keypair()
-        master = _secrets.token_hex(32)
         circle = create_circle(
             user=owner,
-            master_secret_hex=master,
+            secret_check=base64.b64decode(fx.seed_check()),
             threshold=2,
-            vouchers=[
+            vouchers=_sealed([
                 {
                     "user": voucher_user,
                     "ed25519_public_key": kp[1],
@@ -482,7 +498,7 @@ class StakeSlashTests(TestCase):
                     "vouch_weight": 1,
                     "stake_amount": 5,
                 },
-            ],
+            ]),
         )
         voucher = circle.vouchers.get(user=voucher_user)
         # Skip full flow; fabricate a request + attestation.

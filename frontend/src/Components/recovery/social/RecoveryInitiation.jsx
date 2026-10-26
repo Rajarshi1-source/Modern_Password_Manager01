@@ -2,6 +2,11 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DeviceFingerprint from '../../../utils/deviceFingerprint';
 import ApiService from '../../../services/api';
+import {
+  newRequesterKeyPair,
+  saveRequesterKeyPair,
+} from '../../../services/recovery/holderKeyStore';
+import { keyFingerprint } from '../../../services/recovery/sealedShareRecovery';
 import './RecoveryInitiation.css';
 
 /**
@@ -38,6 +43,10 @@ export const RecoveryInitiation = ({
   const [circleId, setCircleId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // Shown after initiation and read to each guardian over another channel,
+  // so a guardian re-seals only to this device's key.
+  const [fingerprint, setFingerprint] = useState(null);
+  const [startedRequestId, setStartedRequestId] = useState(null);
   const navigate = useNavigate();
 
   // Bridge controlled / uncontrolled. We only enter controlled mode
@@ -65,23 +74,22 @@ export const RecoveryInitiation = ({
         /* noop — proceed without fingerprint */
       }
 
+      // One-time key pair: guardians re-seal their shares to its public
+      // half; the private half never leaves this device.
+      const keyPair = await newRequesterKeyPair();
       const resp = await ApiService.socialRecovery.initiateRequest({
         circle_id: circleId.trim(),
         initiator_email: email,
         device_fingerprint: deviceFingerprint,
         geo: {},
+        requester_public_key: keyPair.publicKey,
       });
 
       const requestId = resp.data?.request_id;
       if (!requestId) throw new Error('Server did not return a request id');
-      // Hand the request_id to the caller's state machine if the
-      // tier-2 wrapper opted in. Otherwise navigate to the legacy
-      // progress route.
-      if (typeof onInitiated === 'function') {
-        onInitiated(requestId);
-      } else {
-        navigate(`/recovery/social/progress/${requestId}`);
-      }
+      saveRequesterKeyPair(requestId, keyPair);
+      setFingerprint(keyFingerprint(keyPair.publicKey));
+      setStartedRequestId(requestId);
     } catch (err) {
       const handled = ApiService.handleError(err);
       setError(handled.error || 'Failed to initiate recovery');
@@ -89,6 +97,36 @@ export const RecoveryInitiation = ({
       setLoading(false);
     }
   };
+
+  const continueToProgress = () => {
+    // Hand the request_id to the caller's state machine if the tier-2
+    // wrapper opted in. Otherwise navigate to the legacy progress route.
+    if (typeof onInitiated === 'function') {
+      onInitiated(startedRequestId);
+    } else {
+      navigate(`/recovery/social/progress/${startedRequestId}`);
+    }
+  };
+
+  if (fingerprint) {
+    return (
+      <div className="recovery-initiation">
+        <div className="recovery-card">
+          <h3>Read this code to each guardian</h3>
+          <p className="mono" data-testid="requester-key-fingerprint">{fingerprint}</p>
+          <p>
+            Tell it to your guardians by phone or in person, not through this
+            site. A guardian only releases a share to the device that shows
+            this code. Keep this browser open on this device until recovery
+            finishes.
+          </p>
+          <button type="button" className="btn-primary" onClick={continueToProgress}>
+            Continue
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="recovery-initiation">
@@ -105,7 +143,7 @@ export const RecoveryInitiation = ({
           <ol>
             <li>We notify each guardian in your recovery circle.</li>
             <li>Guardians attest (approve/deny) by signing a challenge.</li>
-            <li>Once the threshold is met, your shares are reconstructed.</li>
+            <li>Once the threshold is met, this device recombines your shares.</li>
           </ol>
 
           <div className="warning-box">

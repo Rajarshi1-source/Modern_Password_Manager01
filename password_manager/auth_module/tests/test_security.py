@@ -11,6 +11,7 @@ Tests security-critical functionality:
 """
 
 import pytest
+from shared.tests import sealed_share_fixtures as fx
 from django.test import TestCase, Client
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -59,6 +60,7 @@ class TestSQLInjectionPrevention(TestCase):
                 '/api/auth/quantum-recovery/initiate_recovery/',
                 {
                     'email': payload,
+                    'requester_public_key': fx.hybrid_public_key(),
                     'device_fingerprint': 'test_fp'
                 },
                 content_type='application/json'
@@ -87,6 +89,7 @@ class TestSQLInjectionPrevention(TestCase):
             '/api/auth/quantum-recovery/initiate_recovery/',
             {
                 'email': 'test@example.com',
+                'requester_public_key': fx.hybrid_public_key(),
                 'device_fingerprint': malicious_fp
             },
             content_type='application/json'
@@ -130,6 +133,7 @@ class TestXSSPrevention(TestCase):
                 '/api/auth/quantum-recovery/initiate_recovery/',
                 {
                     'email': payload,
+                    'requester_public_key': fx.hybrid_public_key(),
                     'device_fingerprint': 'test_fp'
                 },
                 content_type='application/json'
@@ -303,6 +307,7 @@ class TestTimingAttackResistance(TestCase):
             '/api/auth/quantum-recovery/initiate_recovery/',
             {
                 'email': 'existing@example.com',
+                'requester_public_key': fx.hybrid_public_key(),
                 'device_fingerprint': 'a' * 64
             },
             content_type='application/json'
@@ -315,6 +320,7 @@ class TestTimingAttackResistance(TestCase):
             '/api/auth/quantum-recovery/initiate_recovery/',
             {
                 'email': 'nonexistent@example.com',
+                'requester_public_key': fx.hybrid_public_key(),
                 'device_fingerprint': 'a' * 64
             },
             content_type='application/json'

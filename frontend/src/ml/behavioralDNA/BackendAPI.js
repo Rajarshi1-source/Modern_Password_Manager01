@@ -123,25 +123,11 @@ export class BackendAPI {
   }
 
   /**
-   * Create behavioral commitments (backend)
-   * 
-   * @param {Object} behavioralProfile - Complete behavioral profile
-   * @param {Object} options - Additional options
-   * @returns {Promise<Object>} Commitment creation result
+   * Retired: commitments were created from the raw behavioral profile on the
+   * server, which must not receive it. Refuses without sending anything.
    */
-  async createCommitments(behavioralProfile, options = {}) {
-    try {
-      const response = await axios.post(`${BEHAVIORAL_API_BASE}/setup-commitments/`, {
-        behavioral_profile: behavioralProfile,
-        kyber_public_key: options.kyberPublicKey,
-        quantum_protected: options.quantumProtected || false
-      });
-
-      return response.data;
-    } catch (error) {
-      console.error('[BackendAPI] Commitment creation failed:', error);
-      throw error;
-    }
+  async createCommitments() {
+    throw new Error('Behavioral recovery setup is no longer available');
   }
 
   /**

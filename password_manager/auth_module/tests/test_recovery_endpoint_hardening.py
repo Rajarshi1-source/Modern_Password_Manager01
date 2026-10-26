@@ -74,13 +74,17 @@ class RecoveryEndpointHardeningTests(TestCase):
         attempt.save()
         return attempt
 
-    def test_behavioral_initiate_answers_unknown_and_unenrolled_accounts_the_same(self):
+    def test_behavioral_initiate_is_retired_for_every_email(self):
+        from behavioral_recovery.models import BehavioralCommitment, BehavioralRecoveryAttempt
+        BehavioralCommitment.objects.create(
+            user=self.owner, encrypted_embedding=b'x', challenge_type='typing')
         url = '/api/behavioral-recovery/initiate/'
         unknown = self.anon.post(url, {'email': 'nobody@example.com'}, format='json')
-        unenrolled = self.anon.post(url, {'email': 'owner@example.com'}, format='json')
-        self.assertEqual(unknown.status_code, 200, unknown.content)
-        self.assertEqual(unenrolled.status_code, unknown.status_code, unenrolled.content)
-        self.assertEqual(unenrolled.json(), unknown.json())
+        enrolled = self.anon.post(url, {'email': 'owner@example.com'}, format='json')
+        self.assertEqual(unknown.status_code, 410, unknown.content)
+        self.assertEqual(enrolled.status_code, 410, enrolled.content)
+        self.assertEqual(enrolled.json(), unknown.json())
+        self.assertFalse(BehavioralRecoveryAttempt.objects.exists())
 
     def test_behavioral_complete_is_retired_and_keeps_the_password(self):
         attempt = self._attempt()
@@ -96,31 +100,30 @@ class RecoveryEndpointHardeningTests(TestCase):
         return BehavioralChallenge.objects.create(
             recovery_attempt=attempt, challenge_type='typing', challenge_data={})
 
-    @patch('behavioral_recovery.views.ChallengeGenerator.get_next_challenge', return_value=None)
-    @patch('behavioral_recovery.views.RecoveryOrchestrator.evaluate_challenge',
-           return_value={'similarity_score': 0.91, 'passed': True})
-    def test_submit_challenge_returns_no_similarity_scores(self, _evaluate, _next):
+    @patch('behavioral_recovery.services.RecoveryOrchestrator.evaluate_challenge')
+    def test_submit_challenge_is_retired_and_reads_no_behavioral_data(self, evaluate):
+        # Challenge responses were raw keystroke and mouse data; the server
+        # must not receive them.
         attempt = self._attempt()
         r = self.anon.post('/api/behavioral-recovery/submit-challenge/', {
             'attempt_id': str(attempt.attempt_id),
             'challenge_id': str(self._challenge(attempt).challenge_id),
-            'behavioral_data': {'keys': []},
+            'behavioral_data': {'keys': [{'key': 'a', 'down': 1, 'up': 2}]},
         }, format='json')
-        self.assertEqual(r.status_code, 200, r.content)
-        data = r.json()
-        for field in ('similarity_score', 'overall_similarity', 'similarity_scores', 'passed'):
-            self.assertNotIn(field, data)
-
-    @patch('behavioral_recovery.views.RecoveryOrchestrator.evaluate_challenge')
-    def test_submit_challenge_rejects_a_challenge_from_another_attempt(self, evaluate):
-        attempt, other = self._attempt(), self._attempt()
-        r = self.anon.post('/api/behavioral-recovery/submit-challenge/', {
-            'attempt_id': str(attempt.attempt_id),
-            'challenge_id': str(self._challenge(other).challenge_id),
-            'behavioral_data': {'keys': []},
-        }, format='json')
-        self.assertEqual(r.status_code, 404, r.content)
+        self.assertEqual(r.status_code, 410, r.content)
         evaluate.assert_not_called()
+
+    def test_commitment_setup_is_retired_and_stores_nothing(self):
+        from behavioral_recovery.models import BehavioralCommitment
+        client = APIClient()
+        client.force_authenticate(self.owner)
+        with patch('behavioral_recovery.services.CommitmentService.create_commitments') as create:
+            r = client.post('/api/behavioral-recovery/setup-commitments/', {
+                'behavioral_profile': {'typing': {'press_duration': [80, 95, 110]}},
+            }, format='json')
+        self.assertEqual(r.status_code, 410, r.content)
+        create.assert_not_called()
+        self.assertFalse(BehavioralCommitment.objects.exists())
 
     def test_recovery_status_returns_no_similarity_scores(self):
         attempt = self._attempt()

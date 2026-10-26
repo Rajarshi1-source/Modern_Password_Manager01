@@ -27,12 +27,12 @@ import { bytesToHex } from '../../../utils/hex';
 const CircleSetup = lazy(() => import('../social/CircleSetup'));
 
 // Hard gate. While true, the await-password phase shows an
-// unavailable notice instead of the master-password input. This
-// prevents users from creating a wrapped-DEK row that the legacy
-// CircleSetup endpoint cannot finish without violating the ZK
-// invariant (server-side Shamir over the vault-DEK seed). Flip to
-// false once the client-side Shamir + Kyber pipeline is wired and
-// CircleSetup tier-2 mode can complete locally.
+// unavailable notice instead of the master-password input. CircleSetup
+// now splits the seed and seals each share to the guardian's hybrid
+// X25519 + ML-KEM-768 key on this device (sealedShareRecovery.js), so
+// the server never sees the seed. Flip to false (here and in
+// SocialMeshDEKRecover) once the whole enroll -> guardian accept ->
+// recover -> recover-rotate path has been run end to end in a browser.
 const TIER2_ENROLL_BLOCKED = true;
 
 /**
