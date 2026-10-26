@@ -65,6 +65,10 @@ def complete_request(
     that arrive inside a signed envelope from the voucher's device; the
     service then ensures the submitting voucher actually approved the request.
     """
+    # Lock the row and re-read it: a cancel (from a recovery notice or the
+    # owner) that committed after the caller loaded the request must win.
+    SocialRecoveryRequest.objects.select_for_update().get(pk=request.pk)
+    request.refresh_from_db()
     if request.status not in ("approved", "completed"):
         raise ValueError("request must be approved before completion")
 

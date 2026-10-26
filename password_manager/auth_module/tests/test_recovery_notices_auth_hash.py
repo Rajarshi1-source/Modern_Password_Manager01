@@ -384,3 +384,67 @@ class NoticeCancelRaceTests(TestCase):
                           side_effect=OSError('broker down')):
             self.assertEqual(self.anon.post('/api/auth/passkey-recovery/initiate/', {
                 'username_or_email': 'owner'}, format='json').status_code, 200)
+
+
+class ConcurrencyAndInputTests(TestCase):
+    """Second review round: races with a cancel or a password change, and
+    malformed input on the anonymous cancel endpoint."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user('owner', 'owner@example.com', VERIFIER)
+        self.anon = APIClient()
+
+    def test_a_non_ascii_cancel_token_gets_the_generic_answer(self):
+        r = self.anon.post('/api/auth/recovery-notices/cancel/', {'token': 'é' * 30}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_upgrading_a_raw_row_does_not_undo_a_concurrent_change(self):
+        from auth_module.auth_hash import verify_and_upgrade
+        UserSalt.objects.create(user=self.user, salt=os.urandom(16), auth_hash=RAW)
+        stale = UserSalt.objects.get(user=self.user)
+        UserSalt.objects.filter(user=self.user).update(auth_hash=make_auth_hash_record(b'n' * 32))
+        self.assertFalse(verify_and_upgrade(stale, RAW))
+        stored = UserSalt.objects.get(user=self.user).auth_hash
+        self.assertTrue(check_auth_hash(stored, b'n' * 32))
+        self.assertFalse(check_auth_hash(stored, RAW))
+
+    def test_social_completion_does_not_overwrite_a_cancel(self):
+        from social_recovery.models import RecoveryCircle, SocialRecoveryRequest
+        from social_recovery.services import complete_request
+        circle = RecoveryCircle.objects.create(user=self.user, threshold=2, total_vouchers=2,
+                                               secret_commitment=b'c', status='active')
+        request = SocialRecoveryRequest.objects.create(
+            circle=circle, status='approved', required_approvals=2, challenge_nonce='n',
+            expires_at=timezone.now() + timedelta(days=1))
+        SocialRecoveryRequest.objects.filter(pk=request.pk).update(status='cancelled')
+        # The stale object still says approved; the locked re-read sees the cancel.
+        with self.assertRaisesRegex(ValueError, 'must be approved'):
+            complete_request(request=request, decrypted_shares=[])
+        self.assertEqual(SocialRecoveryRequest.objects.get(pk=request.pk).status, 'cancelled')
+
+    def test_passkey_completion_does_not_overwrite_a_cancel(self):
+        from auth_module.models import UserPasskey
+        from auth_module.passkey_primary_recovery_models import (
+            PasskeyRecoveryAttempt, PasskeyRecoveryBackup)
+        UserPasskey.objects.create(user=self.user, credential_id=b'cred-1',
+                                   public_key=b'pk-bytes', rp_id='localhost')
+        authed = APIClient()
+        authed.force_authenticate(self.user)
+        key = authed.post('/api/auth/passkey-recovery/setup/', {
+            'passkey_credential_id': b'cred-1'.hex()}, format='json').json()['recovery_key']
+        token = self.anon.post('/api/auth/passkey-recovery/initiate/', {
+            'username_or_email': 'owner'}, format='json').json()['recovery_attempt_id']
+        real_verify = PasskeyRecoveryBackup.verify_recovery_key
+
+        def cancel_meanwhile(backup, value):
+            # The owner's cancel commits while the key is being checked.
+            PasskeyRecoveryAttempt.objects.filter(user=self.user).update(status='failed')
+            return real_verify(backup, value)
+
+        with patch.object(PasskeyRecoveryBackup, 'verify_recovery_key', cancel_meanwhile):
+            r = self.anon.post('/api/auth/passkey-recovery/complete/', {
+                'recovery_attempt_id': token, 'recovery_key': key}, format='json')
+        self.assertEqual(r.status_code, 401, r.content)
+        self.assertTrue(PasskeyRecoveryBackup.objects.get(user=self.user).is_active)
+        self.assertEqual(PasskeyRecoveryAttempt.objects.get(user=self.user).status, 'failed')

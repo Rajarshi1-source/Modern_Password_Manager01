@@ -55,9 +55,17 @@ def check_auth_hash(stored, raw: bytes) -> bool:
 def verify_and_upgrade(salt_obj, raw: bytes) -> bool:
     """Check ``raw`` against ``salt_obj.auth_hash`` and rewrite a raw row as a
     record on success."""
-    if not check_auth_hash(salt_obj.auth_hash, raw):
+    stored = bytes(salt_obj.auth_hash or b'')
+    if not check_auth_hash(stored, raw):
         return False
-    if not is_hashed_record(salt_obj.auth_hash):
-        salt_obj.auth_hash = make_auth_hash_record(raw)
-        salt_obj.save(update_fields=['auth_hash'])
+    if not is_hashed_record(stored):
+        # Conditional on the value just checked: a concurrent change_master
+        # that wrote a new record is not overwritten with the old password's.
+        record = make_auth_hash_record(raw)
+        model = type(salt_obj)
+        if not model.objects.filter(pk=salt_obj.pk, auth_hash=stored).update(auth_hash=record):
+            # It changed meanwhile: answer for the current value instead.
+            salt_obj.refresh_from_db(fields=['auth_hash'])
+            return check_auth_hash(salt_obj.auth_hash, raw)
+        salt_obj.auth_hash = record
     return True

@@ -465,10 +465,16 @@ def complete_primary_passkey_recovery(request):
         registration_options = None
         try:
             with transaction.atomic():
-                claimed = PasskeyRecoveryBackup.objects.filter(
+                # Lock the attempt and re-check it: a cancel from a recovery
+                # notice that committed after the check above must win.
+                open_attempt = PasskeyRecoveryAttempt.objects.select_for_update().filter(
+                    pk=recovery_attempt.pk, status__in=('initiated', 'key_invalid'),
+                ).first()
+                claimed = open_attempt is not None and PasskeyRecoveryBackup.objects.filter(
                     pk=matching_backup.pk, is_active=True
                 ).update(is_active=False, last_verified_at=timezone.now())
                 if claimed:
+                    recovery_attempt = open_attempt
                     recovery_attempt.backup = matching_backup
                     recovery_attempt.mark_complete()
                     RecoveryKeyRevocation.objects.create(

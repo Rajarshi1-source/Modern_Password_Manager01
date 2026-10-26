@@ -192,7 +192,7 @@ def cancel_from_notice(token):
     """Apply a notice's cancel link. True if it did something."""
     from .models import RecoveryNotice
 
-    if not isinstance(token, str) or not 20 <= len(token) <= 128:
+    if not isinstance(token, str) or not token.isascii() or not 20 <= len(token) <= 128:
         return False
     notice = RecoveryNotice.objects.select_for_update().select_related('user').filter(
         cancel_token_hash=_token_hash(token)).first()
