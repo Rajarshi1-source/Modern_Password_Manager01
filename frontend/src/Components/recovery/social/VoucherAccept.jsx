@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
 import {
-  getOrCreateGuardianKeyPair,
+  getOrCreateGuardianPublicKey,
+  loadGuardianKeyPair,
   saveSealedShare,
 } from '../../../services/recovery/holderKeyStore';
 import { proveShareHolding } from '../../../services/recovery/sealedShareRecovery';
@@ -14,13 +15,13 @@ const VoucherAccept = () => {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-  const [guardianKey, setGuardianKey] = useState(null);
+  const [guardianPublicKey, setGuardianPublicKey] = useState('');
 
   // The guardian key pair stays on this device; the owner needs its public
   // half to seal a share to it.
   useEffect(() => {
-    getOrCreateGuardianKeyPair()
-      .then(setGuardianKey)
+    getOrCreateGuardianPublicKey()
+      .then(setGuardianPublicKey)
       .catch(() => setError('Could not create a guardian key on this device.'));
   }, []);
 
@@ -38,7 +39,8 @@ const VoucherAccept = () => {
       // Open the sealed share here to prove this device holds the key it
       // was sealed to; keep the sealed copy for approving a recovery later.
       const invitation = await ApiService.socialRecovery.getVoucherInvitation(invitationToken);
-      const keyPair = guardianKey || await getOrCreateGuardianKeyPair();
+      await getOrCreateGuardianPublicKey();
+      const keyPair = await loadGuardianKeyPair();
       const shareProof = await proveShareHolding({
         keyPair,
         sealedShare: invitation.data.sealed_share,
@@ -89,7 +91,7 @@ const VoucherAccept = () => {
 
       <div className="form-group">
         <label>Your guardian key (give this to the circle owner)</label>
-        <textarea rows="3" readOnly className="mono" value={guardianKey?.publicKey || ''} />
+        <textarea rows="3" readOnly className="mono" value={guardianPublicKey} />
         <small>
           Created on this device. The owner seals your share to it; only this
           device can open that share, so keep using this browser.

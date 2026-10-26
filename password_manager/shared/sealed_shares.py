@@ -55,55 +55,56 @@ _MAX_SHARE_PLAINTEXT = 512
 DIGEST_SIZE = 32
 
 
-def _b64(value, field):
+# What a caller tells the client when a decoder returns None. Fixed text
+# (no exception message reaches a response).
+INVALID_HYBRID_PUBLIC_KEY = (
+    f'must be a base64 X25519 + ML-KEM-768 public key ({HYBRID_PUBLIC_KEY_SIZE} bytes) '
+    "from the holder's own device")
+INVALID_SEALED_SHARE = f'must be a base64 sealed share ({HYBRID_KEM_ALGORITHM})'
+INVALID_DIGEST = f'must be a base64 {DIGEST_SIZE}-byte SHA-256 digest'
+
+
+def _b64(value):
     if not isinstance(value, str) or not value:
-        raise ValueError(f"'{field}' must be a base64 string")
+        return None
     try:
         return base64.b64decode(value, validate=True)
     except (binascii.Error, ValueError):
-        raise ValueError(f"'{field}' is not valid base64")
+        return None
 
 
-def decode_hybrid_public_key(value, field='public_key') -> bytes:
-    """Decode and check a client hybrid public key; raise ValueError."""
-    raw = _b64(value, field)
-    if len(raw) != HYBRID_PUBLIC_KEY_SIZE:
-        raise ValueError(
-            f"'{field}' must be an X25519 + ML-KEM-768 public key "
-            f"({HYBRID_PUBLIC_KEY_SIZE} bytes)")
-    if not any(raw[:X25519_PUBLIC_KEY_SIZE]):
-        raise ValueError(f"'{field}' has an all-zero X25519 key")
-    if not ml_kem_768_public_key_is_valid(raw[X25519_PUBLIC_KEY_SIZE:]):
-        raise ValueError(f"'{field}' has an invalid ML-KEM-768 key")
+def decode_hybrid_public_key(value):
+    """The raw client hybrid public key, or None if ``value`` is not one."""
+    raw = _b64(value)
+    if (raw is None or len(raw) != HYBRID_PUBLIC_KEY_SIZE
+            or not any(raw[:X25519_PUBLIC_KEY_SIZE])
+            or not ml_kem_768_public_key_is_valid(raw[X25519_PUBLIC_KEY_SIZE:])):
+        return None
     return raw
 
 
-def decode_sealed_share(value, field='sealed_share') -> bytes:
-    """Decode and check the shape of a sealed share; raise ValueError."""
-    raw = _b64(value, field)
+def decode_sealed_share(value):
+    """The raw sealed share, or None if ``value`` does not have its shape."""
+    raw = _b64(value)
+    if raw is None or raw[:1] != bytes([SEALED_SHARE_VERSION]):
+        return None
     body = len(raw) - _SEALED_HEADER_SIZE
-    if raw[:1] != bytes([SEALED_SHARE_VERSION]) or not (
-            _GCM_TAG_SIZE < body <= _GCM_TAG_SIZE + _MAX_SHARE_PLAINTEXT):
-        raise ValueError(f"'{field}' is not a sealed share ({HYBRID_KEM_ALGORITHM})")
+    if not _GCM_TAG_SIZE < body <= _GCM_TAG_SIZE + _MAX_SHARE_PLAINTEXT:
+        return None
     return raw
 
 
-def decode_digest(value, field) -> bytes:
-    """Decode a base64 SHA-256 digest; raise ValueError."""
-    raw = _b64(value, field)
-    if len(raw) != DIGEST_SIZE:
-        raise ValueError(f"'{field}' must be a {DIGEST_SIZE}-byte digest")
-    return raw
+def decode_digest(value):
+    """The raw SHA-256 digest, or None."""
+    raw = _b64(value)
+    return raw if raw is not None and len(raw) == DIGEST_SIZE else None
 
 
 def share_proof_matches(proof_b64, stored_proof_hash) -> bool:
     """True if SHA-256 of the presented share proof is the stored digest."""
     stored = bytes(stored_proof_hash or b'')
-    if len(stored) != DIGEST_SIZE:
-        return False
-    try:
-        proof = _b64(proof_b64, 'share_proof')
-    except ValueError:
+    proof = _b64(proof_b64)
+    if len(stored) != DIGEST_SIZE or proof is None:
         return False
     return hmac.compare_digest(hashlib.sha256(proof).digest(), stored)
 

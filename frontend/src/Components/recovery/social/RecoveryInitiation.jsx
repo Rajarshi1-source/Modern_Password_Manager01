@@ -87,7 +87,7 @@ export const RecoveryInitiation = ({
 
       const requestId = resp.data?.request_id;
       if (!requestId) throw new Error('Server did not return a request id');
-      saveRequesterKeyPair(requestId, keyPair);
+      await saveRequesterKeyPair(requestId, keyPair);
       setFingerprint(keyFingerprint(keyPair.publicKey));
       setStartedRequestId(requestId);
     } catch (err) {

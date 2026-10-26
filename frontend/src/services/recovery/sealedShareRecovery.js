@@ -155,9 +155,21 @@ export async function resealShareForRequester({
   }
 }
 
+function* subsetsOf(items, size, start = 0, chosen = []) {
+  if (chosen.length === size) {
+    yield chosen;
+    return;
+  }
+  for (let i = start; i <= items.length - (size - chosen.length); i++) {
+    yield* subsetsOf(items, size, i + 1, [...chosen, items[i]]);
+  }
+}
+
 /**
  * Requester: open re-sealed shares and recombine the seed. Throws unless the
- * result matches `secretCheck`.
+ * result matches `secretCheck`. With more shares than the threshold, every
+ * threshold-sized subset is tried, so one wrong share does not stop a
+ * recovery that has enough good ones.
  * @returns {Promise<Uint8Array>} the recovery seed
  */
 export async function recoverSeed({ keyPair, sealedShares, threshold, secretCheck }) {
@@ -170,12 +182,13 @@ export async function recoverSeed({ keyPair, sealedShares, threshold, secretChec
     if (shares.length < threshold) {
       throw new Error(`need ${threshold} shares, have ${shares.length}`);
     }
-    const seed = combineShares(shares.slice(0, threshold));
-    if (!equal(seedCheck(seed), fromB64(secretCheck))) {
+    const expected = fromB64(secretCheck);
+    for (const subset of subsetsOf(shares, threshold)) {
+      const seed = combineShares(subset);
+      if (equal(seedCheck(seed), expected)) return seed;
       seed.fill(0);
-      throw new Error('the recovered seed does not match; a share is wrong');
     }
-    return seed;
+    throw new Error('the recovered seed does not match; a share is wrong');
   } finally {
     shares.forEach((s) => s.fill(0));
     secretKey.fill(0);

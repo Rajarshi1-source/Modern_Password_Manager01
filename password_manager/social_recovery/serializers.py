@@ -27,14 +27,15 @@ def _b64_decode(value: Any, field_name: str) -> bytes:
     try:
         return base64.b64decode(value, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise serializers.ValidationError({field_name: f"invalid base64: {exc}"})
+        raise serializers.ValidationError({field_name: "invalid base64"})
 
 
-def _sealed(decoder, value, field_name):
-    try:
-        return decoder(value, field_name)
-    except ValueError as exc:
-        raise serializers.ValidationError(str(exc))
+def _sealed(decoder, message, value):
+    """``decoder(value)``, or a validation error with the fixed ``message``."""
+    raw = decoder(value)
+    if raw is None:
+        raise serializers.ValidationError(message)
+    return raw
 
 
 def _b64_encode(blob: Any) -> str:
@@ -61,13 +62,15 @@ class VoucherInputSerializer(serializers.Serializer):
     share_proof_hash = serializers.CharField()
 
     def validate_hybrid_public_key(self, value):
-        return _sealed(sealed_shares.decode_hybrid_public_key, value, "hybrid_public_key")
+        return _sealed(sealed_shares.decode_hybrid_public_key,
+                       sealed_shares.INVALID_HYBRID_PUBLIC_KEY, value)
 
     def validate_sealed_share(self, value):
-        return _sealed(sealed_shares.decode_sealed_share, value, "sealed_share")
+        return _sealed(sealed_shares.decode_sealed_share,
+                       sealed_shares.INVALID_SEALED_SHARE, value)
 
     def validate_share_proof_hash(self, value):
-        return _sealed(sealed_shares.decode_digest, value, "share_proof_hash")
+        return _sealed(sealed_shares.decode_digest, sealed_shares.INVALID_DIGEST, value)
 
     def validate(self, attrs):
         if not any(
@@ -103,7 +106,7 @@ class CreateCircleSerializer(serializers.Serializer):
         return super().to_internal_value(data)
 
     def validate_secret_check(self, value):
-        return _sealed(sealed_shares.decode_digest, value, "secret_check")
+        return _sealed(sealed_shares.decode_digest, sealed_shares.INVALID_DIGEST, value)
 
 
 class VoucherSerializer(serializers.ModelSerializer):
@@ -186,7 +189,8 @@ class InitiateRequestSerializer(serializers.Serializer):
     requester_public_key = serializers.CharField()
 
     def validate_requester_public_key(self, value):
-        return _sealed(sealed_shares.decode_hybrid_public_key, value, "requester_public_key")
+        return _sealed(sealed_shares.decode_hybrid_public_key,
+                       sealed_shares.INVALID_HYBRID_PUBLIC_KEY, value)
 
 
 class AttestationSerializer(serializers.Serializer):
@@ -203,13 +207,12 @@ class AttestationSerializer(serializers.Serializer):
         cleaned = super().to_internal_value(data)
         cleaned["signature"] = _b64_decode(cleaned.pop("signature_b64"), "signature_b64")
         resealed = cleaned.pop("resealed_share", "")
-        try:
-            cleaned["resealed_share"] = (
-                sealed_shares.decode_sealed_share(resealed, "resealed_share")
-                if resealed else None
-            )
-        except ValueError as exc:
-            raise serializers.ValidationError({"resealed_share": str(exc)})
+        cleaned["resealed_share"] = None
+        if resealed:
+            cleaned["resealed_share"] = sealed_shares.decode_sealed_share(resealed)
+            if cleaned["resealed_share"] is None:
+                raise serializers.ValidationError(
+                    {"resealed_share": sealed_shares.INVALID_SEALED_SHARE})
         for key in ("fresh_commitment", "proof_T", "proof_s"):
             src = cleaned.pop(f"{key}_b64", "")
             cleaned[key] = _b64_decode(src, f"{key}_b64") if src else None

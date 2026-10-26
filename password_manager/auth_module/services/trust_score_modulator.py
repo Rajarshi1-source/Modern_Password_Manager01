@@ -20,12 +20,9 @@ HIGH_TRUST_THRESHOLD = 0.8
 LOW_TRUST_THRESHOLD = 0.2
 ELEVATED_TRUST_THRESHOLD = 0.5
 
-# Absolute floor for any social-mesh threshold. Single-guardian
-# configurations (threshold=1, total=1) are valid in the existing
-# recovery flow (see quantum_recovery_views: it can set
-# guardian_approvals_required = min(2, len(active_guardians)) which
-# falls to 1 when only one active guardian exists), so the modulator
-# must accept and pass them through untouched.
+# Absolute floor for any social-mesh threshold. The modulator accepts
+# single-guardian configurations (threshold=1, total=1) and passes them
+# through untouched; it is not the place to enforce a larger minimum.
 MIN_THRESHOLD = 1
 
 
