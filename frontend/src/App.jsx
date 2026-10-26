@@ -33,7 +33,9 @@ import {
   V3_UNLOCK_DESYNC,
 } from './services/vaultV3UnlockClassifier';
 import { decryptEnvelope, encryptEnvelope, hasVaultSessionKey } from './services/vaultEnvelope';
-import { LOGIN_VERIFIER_SCHEME, deriveAuthHash, deriveLoginVerifier } from './services/loginVerifier';
+import {
+  LEGACY_SIGN_IN_CONFIRMATION, LOGIN_VERIFIER_SCHEME, deriveAuthHash, deriveLoginVerifier,
+} from './services/loginVerifier';
 import VaultUnlockModal from './Components/auth/VaultUnlockModal';
 import zkProof from './services/zkProof';
 
@@ -1496,7 +1498,8 @@ function App() {
       // Password path — use JWT authentication from useAuth hook.
       await login({
         email: loginData.email,
-        password: loginData.password
+        password: loginData.password,
+        allowLegacyMigration: Boolean(loginData.allowLegacyMigration),
       });
 
       // Bootstrap an in-memory vault encryption key derived from the master
@@ -1734,6 +1737,20 @@ function App() {
       setError(null);
 
     } catch (err) {
+      // The verifier was rejected and this browser has not seen the account
+      // switch over. Only the user knows whether the account predates the
+      // verifier; the old password is sent once, and only if they say so.
+      if (err?.code === LEGACY_SIGN_IN_CONFIRMATION && !loginData.allowLegacyMigration) {
+        const confirmed = window.confirm(
+          'Sign-in failed. If this is your first sign-in since the sign-in security update, '
+          + 'press OK to check your password the old way once and upgrade your account. '
+          + 'Otherwise press Cancel and check your password.'
+        );
+        if (confirmed) {
+          await handleLogin({ ...loginData, allowLegacyMigration: true });
+          return;
+        }
+      }
       console.error('Login failed:', err);
       setError('Invalid email or password. Please try again.');
 

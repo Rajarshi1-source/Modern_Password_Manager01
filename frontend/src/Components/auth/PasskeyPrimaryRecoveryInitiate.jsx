@@ -2,16 +2,9 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import { FaKey, FaShieldAlt, FaCheckCircle, FaExclamationTriangle, FaUsers } from 'react-icons/fa';
-import axios from 'axios';
 import ApiService from '../../services/api';
 import toast from 'react-hot-toast';
 import { base64urlToArrayBuffer, arrayBufferToBase64url } from '../../utils/webauthnBase64';
-
-// The recovery grant lives in the server session that complete opens, so
-// complete and the registration that follows go to the same origin with
-// cookies (as passkey sign-in does).
-const RECOVERY_URL = '/api/auth/passkey-recovery';
-const withSession = { withCredentials: true };
 
 /**
  * Create the new passkey in the browser from the server's creation options
@@ -30,7 +23,9 @@ async function registerReplacementPasskey(options) {
       })),
     },
   });
-  const response = await axios.post(`${RECOVERY_URL}/register/complete/`, {
+  // The recovery grant lives in the server session that complete opened;
+  // ApiService sends these calls to the API origin with cookies.
+  const response = await ApiService.passkeyPrimaryRecovery.completeRegistration({
     id: credential.id,
     rawId: arrayBufferToBase64url(credential.rawId),
     type: credential.type,
@@ -39,7 +34,7 @@ async function registerReplacementPasskey(options) {
       attestationObject: arrayBufferToBase64url(credential.response.attestationObject),
     },
     clientExtensionResults: credential.getClientExtensionResults(),
-  }, withSession);
+  });
   return response.data;
 }
 
@@ -282,10 +277,10 @@ const PasskeyPrimaryRecoveryInitiate = () => {
     setError('');
 
     try {
-      const response = await axios.post(`${RECOVERY_URL}/complete/`, {
+      const response = await ApiService.passkeyPrimaryRecovery.completeRecovery({
         recovery_attempt_id: recoveryAttemptId,
         recovery_key: recoveryKey.replace(/-/g, '') // Remove hyphens
-      }, withSession);
+      });
 
       setRecoveryKey('');
       setRegistrationOptions(response.data.registration_options);
@@ -316,7 +311,7 @@ const PasskeyPrimaryRecoveryInitiate = () => {
       if (!options) {
         // A cancelled or failed ceremony: ask for fresh options while the
         // recovery grant is still valid.
-        const again = await axios.post(`${RECOVERY_URL}/register/begin/`, {}, withSession);
+        const again = await ApiService.passkeyPrimaryRecovery.beginRegistration();
         options = again.data.registration_options;
       }
       setRegistrationOptions(null); // options are single-use
