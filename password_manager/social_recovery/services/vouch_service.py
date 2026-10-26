@@ -22,6 +22,8 @@ from ..models import (
     VouchAttestation,
     Voucher,
 )
+from auth_module.recovery_notice import notify as notify_recovery
+
 from .audit_service import record_event
 from .stake_service import commit_stake
 from .web_of_trust_service import evaluate_quorum
@@ -150,6 +152,8 @@ def initiate_request(
         risk_score=float(risk_score or 0.0),
         expires_at=timezone.now() + ttl,
     )
+
+    notify_recovery(circle.user, "social_recovery_started")
 
     record_event(
         event_type="request_initiated",

@@ -15,7 +15,6 @@ from vault.models import AuditLog
 import os
 import logging
 import base64
-import hmac
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
@@ -23,6 +22,8 @@ from django.utils.encoding import force_bytes
 from django.db import transaction
 from .firebase import create_custom_token
 from .tasks import send_password_reset_email
+from .auth_hash import check_auth_hash, make_auth_hash_record, verify_and_upgrade
+from .recovery_notice import notify as notify_recovery
 from .services.authy_service import authy_service
 from django.utils import timezone
 from datetime import timedelta
@@ -95,11 +96,12 @@ class AuthViewSet(viewsets.ViewSet):
             salt = os.urandom(16)
             auth_hash = base64.b64decode(request.data.get('auth_hash', ''))
             
-            # Store salt with user
+            # Store salt with user; auth_hash as a password-hasher record,
+            # never as sent (auth_module/auth_hash.py)
             UserSalt.objects.create(
                 user=user, 
                 salt=salt,
-                auth_hash=auth_hash
+                auth_hash=make_auth_hash_record(auth_hash) if auth_hash else b''
             )
             
             # Generate authentication token (legacy)
@@ -319,8 +321,8 @@ class AuthViewSet(viewsets.ViewSet):
             try:
                 salt_obj = UserSalt.objects.get(user=request.user)
                 
-                # Compare with stored auth hash
-                is_valid = auth_hash == salt_obj.auth_hash
+                # Compare with the stored record
+                is_valid = verify_and_upgrade(salt_obj, auth_hash)
                 
                 return success_response({'is_valid': is_valid})
                 
@@ -357,12 +359,12 @@ class AuthViewSet(viewsets.ViewSet):
 
                 # Verify current password (constant time)
                 current_auth_hash_bytes = base64.b64decode(current_auth_hash)
-                if not hmac.compare_digest(current_auth_hash_bytes, bytes(salt_obj.auth_hash)):
+                if not check_auth_hash(salt_obj.auth_hash, current_auth_hash_bytes):
                     return Response({'error': 'Current master password is incorrect'}, 
                                   status=status.HTTP_400_BAD_REQUEST)
 
                 # Update to new password
-                salt_obj.auth_hash = base64.b64decode(new_auth_hash)
+                salt_obj.auth_hash = make_auth_hash_record(base64.b64decode(new_auth_hash))
                 salt_obj.save()
                 set_login_verifier(request.user, new_login_verifier)
             
@@ -896,13 +898,14 @@ class AuthViewSet(viewsets.ViewSet):
                 if username.strip().lower() != user.username.strip().lower():
                     return Response({'error': 'This is not the account the reset link was sent for'},
                                   status=status.HTTP_400_BAD_REQUEST)
-                salt_obj.auth_hash = base64.b64decode(new_auth_hash)
+                salt_obj.auth_hash = make_auth_hash_record(base64.b64decode(new_auth_hash))
                 salt_obj.reset_generation += 1
                 salt_obj.save(update_fields=['auth_hash', 'reset_generation'])
                 # Also changes the Django password the base token covers, so
                 # the link is spent twice over.
                 set_login_verifier(user, new_login_verifier)
                 revoke_sessions(user)
+                notify_recovery(user, 'reset_completed', request)
             
             # Enhanced security analysis for password reset - Option B: Parallel services
             try:

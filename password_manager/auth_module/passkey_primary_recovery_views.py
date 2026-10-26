@@ -39,6 +39,8 @@ from shared.client_ip import get_client_ip
 from shared.log_safe import log_safe
 
 User = get_user_model()
+from .recovery_notice import notify as notify_recovery
+from .tasks import notify_passkey_recovery_started
 logger = logging.getLogger(__name__)
 recovery_service = PasskeyPrimaryRecoveryService()
 
@@ -327,6 +329,10 @@ def initiate_primary_passkey_recovery(request):
         ).exists()
         if not user:
             logger.warning(log_safe(f"Recovery initiated for non-existent user: {username_or_email}"))
+        # Enqueued for every request; the task notifies only an account with
+        # a backup, so the response and its timing stay the same.
+        notify_passkey_recovery_started.delay(
+            username_or_email, _get_client_ip(request), request.META.get('HTTP_USER_AGENT', ''))
 
         # The same answer, and no write, whether or not the account exists
         # or has backups; the attempt row is created by complete
@@ -459,6 +465,7 @@ def complete_primary_passkey_recovery(request):
                     )
                     _revoke_lost_passkey(user, bytes(matching_backup.passkey_credential_id))
                     registration_options = _begin_recovery_registration(request, user)
+                    notify_recovery(user, 'passkey_recovery_completed', request)
         except Exception:
             request.session.pop(RECOVERY_REGISTRATION_STATE_KEY, None)
             raise

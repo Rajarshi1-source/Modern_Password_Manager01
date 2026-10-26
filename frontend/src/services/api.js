@@ -181,6 +181,13 @@ const ApiService = {
     getRecoveryStatus: () => api.get('/auth/passkey-recovery/status/'),
   },
   
+  // Recovery notices: the in-app list and the "this wasn't me" link from
+  // their emails (auth_module/recovery_notice.py)
+  recoveryNotices: {
+    list: () => api.get('/auth/recovery-notices/'),
+    cancel: (token) => api.post('/auth/recovery-notices/cancel/', { token }, { _noAuthRedirect: true }),
+  },
+
   // Quantum Recovery (Social Mesh) endpoints
   // (the routes in auth_module/urls.py; guardian listing, invitation and
   // revocation have no backend route, so they have no client call)

@@ -341,6 +341,42 @@ class LoginVerifierState(models.Model):
         return f"Login verifier ({self.scheme}) for {self.user.username}"
 
 
+class RecoveryNotice(models.Model):
+    """An email and in-app notice of a recovery or reset on the account, with
+    a "this wasn't me" link valid until ``cancel_until`` (see
+    ``auth_module/recovery_notice.py``). Only a SHA-256 of the link's token is
+    stored."""
+    EVENTS = (
+        ('reset_requested', 'Password reset requested'),
+        ('reset_completed', 'Password reset completed'),
+        ('recovery_completed', 'Vault recovery completed'),
+        ('passkey_recovery_started', 'Passkey recovery started'),
+        ('passkey_recovery_completed', 'Passkey recovery completed'),
+        ('guardian_recovery_started', 'Guardian recovery started'),
+        ('guardian_recovery_completed', 'Guardian recovery completed'),
+        ('social_recovery_started', 'Social recovery started'),
+        ('social_recovery_completed', 'Social recovery completed'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='recovery_notices')
+    event = models.CharField(max_length=32, choices=EVENTS)
+    created_at = models.DateTimeField(default=timezone.now)
+    cancel_until = models.DateTimeField()
+    cancel_token_hash = models.CharField(max_length=64, unique=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=512, blank=True, default='')
+    email_sent = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['user', '-created_at'])]
+
+    def __str__(self):
+        return f"{self.event} notice for {self.user.username}"
+
+
 class PushAuth(models.Model):
     """Model for storing push authentication requests"""
     STATUS_CHOICES = (

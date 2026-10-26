@@ -39,6 +39,7 @@ from .quantum_recovery_models import (
     RecoveryShardType
 )
 from .services.kyber_crypto import DEFAULT_KEM, ml_kem_768_public_key_is_valid
+from .recovery_notice import notify as notify_recovery
 from .services.quantum_crypto_service import quantum_crypto_service
 
 logger = logging.getLogger(__name__)
@@ -403,6 +404,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 # Send canary alert to user
                 attempt.canary_alert_sent_at = timezone.now()
                 attempt.save()
+                notify_recovery(user, 'guardian_recovery_started', request)
                 
                 # Create temporal challenges (will be sent via Celery tasks)
                 # In production, trigger Celery task here
@@ -832,6 +834,8 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 # Generate recovery token for passkey re-registration
                 recovery_token = secrets.token_urlsafe(64)
                 
+                notify_recovery(recovery_setup.user, 'guardian_recovery_completed', request)
+
                 # Mark recovery as complete
                 attempt.status = 'completed'
                 attempt.recovery_successful = True
