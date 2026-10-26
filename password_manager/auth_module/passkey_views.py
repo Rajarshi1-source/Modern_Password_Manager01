@@ -1,18 +1,22 @@
 import json
-import base64
-import secrets
 import logging
 from django.http import JsonResponse
 from django.contrib.auth.models import User
 from django.contrib.auth import login
 from django.utils import timezone
+from django.utils.crypto import salted_hmac
 from fido2.webauthn import (
+    Aaguid,
+    AttestedCredentialData,
+    AuthenticationResponse,
+    PublicKeyCredentialDescriptor,
     PublicKeyCredentialRpEntity,
+    PublicKeyCredentialType,
     PublicKeyCredentialUserEntity,
-    PublicKeyCredentialParameters,
-    UserVerificationRequirement
+    UserVerificationRequirement,
 )
-from fido2.utils import websafe_decode, websafe_encode
+from fido2.cose import CoseKey
+from fido2.utils import websafe_encode
 from fido2 import cbor
 from fido2.server import Fido2Server
 from .models import UserPasskey
@@ -27,22 +31,6 @@ from django.conf import settings
 
 # Setup logging
 logger = logging.getLogger('auth_module')
-
-# Store challenges in session for security
-def store_challenge(request, challenge):
-    if 'webauthn_challenges' not in request.session:
-        request.session['webauthn_challenges'] = []
-    
-    request.session['webauthn_challenges'].append(challenge)
-
-def get_and_remove_challenge(request):
-    challenges = request.session.get('webauthn_challenges', [])
-    if not challenges:
-        return None
-    
-    challenge = challenges.pop(0)
-    request.session['webauthn_challenges'] = challenges
-    return challenge
 
 # ==============================================================================
 # FIDO2 Server Configuration
@@ -98,357 +86,314 @@ def verify_origin_custom(origin):
 # Create FIDO2 server with origin verification enabled
 server = Fido2Server(
     rp=rp,
-    verify_origin=verify_origin_custom if (ALLOWED_ORIGINS or settings.DEBUG) else True
+    # None falls back to fido2's own check of the origin against RP_ID.
+    verify_origin=verify_origin_custom if (ALLOWED_ORIGINS or settings.DEBUG) else None
 )
+server.timeout = TIMEOUT
 
 # Import custom throttling classes
 from password_manager.throttling import PasskeyThrottle
 from shared.log_safe import log_safe
 
+# Session keys holding the fido2 ``state`` between begin and complete. The
+# state is the challenge plus the requested user-verification level; it is
+# single-use and is popped before anything else in the matching complete.
+REGISTRATION_STATE_KEY = 'passkey_registration'
+AUTHENTICATION_STATE_KEY = 'passkey_authentication'
+
+# Passkey sign-in only proves who the caller is. Nothing here holds or returns
+# vault key material: the server keeps each credential's public key and sign
+# count, and the vault stays locked until the client derives its key from the
+# master password.
+
+AUTHENTICATION_FAILED = "Authentication failed."
+
+
+def _authentication_failed():
+    """The one answer complete gives for every failure after the session state
+    was found -- unknown account, decoy credential, unknown credential, bad
+    signature, counter regression -- so it never says which one it was."""
+    return error_response(
+        AUTHENTICATION_FAILED,
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        code="passkey_auth_failed",
+    )
+
+
+def _normalize_email(email):
+    return email.strip().lower()
+
+
+def _decoy_credential_id(email):
+    """A stable, secret-keyed stand-in credential id for an email with no
+    usable passkey, so begin's answer does not reveal whether the account or a
+    passkey exists. Derived on demand from SECRET_KEY; never stored."""
+    return salted_hmac(
+        'auth_module.passkey.decoy_credential_id',
+        _normalize_email(email),
+        algorithm='sha256',
+    ).digest()
+
+
+def _attested_credential(passkey):
+    """Rebuild the fido2 credential from the stored id and COSE public key."""
+    return AttestedCredentialData.create(
+        Aaguid.NONE,
+        bytes(passkey.credential_id),
+        CoseKey.parse(cbor.decode(bytes(passkey.public_key))),
+    )
+
+
+def _descriptor(credential_id):
+    return PublicKeyCredentialDescriptor(
+        type=PublicKeyCredentialType.PUBLIC_KEY, id=credential_id
+    )
+
+
+def _authentication_payload(data):
+    """Only the WebAuthn fields fido2 parses, so stray client keys cannot make
+    ``AuthenticationResponse.from_dict`` fail differently per account."""
+    response = data.get('response') or {}
+    payload = {
+        'id': data.get('id'),
+        'rawId': data.get('rawId'),
+        'type': data.get('type', 'public-key'),
+        'response': {
+            'clientDataJSON': response.get('clientDataJSON'),
+            'authenticatorData': response.get('authenticatorData'),
+            'signature': response.get('signature'),
+        },
+        'clientExtensionResults': data.get('clientExtensionResults') or {},
+    }
+    if response.get('userHandle'):
+        payload['response']['userHandle'] = response['userHandle']
+    return payload
+
+
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 @throttle_classes([PasskeyThrottle])
 def webauthn_begin_registration(request):
-    """Begin WebAuthn registration process"""
+    """Begin registering a passkey for the signed-in user."""
     try:
-        email = request.data.get('email')
-        if not email:
-            return error_response("Email is required", status_code=status.HTTP_400_BAD_REQUEST)
-        
-        user = User.objects.filter(email=email).first()
-        if not user:
-            return error_response("User not found", status_code=status.HTTP_404_NOT_FOUND)
-        
-        # Check if user already has a passkey
-        existing_passkey = UserPasskey.objects.filter(user=user).first()
-        if existing_passkey:
+        user = request.user
+
+        # One passkey per account.
+        if UserPasskey.objects.filter(user=user).exists():
             return error_response(
                 "User already has a registered passkey",
                 status_code=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Create a user entity for the WebAuthn registration
+
         user_entity = PublicKeyCredentialUserEntity(
             id=str(user.id).encode(),
             name=user.username,
-            display_name=user.email
+            display_name=user.email or user.username,
         )
-        
-        # Generate registration options
-        registration_options = server.register_begin(
+
+        options, state = server.register_begin(
             user=user_entity,
             credentials=[],
             user_verification=UserVerificationRequirement.PREFERRED,
-            authenticator_attachment="platform"
+            authenticator_attachment=AUTHENTICATOR_ATTACHMENT,
         )
-        
-        # Store challenge in session
-        request.session['registration_challenge'] = websafe_encode(registration_options.challenge)
-        request.session['registration_user_id'] = user.id
-        
-        # Convert to JSON-compatible format
-        registration_options_dict = dict(registration_options)
-        registration_options_dict['challenge'] = websafe_encode(registration_options.challenge)
-        registration_options_dict['user']['id'] = websafe_encode(registration_options_dict['user']['id'])
-        
-        # Ensure proper format for pubKeyCredParams
-        registration_options_dict['pubKeyCredParams'] = [
-            {
-                'alg': -7,  # ES256
-                'type': 'public-key'
-            },
-            {
-                'alg': -257,  # RS256
-                'type': 'public-key'
-            }
-        ]
-        
-        return success_response(registration_options_dict)
-        
+
+        request.session[REGISTRATION_STATE_KEY] = {'state': state, 'user_id': user.id}
+
+        return success_response(dict(options.public_key))
+
     except Exception:
         logger.exception("WebAuthn operation failed")
         return error_response("An unexpected error occurred.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 @throttle_classes([PasskeyThrottle])
 def webauthn_complete_registration(request):
-    """Complete WebAuthn registration process"""
+    """Complete registering a passkey for the signed-in user."""
     try:
-        # Get data from request
         data = request.data
-        
-        # Get stored challenge and user ID from session
-        challenge = request.session.get('registration_challenge')
-        user_id = request.session.get('registration_user_id')
-        
-        if not challenge or not user_id:
-            logger.warning(f"Registration session expired for user_id={user_id}")
+        pending = request.session.pop(REGISTRATION_STATE_KEY, None)
+
+        # The state must belong to the account that is completing it.
+        if not pending or pending.get('user_id') != request.user.id:
             return error_response(
                 "Registration session expired or invalid",
                 status_code=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Get user from database
+        user = request.user
+
+        response = data.get('response') or {}
+        payload = {
+            'id': data.get('id'),
+            'rawId': data.get('rawId'),
+            'type': data.get('type', 'public-key'),
+            'response': {
+                'clientDataJSON': response.get('clientDataJSON'),
+                'attestationObject': response.get('attestationObject'),
+            },
+            'clientExtensionResults': data.get('clientExtensionResults') or {},
+        }
+
         try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            logger.error(f"User not found: {user_id}")
-            return error_response(
-                "User not found",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-        
-        # Validate incoming data
-        if not all([
-            data.get('id'),
-            data.get('rawId'),
-            data.get('response', {}).get('attestationObject'),
-            data.get('response', {}).get('clientDataJSON')
-        ]):
-            logger.warning(f"Incomplete registration data for user {user.username}")
-            return error_response(
-                "Incomplete credential data",
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Complete registration with origin verification
-        try:
-            auth_data = server.register_complete(
-                challenge=websafe_decode(challenge),
-                attestation_object=websafe_decode(data['response']['attestationObject']),
-                client_data=websafe_decode(data['response']['clientDataJSON'])
-            )
-        except ValueError as e:
-            logger.error(f"Registration verification failed for user {user.username}: {str(e)}")
+            auth_data = server.register_complete(pending['state'], payload)
+        except Exception:
+            logger.warning("Passkey registration verification failed", exc_info=True)
             return error_response(
                 "Passkey verification failed",
                 status_code=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Store credential in database with all required fields
-        credential_id = websafe_encode(auth_data.credential_data.credential_id)
-        public_key = auth_data.credential_data.public_key
-        sign_count = auth_data.sign_count
-        device_type = data.get('device_type', 'Unknown Device')
-        
-        # Check if credential already exists
+
+        credential = auth_data.credential_data
+        credential_id = bytes(credential.credential_id)
+        device_type = str(data.get('device_type') or 'Unknown Device')[:255]
+
         if UserPasskey.objects.filter(credential_id=credential_id).exists():
-            logger.warning(f"Duplicate credential attempted for user {user.username}")
             return error_response(
                 "This passkey is already registered",
                 status_code=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Create the passkey record
-        # Note: credential_id needs to be stored as bytes for BinaryField
+
+        # Only public material is stored: the credential id, the COSE public
+        # key (CBOR-encoded) and the authenticator's signature counter.
         passkey = UserPasskey.objects.create(
             user=user,
-            credential_id=websafe_decode(credential_id),  # Store as bytes
-            public_key=public_key,
-            sign_count=sign_count,
+            credential_id=credential_id,
+            public_key=cbor.encode(credential.public_key),
+            sign_count=auth_data.counter,
             rp_id=RP_ID,
-            device_type=device_type
-            # created_at is set automatically by auto_now_add
+            device_type=device_type,
         )
-        
-        logger.info(log_safe(f"Passkey registered successfully for user {user.username} (device: {device_type})"))
-        
-        # Clear session data
-        if 'registration_challenge' in request.session:
-            del request.session['registration_challenge']
-        if 'registration_user_id' in request.session:
-            del request.session['registration_user_id']
-        
+
+        logger.info(log_safe(f"Passkey registered for user_id={user.id} (device: {device_type})"))
+
         return success_response({
             "success": True,
             "message": "Passkey registered successfully",
             "passkey_id": passkey.id,
             "device_type": device_type
         })
-        
-    except Exception as e:
-        logger.error(f"Unexpected error during passkey registration: {str(e)}", exc_info=True)
+
+    except Exception:
+        logger.exception("Unexpected error during passkey registration")
         return error_response(
             "Registration failed. Please try again.",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
 @api_view(['POST'])
+@permission_classes([AllowAny])
 @throttle_classes([PasskeyThrottle])
 def webauthn_begin_authentication(request):
-    """Begin WebAuthn authentication process"""
+    """Begin passkey sign-in.
+
+    Takes ``email``, or falls back to the signed-in user for re-authentication.
+    Every email gets the same answer: a known account with a passkey gets its
+    real credential id, anything else a decoy id of the same shape, and in both
+    cases the fido2 state goes into the session.
+    """
     try:
         email = request.data.get('email')
-        
-        if not email:
-            return error_response("Email is required", status_code=status.HTTP_400_BAD_REQUEST)
-        
-        user = User.objects.filter(email=email).first()
-        
-        if not user:
-            return error_response("User not found", status_code=status.HTTP_404_NOT_FOUND)
-        
-        # Get user's passkeys
-        passkeys = UserPasskey.objects.filter(user=user)
-        
-        if not passkeys.exists():
-            return error_response(
-                "No passkeys registered for this user",
-                status_code=status.HTTP_400_BAD_REQUEST
+        if isinstance(email, str) and email.strip():
+            lookup = _normalize_email(email)
+            user = (
+                User.objects.filter(email__iexact=lookup, is_active=True)
+                .order_by('pk')
+                .first()
             )
-        
-        # Convert credential IDs to allow list
-        allow_credentials = [{
-            'id': websafe_decode(passkey.credential_id),
-            'type': 'public-key',
-        } for passkey in passkeys]
-        
-        # Generate authentication options
-        auth_options = server.authenticate_begin(
-            credentials=allow_credentials,
-            user_verification=UserVerificationRequirement.PREFERRED
+        elif request.user.is_authenticated:
+            user = request.user
+            lookup = _normalize_email(user.email or str(user.pk))
+        else:
+            return error_response("Email is required", status_code=status.HTTP_400_BAD_REQUEST)
+
+        credential_ids = []
+        if user is not None:
+            credential_ids = [
+                bytes(cid) for cid in
+                UserPasskey.objects.filter(user=user).values_list('credential_id', flat=True)
+            ]
+        if not credential_ids:
+            user = None
+            credential_ids = [_decoy_credential_id(lookup)]
+
+        options, state = server.authenticate_begin(
+            credentials=[_descriptor(cid) for cid in credential_ids],
+            user_verification=UserVerificationRequirement.PREFERRED,
         )
-        
-        # Store challenge in session
-        request.session['authentication_challenge'] = websafe_encode(auth_options.challenge)
-        request.session['authentication_user_id'] = user.id
-        
-        # Convert to JSON-compatible format
-        auth_options_dict = dict(auth_options)
-        auth_options_dict['challenge'] = websafe_encode(auth_options.challenge)
-        auth_options_dict['allowCredentials'] = [{
-            'id': websafe_encode(cred['id']),
-            'type': cred['type'],
-        } for cred in auth_options_dict['allowCredentials']]
-        
-        return success_response(auth_options_dict)
-        
+
+        request.session[AUTHENTICATION_STATE_KEY] = {
+            'state': state,
+            'user_id': user.id if user is not None else None,
+        }
+
+        return success_response(dict(options.public_key))
+
     except Exception:
         logger.exception("WebAuthn operation failed")
         return error_response("An unexpected error occurred.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
 @api_view(['POST'])
+@permission_classes([AllowAny])
 @throttle_classes([PasskeyThrottle])
 def webauthn_complete_authentication(request):
-    """Complete WebAuthn authentication process"""
+    """Complete passkey sign-in and issue session and JWT tokens."""
     try:
-        # Get data from request
-        data = request.data
-        
-        # Get stored challenge and user ID from session
-        challenge = request.session.get('authentication_challenge')
-        user_id = request.session.get('authentication_user_id')
-        
-        if not challenge or not user_id:
-            logger.warning(f"Authentication session expired for user_id={user_id}")
+        pending = request.session.pop(AUTHENTICATION_STATE_KEY, None)
+        if not pending:
             return error_response(
                 "Authentication session expired or invalid",
                 status_code=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Get user from database
+
+        user = None
+        if pending.get('user_id') is not None:
+            user = User.objects.filter(id=pending['user_id'], is_active=True).first()
+
+        passkeys = list(UserPasskey.objects.filter(user=user)) if user else []
+        credentials = []
+        for passkey in passkeys:
+            try:
+                credentials.append(_attested_credential(passkey))
+            except Exception:
+                logger.warning("Stored passkey %s could not be parsed", passkey.pk)
+
         try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            logger.error(f"User not found: {user_id}")
-            return error_response(
-                "User not found",
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-        
-        # Validate incoming data
-        credential_id = data.get('id')
-        if not credential_id:
-            logger.warning(f"Missing credential ID for user {user.username}")
-            return error_response(
-                "Missing credential ID",
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Find the corresponding passkey
-        # credential_id is stored as bytes in BinaryField
-        credential_id_bytes = websafe_decode(credential_id)
-        passkey = UserPasskey.objects.filter(user=user, credential_id=credential_id_bytes).first()
-        
-        if not passkey:
-            logger.warning(f"Invalid credential attempted for user {user.username}")
-            return error_response(
-                "Invalid credential",
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Validate response data
-        if not all([
-            data.get('rawId'),
-            data.get('response', {}).get('authenticatorData'),
-            data.get('response', {}).get('clientDataJSON'),
-            data.get('response', {}).get('signature')
-        ]):
-            logger.warning(f"Incomplete authentication data for user {user.username}")
-            return error_response(
-                "Incomplete authentication data",
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Complete authentication with origin verification
-        try:
-            auth_data = server.authenticate_complete(
-                challenge=websafe_decode(challenge),
-                credential_id=websafe_decode(data['rawId']),
-                credential_type=data.get('type', 'public-key'),
-                authenticator_data=websafe_decode(data['response']['authenticatorData']),
-                client_data=websafe_decode(data['response']['clientDataJSON']),
-                signature=websafe_decode(data['response']['signature']),
-                user_handle=websafe_decode(data['response']['userHandle']) if data.get('response', {}).get('userHandle') else None,
-                credential_public_key=passkey.public_key,
-                credential_current_sign_count=passkey.sign_count
-            )
-        except ValueError as e:
-            logger.error(f"Authentication verification failed for user {user.username}: {str(e)}")
-            return error_response(
-                "Authentication failed. Invalid signature.",
-                status_code=status.HTTP_401_UNAUTHORIZED
-            )
-        except Exception as e:
-            logger.error(f"Unexpected authentication error for user {user.username}: {str(e)}")
-            return error_response(
-                "Authentication failed. Please try again.",
-                status_code=status.HTTP_401_UNAUTHORIZED
-            )
-        
-        # Verify sign count to prevent replay attacks
-        new_sign_count = auth_data.new_sign_count
-        if new_sign_count <= passkey.sign_count:
-            logger.error(f"Sign count verification failed for user {user.username}. "
-                        f"Expected > {passkey.sign_count}, got {new_sign_count}")
-            # This could indicate a cloned authenticator or replay attack
-            return error_response(
-                "Authentication failed. Possible security issue detected.",
-                status_code=status.HTTP_401_UNAUTHORIZED
-            )
-        
-        # Update passkey metadata
-        passkey.sign_count = new_sign_count
-        passkey.last_used_at = timezone.now()
-        passkey.save()
-        
-        logger.info(log_safe(f"Passkey authentication successful for user {user.username} "
-                   f"(device: {passkey.device_type})"))
-        
-        # Log in the user (for session-based auth)
-        login(request, user)
-        
-        # Generate JWT tokens for API access
+            response = AuthenticationResponse.from_dict(_authentication_payload(request.data))
+            matched = server.authenticate_complete(pending['state'], credentials, response)
+        except Exception:
+            return _authentication_failed()
+
+        passkey = next(
+            p for p in passkeys if bytes(p.credential_id) == matched.credential_id
+        )
+
+        # Signature counter: authenticators that do not count (synced passkeys)
+        # report 0 every time; any other counter must strictly increase. The
+        # conditional update keeps two concurrent completes from both passing.
+        counter = response.response.authenticator_data.counter
+        now = timezone.now()
+        if counter == 0 and passkey.sign_count == 0:
+            UserPasskey.objects.filter(pk=passkey.pk).update(last_used_at=now)
+        else:
+            updated = UserPasskey.objects.filter(
+                pk=passkey.pk, sign_count__lt=counter
+            ).update(sign_count=counter, last_used_at=now)
+            if not updated:
+                logger.warning("Passkey %s signature counter did not increase", passkey.pk)
+                return _authentication_failed()
+
+        logger.info(f"Passkey authentication successful for user_id={user.id}")
+
+        # Log in the user (for session-based auth). Two auth backends are
+        # configured, so login() needs to be told which one vouched.
+        login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+
         refresh = RefreshToken.for_user(user)
-        access_token = str(refresh.access_token)
-        refresh_token = str(refresh)
-        
-        # Clear session data
-        if 'authentication_challenge' in request.session:
-            del request.session['authentication_challenge']
-        if 'authentication_user_id' in request.session:
-            del request.session['authentication_user_id']
-        
-        # Return success with tokens
+
         return success_response({
             "success": True,
             "message": "Authentication successful",
@@ -458,13 +403,13 @@ def webauthn_complete_authentication(request):
                 "email": user.email
             },
             "tokens": {
-                "access": access_token,
-                "refresh": refresh_token
+                "access": str(refresh.access_token),
+                "refresh": str(refresh)
             }
         })
-        
-    except Exception as e:
-        logger.error(f"Unexpected error during passkey authentication: {str(e)}", exc_info=True)
+
+    except Exception:
+        logger.exception("Unexpected error during passkey authentication")
         return error_response(
             "Authentication failed. Please try again.",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -484,7 +429,7 @@ def list_passkeys(request):
                 'device_type': passkey.device_type or 'Unknown Device',
                 'created_at': passkey.created_at.isoformat(),
                 'last_used_at': passkey.last_used_at.isoformat() if passkey.last_used_at else None,
-                'credential_id': websafe_encode(passkey.credential_id),  # Convert bytes to base64
+                'credential_id': websafe_encode(bytes(passkey.credential_id)),  # Convert bytes to base64
             })
         
         logger.info(f"Listed {len(passkeys_list)} passkeys for user {request.user.username}")
