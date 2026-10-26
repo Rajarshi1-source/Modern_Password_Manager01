@@ -754,6 +754,15 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             with transaction.atomic():
+                # Lock the attempt and check its status again: a cancel (from
+                # a recovery notice or the canary) that landed after the
+                # check above must stop the completion, not be overwritten.
+                attempt = RecoveryAttempt.objects.select_for_update().get(pk=attempt.pk)
+                if attempt.status not in ['shard_collection', 'guardian_approval', 'final_verification']:
+                    return Response({
+                        'error': 'Recovery not ready for completion'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
                 # Decrypt and collect shards
                 decrypted_shards = []
                 

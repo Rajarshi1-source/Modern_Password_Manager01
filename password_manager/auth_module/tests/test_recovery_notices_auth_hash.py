@@ -301,3 +301,86 @@ class CompletionNoticeTests(TestCase):
         self.assertTrue(cancel_from_notice(token))
         self.assertEqual(SocialRecoveryRequest.objects.get(pk=request.pk).status, 'cancelled')
         self.assertFalse(cancel_from_notice(token))  # once
+
+
+@override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+class NoticeCancelRaceTests(TestCase):
+    """Review fixes: a cancel must stop recoveries whose state is not stored
+    yet or is in flight, and a broker outage must not break a recovery."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = User.objects.create_user('owner', 'owner@example.com', VERIFIER)
+        UserSalt.objects.create(user=self.user, salt=os.urandom(16),
+                                auth_hash=make_auth_hash_record(RAW))
+        self.anon = APIClient()
+
+    def _passkey_backup(self):
+        from auth_module.models import UserPasskey
+        UserPasskey.objects.create(user=self.user, credential_id=b'cred-1',
+                                   public_key=b'pk-bytes', rp_id='localhost')
+        authed = APIClient()
+        authed.force_authenticate(self.user)
+        r = authed.post('/api/auth/passkey-recovery/setup/',
+                        {'passkey_credential_id': b'cred-1'.hex()}, format='json')
+        self.assertEqual(r.status_code, 201, r.content)
+        return r.json()['recovery_key']
+
+    def _passkey_token(self):
+        r = self.anon.post('/api/auth/passkey-recovery/initiate/',
+                           {'username_or_email': 'owner'}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()['recovery_attempt_id']
+
+    def _cancelled_notice(self, at):
+        return RecoveryNotice.objects.create(
+            user=self.user, event='passkey_recovery_started', cancel_until=at + timedelta(hours=1),
+            cancel_token_hash=os.urandom(32).hex(), cancelled_at=at)
+
+    def _complete(self, token, key):
+        return self.anon.post('/api/auth/passkey-recovery/complete/', {
+            'recovery_attempt_id': token, 'recovery_key': key}, format='json')
+
+    def test_a_cancel_voids_a_passkey_token_issued_before_it(self):
+        key = self._passkey_backup()
+        token = self._passkey_token()
+        # Cancelled after the token was issued; no attempt row exists yet.
+        self._cancelled_notice(timezone.now() + timedelta(seconds=1))
+        self.assertEqual(self._complete(token, key).status_code, 401)
+
+    def test_a_token_issued_after_a_cancel_still_works(self):
+        key = self._passkey_backup()
+        self._cancelled_notice(timezone.now() - timedelta(seconds=5))
+        r = self._complete(self._passkey_token(), key)
+        self.assertEqual(r.status_code, 200, r.content)
+
+    def test_guardian_completion_does_not_overwrite_a_cancel(self):
+        from auth_module.quantum_recovery_models import PasskeyRecoverySetup, RecoveryAttempt
+        setup = PasskeyRecoverySetup.objects.create(user=self.user, total_shards=3,
+                                                    threshold_shards=2, is_active=True)
+        attempt = RecoveryAttempt.objects.create(
+            recovery_setup=setup, status='shard_collection', initiated_from_ip='127.0.0.1',
+            shards_required=2, guardian_approvals_required=2, trust_score=0.95,
+            expires_at=timezone.now() + timedelta(days=1))
+        stale = RecoveryAttempt.objects.get(pk=attempt.pk)
+        # A cancel lands after the view read the attempt.
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(status='cancelled')
+        authed = APIClient()
+        authed.force_authenticate(self.user)
+        with patch('auth_module.quantum_recovery_views.get_object_or_404', return_value=stale):
+            r = authed.post('/api/auth/quantum-recovery/complete_recovery/', {
+                'attempt_id': str(attempt.pk),
+                'collected_shards': [{'shard_id': 'x'}, {'shard_id': 'y'}]}, format='json')
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertEqual(RecoveryAttempt.objects.get(pk=attempt.pk).status, 'cancelled')
+
+    def test_a_broker_outage_neither_breaks_a_recovery_nor_loses_the_notice(self):
+        from auth_module.recovery_notice import notify
+        with patch.object(send_recovery_notice, 'delay', side_effect=OSError('broker down')), \
+                self.captureOnCommitCallbacks(execute=True):
+            notify(self.user, 'reset_completed')
+        RecoveryNotice.objects.get(user=self.user, event='reset_completed')
+        with patch.object(notify_passkey_recovery_started, 'delay',
+                          side_effect=OSError('broker down')):
+            self.assertEqual(self.anon.post('/api/auth/passkey-recovery/initiate/', {
+                'username_or_email': 'owner'}, format='json').status_code, 200)

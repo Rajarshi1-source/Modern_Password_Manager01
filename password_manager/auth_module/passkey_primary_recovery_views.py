@@ -10,7 +10,7 @@ from rest_framework import status
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 import base64
 import logging
 import json
@@ -39,6 +39,8 @@ from shared.client_ip import get_client_ip
 from shared.log_safe import log_safe
 
 User = get_user_model()
+from .recovery_notice import cancelled_since as recovery_cancelled_since
+from .recovery_notice import dispatch as dispatch_notice
 from .recovery_notice import notify as notify_recovery
 from .tasks import notify_passkey_recovery_started
 logger = logging.getLogger(__name__)
@@ -137,6 +139,12 @@ def _attempt_fernet():
 def _attempt_token(user_id):
     payload = struct.pack('>Q', user_id) + os.urandom(16)
     return _attempt_fernet().encrypt(payload).decode('ascii')
+
+
+def _token_issued_at(token):
+    """When ``token`` (already checked by _token_payload) was issued."""
+    seconds = _attempt_fernet().extract_timestamp(str(token).encode('ascii'))
+    return datetime.fromtimestamp(seconds, tz=dt_timezone.utc)
 
 
 def _token_payload(token):
@@ -331,8 +339,8 @@ def initiate_primary_passkey_recovery(request):
             logger.warning(log_safe(f"Recovery initiated for non-existent user: {username_or_email}"))
         # Enqueued for every request; the task notifies only an account with
         # a backup, so the response and its timing stay the same.
-        notify_passkey_recovery_started.delay(
-            username_or_email, _get_client_ip(request), request.META.get('HTTP_USER_AGENT', ''))
+        dispatch_notice(notify_passkey_recovery_started, username_or_email,
+                        _get_client_ip(request), request.META.get('HTTP_USER_AGENT', ''))
 
         # The same answer, and no write, whether or not the account exists
         # or has backups; the attempt row is created by complete
@@ -393,6 +401,11 @@ def complete_primary_passkey_recovery(request):
         # the completion throttle bound the retries.
         payload = _token_payload(recovery_attempt_id)
         recovery_attempt = None
+        # A token issued before a "this wasn't me" cancel is void, even
+        # though no attempt row exists for it yet.
+        if payload and payload[0] and recovery_cancelled_since(
+                payload[0], _token_issued_at(recovery_attempt_id)):
+            payload = None
         if payload and payload[0]:
             token_user_id, nonce = payload
             recovery_attempt, _ = PasskeyRecoveryAttempt.objects.get_or_create(

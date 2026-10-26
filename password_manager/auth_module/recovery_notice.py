@@ -118,7 +118,37 @@ def notify(user, event, request=None):
         from shared.client_ip import get_client_ip
         ip = get_client_ip(request)
         ua = request.META.get('HTTP_USER_AGENT', '')
-    transaction.on_commit(lambda: send_recovery_notice.delay(user.pk, event, ip, ua))
+    transaction.on_commit(lambda: dispatch(send_recovery_notice, user.pk, event, ip, ua))
+
+
+def dispatch(task, *args):
+    """Queue ``task``; if the broker is down, record the notice in-process.
+
+    Runs after the recovery or reset has committed, so a failure here must
+    not turn a completed recovery into an error response.
+    """
+    try:
+        task.delay(*args)
+    except Exception:
+        logger.exception('Could not queue %s; running it in-process', task.name)
+        try:
+            task.apply(args=args)
+        except Exception:
+            logger.exception('Recovery notice %s failed', task.name)
+
+
+def cancelled_since(user_id, when):
+    """True if a notice of ``user_id`` was cancelled at or after ``when``.
+
+    Lets a flow that has not stored its attempt yet (passkey recovery hands
+    out a token at initiate and creates the row at complete) honour a cancel
+    that happened after the token was issued.
+    """
+    from .models import RecoveryNotice
+
+    return RecoveryNotice.objects.filter(
+        user_id=user_id, cancelled_at__isnull=False, cancelled_at__gte=when,
+    ).exists()
 
 
 def _void_started_recovery(user):
