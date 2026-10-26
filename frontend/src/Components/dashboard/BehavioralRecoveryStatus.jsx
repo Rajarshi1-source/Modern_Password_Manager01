@@ -4,7 +4,7 @@
  * Displays behavioral recovery setup status in dashboard
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import styled, { keyframes } from 'styled-components';
 import { FaBrain, FaCheckCircle, FaClock } from 'react-icons/fa';
 import { useBehavioralRecovery } from '../../hooks/useBehavioralRecovery';
@@ -121,31 +121,6 @@ const InfoText = styled.p`
   margin: 12px 0;
 `;
 
-const Button = styled.button`
-  padding: 14px 24px;
-  background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%);
-  color: white;
-  border: none;
-  border-radius: 12px;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 14px ${colors.primary}40;
-  margin-top: 16px;
-
-  &:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px ${colors.primary}50;
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    box-shadow: none;
-  }
-`;
-
 const Stats = styled.div`
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -179,23 +154,7 @@ const BehavioralRecoveryStatus = () => {
     profileCompleteness,
     profileAge,
     recoveryReadiness,
-    createCommitments
   } = useBehavioralRecovery();
-
-  const [creating, setCreating] = useState(false);
-
-  const handleSetupRecovery = async () => {
-    setCreating(true);
-    try {
-      await createCommitments();
-      alert('Behavioral recovery set up successfully!');
-    } catch (error) {
-      console.error('Error setting up recovery:', error);
-      alert('Failed to set up behavioral recovery. Please try again.');
-    } finally {
-      setCreating(false);
-    }
-  };
 
   const getStatusIcon = () => {
     switch (recoveryReadiness.status) {
@@ -256,20 +215,17 @@ const BehavioralRecoveryStatus = () => {
       {recoveryReadiness.status === 'can_setup' && (
         <>
           <InfoText>
-            Your behavioral profile is ready! Set up behavioral recovery now to enable
-            AI-powered password recovery using your unique behavioral patterns.
+            Behavioral recovery is no longer available: it needed your raw behavioral
+            data on the server. Use your recovery key or your guardians instead.
           </InfoText>
-          <Button onClick={handleSetupRecovery} disabled={creating}>
-            {creating ? 'Setting up...' : 'Set Up Behavioral Recovery'}
-          </Button>
         </>
       )}
 
       {recoveryReadiness.status === 'ready' && (
         <>
           <InfoText>
-            ✅ Behavioral recovery is active. If you forget your password, you can recover
-            it by completing behavioral challenges that verify your identity through AI analysis.
+            Behavioral recovery is no longer available and cannot recover your account.
+            Use your recovery key or your guardians instead.
           </InfoText>
 
           {profileStats && (

@@ -115,6 +115,33 @@ describe('guardian recovery on the client', () => {
     expect(Array.from(seed)).toEqual(Array.from(new Uint8Array(32).fill(7)));
   });
 
+  it('skips a share that does not open and one of another length', async () => {
+    const guardians = await Promise.all([1, 2, 3, 4].map(() => newHolderKeyPair()));
+    const keys = guardians.map((g) => g.publicKey);
+    const setup = await sealSeedForGuardians({ seed: new Uint8Array(32).fill(9), threshold: 2, guardianPublicKeys: keys });
+    const requester = await newHolderKeyPair();
+    const stranger = await newHolderKeyPair();
+    const fingerprint = keyFingerprint(requester.publicKey);
+    const reseal = (i, to) => resealShareForRequester({
+      keyPair: guardians[i], sealedShare: setup.shares[i].sealedShare,
+      requesterPublicKey: to.publicKey, confirmedFingerprint: keyFingerprint(to.publicKey),
+    });
+    // Sealed to someone else: does not open for the requester.
+    const unopenable = await reseal(0, stranger);
+    // Opens, but is a share of a 16-byte secret: combining it fails.
+    const shortSetup = await sealSeedForGuardians({ seed: new Uint8Array(16).fill(1), threshold: 2, guardianPublicKeys: keys });
+    const wrongLength = await resealShareForRequester({
+      keyPair: guardians[1], sealedShare: shortSetup.shares[1].sealedShare,
+      requesterPublicKey: requester.publicKey, confirmedFingerprint: fingerprint,
+    });
+    const good = await Promise.all([2, 3].map((i) => reseal(i, requester)));
+    const seed = await recoverSeed({
+      keyPair: requester, sealedShares: [unopenable, wrongLength, 'not base64!', ...good],
+      threshold: 2, secretCheck: setup.secretCheck,
+    });
+    expect(Array.from(seed)).toEqual(Array.from(new Uint8Array(32).fill(9)));
+  });
+
   it('refuses a seed that does not match the seed check', async () => {
     const guardians = await Promise.all([1, 2].map(() => newHolderKeyPair()));
     const a = await sealSeedForGuardians({

@@ -34,6 +34,16 @@ function idbRequest(request) {
   });
 }
 
+// Resolves when the transaction commits; a request can succeed and its
+// transaction still abort (QuotaExceededError).
+function idbCommit(tx) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
+    tx.onerror = () => reject(tx.error || new Error('IndexedDB transaction failed'));
+  });
+}
+
 async function openDb() {
   if (typeof indexedDB === 'undefined') {
     throw new Error('This browser cannot store recovery keys securely (no IndexedDB).');
@@ -57,7 +67,10 @@ const indexedDbBackend = {
     try {
       // add(), not put(): if another tab stored a key first this fails and
       // the caller reads that key instead of replacing it.
-      await idbRequest(db.transaction(DB_STORE, 'readwrite').objectStore(DB_STORE).add(value, id));
+      const tx = db.transaction(DB_STORE, 'readwrite');
+      const committed = idbCommit(tx);
+      tx.objectStore(DB_STORE).add(value, id);
+      await committed;
     } finally {
       db.close();
     }
@@ -82,8 +95,13 @@ async function loadWrappingKey() {
   try {
     await backend.add(WRAPPING_KEY_ID, key);
     return key;
-  } catch {
-    return backend.get(WRAPPING_KEY_ID); // another tab won the race
+  } catch (err) {
+    // Another tab won the race: use its key. Anything else (quota, a
+    // blocked database) must fail here, not hand out a key that is not
+    // stored and cannot open what it seals after a reload.
+    const stored = await backend.get(WRAPPING_KEY_ID);
+    if (stored) return stored;
+    throw err;
   }
 }
 

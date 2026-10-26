@@ -175,16 +175,24 @@ function* subsetsOf(items, size, start = 0, chosen = []) {
 export async function recoverSeed({ keyPair, sealedShares, threshold, secretCheck }) {
   const secretKey = fromB64(keyPair.secretKey);
   const publicKey = fromB64(keyPair.publicKey);
-  const shares = await Promise.all(sealedShares.map(
-    (s) => openSealed(secretKey, publicKey, fromB64(s), REQUESTER_CONTEXT),
+  // A share that does not decode or open (sent by a faulty or dishonest
+  // guardian) is skipped; the seed check decides whether the rest suffice.
+  const settled = await Promise.allSettled(sealedShares.map(
+    async (s) => openSealed(secretKey, publicKey, fromB64(s), REQUESTER_CONTEXT),
   ));
+  const shares = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
   try {
     if (shares.length < threshold) {
       throw new Error(`need ${threshold} shares, have ${shares.length}`);
     }
     const expected = fromB64(secretCheck);
     for (const subset of subsetsOf(shares, threshold)) {
-      const seed = combineShares(subset);
+      let seed;
+      try {
+        seed = combineShares(subset);
+      } catch {
+        continue; // lengths differ or an index repeats: not a valid subset
+      }
       if (equal(seedCheck(seed), expected)) return seed;
       seed.fill(0);
     }

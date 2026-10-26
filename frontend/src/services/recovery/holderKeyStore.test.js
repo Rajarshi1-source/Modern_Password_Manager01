@@ -51,6 +51,15 @@ describe('holderKeyStore', () => {
     expect(proof).toBeTruthy();
   });
 
+  it('fails without storing anything when the wrapping key cannot be saved', async () => {
+    _setWrappingKeyBackendForTests({
+      async get() { return undefined; },
+      async add() { throw new Error('QuotaExceededError'); },
+    });
+    await expect(getOrCreateGuardianPublicKey()).rejects.toThrow('QuotaExceededError');
+    expect(window.localStorage.length).toBe(0);
+  });
+
   it('keeps requester keys per request and forgets them', async () => {
     const keyPair = await newRequesterKeyPair();
     await saveRequesterKeyPair('req-1', keyPair);
