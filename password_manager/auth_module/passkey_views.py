@@ -4,7 +4,6 @@ from django.http import JsonResponse
 from django.contrib.auth.models import User
 from django.contrib.auth import login
 from django.utils import timezone
-from django.utils.crypto import salted_hmac
 from fido2.webauthn import (
     Aaguid,
     AttestedCredentialData,
@@ -13,6 +12,7 @@ from fido2.webauthn import (
     PublicKeyCredentialRpEntity,
     PublicKeyCredentialType,
     PublicKeyCredentialUserEntity,
+    ResidentKeyRequirement,
     UserVerificationRequirement,
 )
 from fido2.cose import CoseKey
@@ -111,28 +111,13 @@ AUTHENTICATION_FAILED = "Authentication failed."
 
 def _authentication_failed():
     """The one answer complete gives for every failure after the session state
-    was found -- unknown account, decoy credential, unknown credential, bad
+    was found -- unknown credential, another account's credential, bad
     signature, counter regression -- so it never says which one it was."""
     return error_response(
         AUTHENTICATION_FAILED,
         status_code=status.HTTP_401_UNAUTHORIZED,
         code="passkey_auth_failed",
     )
-
-
-def _normalize_email(email):
-    return email.strip().lower()
-
-
-def _decoy_credential_id(email):
-    """A stable, secret-keyed stand-in credential id for an email with no
-    usable passkey, so begin's answer does not reveal whether the account or a
-    passkey exists. Derived on demand from SECRET_KEY; never stored."""
-    return salted_hmac(
-        'auth_module.passkey.decoy_credential_id',
-        _normalize_email(email),
-        algorithm='sha256',
-    ).digest()
 
 
 def _attested_credential(passkey):
@@ -194,6 +179,8 @@ def webauthn_begin_registration(request):
         options, state = server.register_begin(
             user=user_entity,
             credentials=[],
+            # Discoverable, so sign-in can start without naming the account.
+            resident_key_requirement=ResidentKeyRequirement.REQUIRED,
             user_verification=UserVerificationRequirement.PREFERRED,
             authenticator_attachment=AUTHENTICATOR_ATTACHMENT,
         )
@@ -289,38 +276,22 @@ def webauthn_complete_registration(request):
 def webauthn_begin_authentication(request):
     """Begin passkey sign-in.
 
-    Takes ``email``, or falls back to the signed-in user for re-authentication.
-    Every email gets the same answer: a known account with a passkey gets its
-    real credential id, anything else a decoy id of the same shape, and in both
-    cases the fido2 state goes into the session.
+    Anonymous sign-in uses discoverable credentials: the answer names no
+    account and lists no credential, so it is the same for every caller and
+    looks nothing up (any ``email`` sent is ignored). A signed-in caller
+    re-authenticating gets its own credential ids, which reveal nothing new.
     """
     try:
-        email = request.data.get('email')
-        if isinstance(email, str) and email.strip():
-            lookup = _normalize_email(email)
-            user = (
-                User.objects.filter(email__iexact=lookup, is_active=True)
-                .order_by('pk')
-                .first()
-            )
-        elif request.user.is_authenticated:
-            user = request.user
-            lookup = _normalize_email(user.email or str(user.pk))
-        else:
-            return error_response("Email is required", status_code=status.HTTP_400_BAD_REQUEST)
-
-        credential_ids = []
+        user = request.user if request.user.is_authenticated else None
+        credentials = None
         if user is not None:
-            credential_ids = [
-                bytes(cid) for cid in
+            credentials = [
+                _descriptor(bytes(cid)) for cid in
                 UserPasskey.objects.filter(user=user).values_list('credential_id', flat=True)
             ]
-        if not credential_ids:
-            user = None
-            credential_ids = [_decoy_credential_id(lookup)]
 
         options, state = server.authenticate_begin(
-            credentials=[_descriptor(cid) for cid in credential_ids],
+            credentials=credentials,
             user_verification=UserVerificationRequirement.PREFERRED,
         )
 
@@ -349,11 +320,19 @@ def webauthn_complete_authentication(request):
                 status_code=status.HTTP_400_BAD_REQUEST
             )
 
-        user = None
-        if pending.get('user_id') is not None:
-            user = User.objects.filter(id=pending['user_id'], is_active=True).first()
+        try:
+            response = AuthenticationResponse.from_dict(_authentication_payload(request.data))
+        except Exception:
+            return _authentication_failed()
 
-        passkeys = list(UserPasskey.objects.filter(user=user)) if user else []
+        # The credential names its account: look it up by id, then require it
+        # to belong to the re-authenticating user, if begin was bound to one.
+        passkeys = list(
+            UserPasskey.objects.select_related('user')
+            .filter(credential_id=response.raw_id, user__is_active=True)
+        )
+        if pending.get('user_id') is not None:
+            passkeys = [p for p in passkeys if p.user_id == pending['user_id']]
         credentials = []
         for passkey in passkeys:
             try:
@@ -362,7 +341,6 @@ def webauthn_complete_authentication(request):
                 logger.warning("Stored passkey %s could not be parsed", passkey.pk)
 
         try:
-            response = AuthenticationResponse.from_dict(_authentication_payload(request.data))
             matched = server.authenticate_complete(pending['state'], credentials, response)
         except Exception:
             return _authentication_failed()
@@ -370,6 +348,13 @@ def webauthn_complete_authentication(request):
         passkey = next(
             p for p in passkeys if bytes(p.credential_id) == matched.credential_id
         )
+        user = passkey.user
+
+        # A discoverable credential returns the user handle set at
+        # registration; it must name the credential's own account.
+        user_handle = response.response.user_handle
+        if user_handle is not None and user_handle != str(user.id).encode():
+            return _authentication_failed()
 
         # Signature counter: authenticators that do not count (synced passkeys)
         # report 0 every time; any other counter must strictly increase. The

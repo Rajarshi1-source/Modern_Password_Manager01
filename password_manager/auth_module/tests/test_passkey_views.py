@@ -2,12 +2,13 @@
 Passkey registration and sign-in against fido2 2.x.
 
 - Registration binds to the signed-in user and stores only public material.
-- authenticate/begin answers every email the same way: a known account with a
-  passkey, a known account without one, and an unknown email all get one
-  credential id of the same shape, stable per email.
-- authenticate/complete signs in with a real assertion and gives one answer
-  for every failure (decoy credential, unknown credential, bad signature,
-  counter regression).
+- Anonymous authenticate/begin uses discoverable credentials: it lists no
+  credential and is the same whatever email is sent, so it reveals nothing
+  about any account (including through credential-id length).
+- authenticate/complete finds the credential by id, signs in with a real
+  assertion and gives one answer for every failure (unknown credential, bad
+  signature, user-handle mismatch, another account's credential during
+  re-authentication, counter regression).
 """
 import hashlib
 import os
@@ -40,10 +41,11 @@ ORIGIN = 'http://localhost:5173'
 class SoftAuthenticator:
     """A minimal ES256 platform authenticator for driving the real views."""
 
-    def __init__(self, counter=0, counter_step=1):
+    def __init__(self, counter=0, counter_step=1, credential_id_length=32):
         self.key = ec.generate_private_key(ec.SECP256R1())
         self.cose_key = ES256.from_cryptography_key(self.key.public_key())
-        self.credential_id = os.urandom(32)
+        self.credential_id = os.urandom(credential_id_length)
+        self.user_handle = None
         self.counter = counter
         self.counter_step = counter_step
         self.rp_id_hash = hashlib.sha256(passkey_views.RP_ID.encode()).digest()
@@ -56,6 +58,7 @@ class SoftAuthenticator:
         }
 
     def create(self, options):
+        self.user_handle = websafe_decode(options['user']['id'])
         client_data = CollectedClientData.create(
             type=CollectedClientData.TYPE.CREATE,
             challenge=websafe_decode(options['challenge']),
@@ -77,7 +80,7 @@ class SoftAuthenticator:
             'device_type': 'Test',
         }
 
-    def get(self, options, credential_id=None):
+    def get(self, options, credential_id=None, user_handle=None):
         self.counter += self.counter_step
         client_data = CollectedClientData.create(
             type=CollectedClientData.TYPE.GET,
@@ -99,7 +102,7 @@ class SoftAuthenticator:
                 'clientDataJSON': websafe_encode(bytes(client_data)),
                 'authenticatorData': websafe_encode(bytes(auth_data)),
                 'signature': websafe_encode(signature),
-                'userHandle': None,
+                'userHandle': websafe_encode(user_handle or self.user_handle or b'none'),
             },
         }
 
@@ -123,8 +126,9 @@ class PasskeyViewTests(TestCase):
         )
         self.assertEqual(complete.status_code, 200, complete.content)
 
-    def _begin(self, client, email):
-        r = client.post(reverse('authenticate_passkey_begin'), {'email': email}, format='json')
+    def _begin(self, client, email=None):
+        body = {'email': email} if email is not None else {}
+        r = client.post(reverse('authenticate_passkey_begin'), body, format='json')
         self.assertEqual(r.status_code, 200, r.content)
         return r.json()
 
@@ -143,39 +147,41 @@ class PasskeyViewTests(TestCase):
         self.assertEqual(r.status_code, 401, r.content)
         self.assertFalse(UserPasskey.objects.exists())
 
+    def test_registration_asks_for_a_discoverable_credential(self):
+        client = APIClient()
+        client.force_authenticate(self.owner)
+        r = client.post(reverse('register_passkey_begin'), {}, format='json')
+        self.assertEqual(r.json()['authenticatorSelection']['residentKey'], 'required')
+
     # --- begin uniformity -----------------------------------------------------
 
-    def test_begin_answers_every_email_the_same_way(self):
-        self._register(self.owner, SoftAuthenticator())
+    def test_anonymous_begin_is_the_same_for_every_email(self):
+        self._register(self.owner, SoftAuthenticator(credential_id_length=64))
         client = APIClient()
 
-        answers = {
-            email: self._begin(client, email)
-            for email in ('owner@example.com', 'plain@example.com', 'nobody@example.com')
-        }
+        answers = [
+            self._begin(client, email)
+            for email in ('owner@example.com', 'plain@example.com', 'nobody@example.com', None)
+        ]
 
-        shapes = {
-            email: (
-                sorted(a.keys()),
-                [sorted(c.keys()) for c in a['allowCredentials']],
-                [len(websafe_decode(c['id'])) for c in a['allowCredentials']],
-            )
-            for email, a in answers.items()
+        for answer in answers:
+            self.assertNotIn('allowCredentials', answer)
+        without_challenge = {
+            repr(sorted((k, v) for k, v in a.items() if k != 'challenge')) for a in answers
         }
-        self.assertEqual(len(set(map(repr, shapes.values()))), 1, shapes)
+        self.assertEqual(len(without_challenge), 1, without_challenge)
 
-    def test_begin_decoy_is_stable_per_email_and_differs_between_emails(self):
+    def test_reauth_begin_lists_only_the_signed_in_users_credentials(self):
+        authenticator = SoftAuthenticator()
+        self._register(self.owner, authenticator)
         client = APIClient()
-        first = self._begin(client, 'nobody@example.com')['allowCredentials']
-        again = self._begin(client, 'Nobody@Example.com ')['allowCredentials']
-        other = self._begin(client, 'someone@example.com')['allowCredentials']
+        client.force_authenticate(self.owner)
 
-        self.assertEqual(first, again)
-        self.assertNotEqual(first, other)
-
-    def test_begin_without_email_for_an_anonymous_caller_is_rejected(self):
-        r = APIClient().post(reverse('authenticate_passkey_begin'), {}, format='json')
-        self.assertEqual(r.status_code, 400, r.content)
+        options = self._begin(client)
+        self.assertEqual(
+            [websafe_decode(c['id']) for c in options['allowCredentials']],
+            [authenticator.credential_id],
+        )
 
     # --- complete -------------------------------------------------------------
 
@@ -184,11 +190,7 @@ class PasskeyViewTests(TestCase):
         self._register(self.owner, authenticator)
         client = APIClient()
 
-        options = self._begin(client, 'owner@example.com')
-        self.assertEqual(
-            [websafe_decode(c['id']) for c in options['allowCredentials']],
-            [authenticator.credential_id],
-        )
+        options = self._begin(client)
         r = client.post(
             reverse('authenticate_passkey_complete'), authenticator.get(options), format='json'
         )
@@ -199,13 +201,24 @@ class PasskeyViewTests(TestCase):
         self.assertTrue(body['tokens']['access'])
         self.assertEqual(UserPasskey.objects.get(user=self.owner).sign_count, authenticator.counter)
 
+    def test_complete_round_trip_with_a_64_byte_credential_id(self):
+        authenticator = SoftAuthenticator(credential_id_length=64)
+        self._register(self.owner, authenticator)
+        client = APIClient()
+
+        r = client.post(
+            reverse('authenticate_passkey_complete'), authenticator.get(self._begin(client)), format='json'
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()['user']['id'], self.owner.id)
+
     def test_complete_accepts_an_authenticator_that_never_counts(self):
         authenticator = SoftAuthenticator(counter=0, counter_step=0)
         self._register(self.owner, authenticator)
         client = APIClient()
 
         for _ in range(2):
-            options = self._begin(client, 'owner@example.com')
+            options = self._begin(client)
             r = client.post(
                 reverse('authenticate_passkey_complete'), authenticator.get(options), format='json'
             )
@@ -216,7 +229,7 @@ class PasskeyViewTests(TestCase):
         self._register(self.owner, authenticator)
         client = APIClient()
 
-        options = self._begin(client, 'owner@example.com')
+        options = self._begin(client)
         url = reverse('authenticate_passkey_complete')
         self.assertEqual(client.post(url, authenticator.get(options), format='json').status_code, 200)
         self.assertEqual(client.post(url, authenticator.get(options), format='json').status_code, 400)
@@ -229,36 +242,38 @@ class PasskeyViewTests(TestCase):
     def test_complete_fails_uniformly(self):
         owner_authenticator = SoftAuthenticator()
         self._register(self.owner, owner_authenticator)
+        other_authenticator = SoftAuthenticator()
+        self._register(self.no_passkey, other_authenticator)
         url = reverse('authenticate_passkey_complete')
 
-        # Unknown email: the assertion targets the decoy credential id.
+        # A credential no account has.
         client = APIClient()
-        options = self._begin(client, 'nobody@example.com')
-        decoy_id = websafe_decode(options['allowCredentials'][0]['id'])
-        self._assert_uniform_failure(
-            client.post(url, SoftAuthenticator().get(options, credential_id=decoy_id), format='json')
-        )
-
-        # Known account without a passkey.
-        client = APIClient()
-        options = self._begin(client, 'plain@example.com')
+        options = self._begin(client)
         self._assert_uniform_failure(client.post(url, SoftAuthenticator().get(options), format='json'))
 
-        # Known account, a credential it does not own.
+        # The owner's credential id, signed by a different key.
         client = APIClient()
-        options = self._begin(client, 'owner@example.com')
-        self._assert_uniform_failure(client.post(url, SoftAuthenticator().get(options), format='json'))
-
-        # Known account, its credential id, signed by a different key.
-        client = APIClient()
-        options = self._begin(client, 'owner@example.com')
+        options = self._begin(client)
         forged = SoftAuthenticator().get(options, credential_id=owner_authenticator.credential_id)
         self._assert_uniform_failure(client.post(url, forged, format='json'))
 
-        # Known account, a counter that does not increase.
+        # A user handle naming another account.
         client = APIClient()
-        options = self._begin(client, 'owner@example.com')
+        options = self._begin(client)
+        mismatched = owner_authenticator.get(options, user_handle=str(self.no_passkey.id).encode())
+        self._assert_uniform_failure(client.post(url, mismatched, format='json'))
+
+        # Re-authentication bound to the owner, completed with another account's passkey.
+        client = APIClient()
+        client.force_authenticate(self.owner)
+        options = self._begin(client)
+        self._assert_uniform_failure(client.post(url, other_authenticator.get(options), format='json'))
+
+        # A counter that does not increase.
+        client = APIClient()
+        options = self._begin(client)
         UserPasskey.objects.filter(user=self.owner).update(sign_count=50)
         self._assert_uniform_failure(client.post(url, owner_authenticator.get(options), format='json'))
 
         self.assertIsNone(UserPasskey.objects.get(user=self.owner).last_used_at)
+        self.assertIsNone(UserPasskey.objects.get(user=self.no_passkey).last_used_at)
