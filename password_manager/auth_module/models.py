@@ -333,6 +333,9 @@ class LoginVerifierState(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='login_verifier_state')
     scheme = models.CharField(max_length=16, default='lv1')
     set_at = models.DateTimeField(default=timezone.now)
+    # Set when a reset or recovery ends every session: access tokens issued
+    # before it are refused (refresh tokens are blacklisted outright).
+    sessions_revoked_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"Login verifier ({self.scheme}) for {self.user.username}"

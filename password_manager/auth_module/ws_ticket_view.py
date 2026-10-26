@@ -16,7 +16,7 @@ from rest_framework.decorators import (
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from auth_module.authentication import RevocableJWTAuthentication as JWTAuthentication
 
 from ml_dark_web.ws_ticket import TTL_SECONDS, issue_ticket
 

@@ -666,7 +666,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Authentication settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # simplejwt's JWTAuthentication, plus refusing access tokens issued
+        # before a reset or recovery ended the account's sessions
+        'auth_module.authentication.RevocableJWTAuthentication',
         #'rest_framework.authentication.SessionAuthentication',  # removed for SPA JWT usage
     ],
     'DEFAULT_PERMISSION_CLASSES': [

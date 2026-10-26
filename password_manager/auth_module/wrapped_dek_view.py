@@ -26,6 +26,7 @@ from auth_module.recovery_throttling import (
     RecoveryThrottle,
     RecoveryCompleteThrottle,
 )
+from auth_module.models import UserSalt
 from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
 from auth_module.quantum_recovery_models import RecoveryAuditLog
 from auth_module.login_verifier import (
@@ -55,6 +56,20 @@ def _valid_envelope(blob):
 
 
 _client_ip = get_client_ip
+
+
+def _decode_master_auth_hash(value):
+    """The client's PBKDF2-SHA256 master-password check (32 bytes, base64),
+    or None if ``value`` is not one."""
+    import base64
+    import binascii
+    if not isinstance(value, str):
+        return None
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return raw if len(raw) == 32 else None
 
 
 class VaultWrappedDEKView(APIView):
@@ -124,13 +139,16 @@ class WrappedDEKRecoveryRotateView(APIView):
     server. Without this anonymous endpoint, the rotation would 401
     and the user would still be locked out on next login.
 
-    Request: ``{username, factor_type, dek_id, blob, auth_hash, login_verifier}``
+    Request: ``{username, factor_type, dek_id, blob, auth_hash,
+    login_verifier, new_auth_hash}``
 
-    The new master password replaces two things, and both are written in
-    one transaction behind the same ``auth_hash`` proof: the
-    master-wrapped DEK (``blob``) and the credential sign-in checks
-    (``login_verifier``, derived in the browser from the new master
-    password, see ``auth_module/login_verifier.py``). Rotating only the
+    The new master password replaces three things, all written in one
+    transaction behind the same ``auth_hash`` proof: the master-wrapped DEK
+    (``blob``), the credential sign-in checks (``login_verifier``, derived
+    in the browser from the new master password, see
+    ``auth_module/login_verifier.py``), and the master-password check in
+    ``UserSalt.auth_hash`` (``new_auth_hash``) that verify_master and
+    change_master compare against. Rotating only the
     envelope left sign-in on the forgotten password, so the user was
     locked out at the next sign-in. A successful rotation also ends the
     account's existing sessions.
@@ -176,6 +194,7 @@ class WrappedDEKRecoveryRotateView(APIView):
         # everything *except* this hash and cannot rotate.
         auth_hash_in = request.data.get('auth_hash')
         login_verifier = request.data.get('login_verifier')
+        new_auth_hash = _decode_master_auth_hash(request.data.get('new_auth_hash'))
 
         if (
             not isinstance(username, str)
@@ -186,9 +205,11 @@ class WrappedDEKRecoveryRotateView(APIView):
             or not isinstance(auth_hash_in, str)
             or len(auth_hash_in) != 64
             or not is_login_verifier(login_verifier)
+            or new_auth_hash is None
         ):
             return Response(
-                {'error': 'username, factor_type, dek_id, auth_hash, and login_verifier required'},
+                {'error': 'username, factor_type, dek_id, auth_hash, login_verifier, '
+                          'and new_auth_hash required'},
                 status=400,
             )
         if not _valid_envelope(blob):
@@ -305,6 +326,7 @@ class WrappedDEKRecoveryRotateView(APIView):
                 update_fields=['blob', 'rotated_at', 'updated_at'],
             )
             set_login_verifier(user, login_verifier)
+            UserSalt.objects.filter(user=user).update(auth_hash=new_auth_hash)
             revoke_sessions(user)
 
             RecoveryAuditLog.objects.create(

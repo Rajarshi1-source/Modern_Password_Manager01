@@ -120,6 +120,7 @@ describe('rewrapMasterPasswordFromRecovery', () => {
     expect(body.login_verifier).toBe(
       await deriveLoginVerifier('brand-new-master-password', 'alice@example.com'),
     );
+    expect(atob(body.new_auth_hash)).toHaveLength(32);
     expect(JSON.stringify(body)).not.toContain('brand-new-master-password');
     expect(JSON.stringify(body)).not.toContain('RECOVERYKEY');
   });

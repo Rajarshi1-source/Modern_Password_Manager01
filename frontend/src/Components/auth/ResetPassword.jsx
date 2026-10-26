@@ -15,7 +15,9 @@ import { deriveAuthHash, deriveLoginVerifier } from '../../services/loginVerifie
 const ResetPassword = () => {
   const { uid, token } = useParams();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('');
+  // The name the account signs in with (usually its email): the login
+  // verifier is salted with it, so it must be that exact account name.
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -25,9 +27,9 @@ const ResetPassword = () => {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    const username = email.trim();
-    if (!username) {
-      setError('Enter the email address of your account.');
+    const accountName = username.trim();
+    if (!accountName) {
+      setError('Enter the username you sign in with.');
       return;
     }
     if (password.length < 12) {
@@ -41,13 +43,13 @@ const ResetPassword = () => {
     setBusy(true);
     try {
       const [newAuthHash, newLoginVerifier] = await Promise.all([
-        deriveAuthHash(password, username),
-        deriveLoginVerifier(password, username),
+        deriveAuthHash(password, accountName),
+        deriveLoginVerifier(password, accountName),
       ]);
       const response = await ApiService.auth.resetPassword({
         uid,
         token,
-        username,
+        username: accountName,
         new_auth_hash: newAuthHash,
         new_login_verifier: newLoginVerifier,
       });
@@ -84,9 +86,9 @@ const ResetPassword = () => {
         master password and this link cannot decrypt them: you will need a recovery factor,
         such as your recovery key, to open them.
       </p>
-      <label htmlFor="reset-email">Account email</label>
-      <input id="reset-email" type="email" autoComplete="username" value={email}
-        onChange={(e) => setEmail(e.target.value)} />
+      <label htmlFor="reset-username">Username you sign in with (usually your email)</label>
+      <input id="reset-username" type="text" autoComplete="username" value={username}
+        onChange={(e) => setUsername(e.target.value)} />
       <label htmlFor="reset-password">New master password</label>
       <input id="reset-password" type="password" autoComplete="new-password" value={password}
         onChange={(e) => setPassword(e.target.value)} />

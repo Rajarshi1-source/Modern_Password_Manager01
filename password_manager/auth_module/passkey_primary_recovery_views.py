@@ -436,36 +436,43 @@ def complete_primary_passkey_recovery(request):
         # is consumed, and the passkey it backed up is revoked, because the
         # user reports it lost (FIDO account recovery: the lost credential
         # must stop working). The conditional update claims the backup, so of
-        # two concurrent completions with the same key only one succeeds, and
-        # the attempt, backup, revocation and passkey removal are written
-        # together.
-        with transaction.atomic():
-            claimed = PasskeyRecoveryBackup.objects.filter(
-                pk=matching_backup.pk, is_active=True
-            ).update(is_active=False, last_verified_at=timezone.now())
-            if claimed:
-                recovery_attempt.backup = matching_backup
-                recovery_attempt.mark_complete()
-                RecoveryKeyRevocation.objects.create(
-                    backup=matching_backup,
-                    revoked_by=user,
-                    reason='Consumed by a successful recovery'
-                )
-                _revoke_lost_passkey(user, bytes(matching_backup.passkey_credential_id))
+        # two concurrent completions with the same key only one succeeds.
+        #
+        # The recovery restores access by registering a NEW passkey: the
+        # backup holds only the lost passkey's public data, which signs
+        # nobody in. The registration options are built inside the same
+        # transaction, so if that fails the claim and the revocation roll
+        # back and the key can be used again.
+        registration_options = None
+        try:
+            with transaction.atomic():
+                claimed = PasskeyRecoveryBackup.objects.filter(
+                    pk=matching_backup.pk, is_active=True
+                ).update(is_active=False, last_verified_at=timezone.now())
+                if claimed:
+                    recovery_attempt.backup = matching_backup
+                    recovery_attempt.mark_complete()
+                    RecoveryKeyRevocation.objects.create(
+                        backup=matching_backup,
+                        revoked_by=user,
+                        reason='Consumed by a successful recovery'
+                    )
+                    _revoke_lost_passkey(user, bytes(matching_backup.passkey_credential_id))
+                    registration_options = _begin_recovery_registration(request, user)
+        except Exception:
+            request.session.pop(RECOVERY_REGISTRATION_STATE_KEY, None)
+            raise
         if not claimed:
             progressive_lockout.record_failure(request, 'invalid_key')
             return Response(INVALID_KEY_RESPONSE, status=status.HTTP_401_UNAUTHORIZED)
 
-        # The recovery restores access by registering a NEW passkey: the
-        # backup holds only the lost passkey's public data, which signs
-        # nobody in. This session may now run one registration ceremony for
-        # this account within RECOVERY_REGISTRATION_TTL_SECONDS.
+        # This session may now run one registration ceremony for this
+        # account within RECOVERY_REGISTRATION_TTL_SECONDS.
         request.session[RECOVERY_REGISTRATION_GRANT_KEY] = {
             'user_id': user.id,
             'expires_at': (timezone.now() + timedelta(
                 seconds=RECOVERY_REGISTRATION_TTL_SECONDS)).timestamp(),
         }
-        registration_options = _begin_recovery_registration(request, user)
 
         # Record success metrics
         duration = (timezone.now() - start_time).total_seconds()
