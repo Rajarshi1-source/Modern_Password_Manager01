@@ -25,6 +25,7 @@ import base64
 import binascii
 import logging
 
+from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from django.utils import timezone
 
@@ -63,6 +64,11 @@ def set_login_verifier(user, verifier):
     force."""
     if not is_login_verifier(verifier):
         raise ValueError('not a login verifier')
+    # The configured validators see the verifier, not the master password
+    # (the server never receives that; its strength is checked in the
+    # browser). A 44-character base64 verifier always passes them, so this
+    # only guards the boundary.
+    validate_password(verifier, user)
     user.set_password(verifier)
     user.save(update_fields=['password'])
     mark_login_verifier(user)
