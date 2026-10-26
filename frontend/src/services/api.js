@@ -146,7 +146,8 @@ const ApiService = {
     // Passkey endpoints
     registerPasskeyBegin: () => api.post('/auth/passkey/register/begin/'),
     registerPasskeyComplete: (data) => api.post('/auth/passkey/register/complete/', data),
-    authenticatePasskeyBegin: () => api.post('/auth/passkey/authenticate/begin/'),
+    // `email` signs in; omit it to re-authenticate the signed-in user.
+    authenticatePasskeyBegin: (email) => api.post('/auth/passkey/authenticate/begin/', email ? { email } : {}),
     authenticatePasskeyComplete: (data) => api.post('/auth/passkey/authenticate/complete/', data),
     // Passkey management endpoints
     listPasskeys: () => api.get('/auth/passkeys/'),

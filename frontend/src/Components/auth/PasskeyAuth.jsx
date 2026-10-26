@@ -76,8 +76,11 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
       setLoading(true);
       setError(null);
       
-      // Step 1: Get authentication options from server
-      const optionsResponse = await axios.post('/api/auth/passkey/authenticate/begin/');
+      // Step 1: Get authentication options from server. The server answers
+      // every email the same way, so this reveals nothing about the account.
+      const optionsResponse = await axios.post('/api/auth/passkey/authenticate/begin/', {
+        email: email.trim(),
+      });
       const authOptions = optionsResponse.data;
       
       // Convert challenge and allowCredentials from base64 to ArrayBuffer
@@ -112,7 +115,9 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
       setError(null);
       
       // Get options from server
-      const optionsResponse = await axios.post('/api/auth/passkey/authenticate/begin/');
+      const optionsResponse = await axios.post('/api/auth/passkey/authenticate/begin/', {
+        email: email.trim(),
+      });
       const authOptions = optionsResponse.data;
       
       // Process options

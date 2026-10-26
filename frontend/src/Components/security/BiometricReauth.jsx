@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { FaFingerprint, FaExclamationCircle, FaCheckCircle, FaLock } from 'react-icons/fa';
 import { authHeader } from '../../utils/authHeader';
+import { base64urlToArrayBuffer, arrayBufferToBase64url } from '../../utils/webauthnBase64';
 
 const ReauthModal = styled.div`
   position: fixed;
@@ -229,13 +230,15 @@ const BiometricReauth = ({ isOpen, onSuccess, onCancel, operation = "this action
     setError('');
 
     try {
-      // Get authentication options from server
+      // Get authentication options from server. No email: the server
+      // re-authenticates the signed-in user named by the Authorization header.
       const optionsResponse = await fetch('/api/auth/passkey/authenticate/begin/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...authHeader()
-        }
+        },
+        body: JSON.stringify({})
       });
 
       if (!optionsResponse.ok) {
@@ -244,14 +247,15 @@ const BiometricReauth = ({ isOpen, onSuccess, onCancel, operation = "this action
 
       const authOptions = await optionsResponse.json();
 
-      // Convert challenge from base64
-      const challenge = Uint8Array.from(atob(authOptions.challenge), c => c.charCodeAt(0));
-      
-      // Prepare credential request options
+      // Prepare credential request options (the server sends base64url)
       const credentialRequestOptions = {
         publicKey: {
-          challenge: challenge,
+          challenge: base64urlToArrayBuffer(authOptions.challenge),
           rpId: authOptions.rpId,
+          allowCredentials: (authOptions.allowCredentials || []).map(cred => ({
+            ...cred,
+            id: base64urlToArrayBuffer(cred.id),
+          })),
           timeout: 60000,
           userVerification: 'required'
         }
@@ -273,13 +277,13 @@ const BiometricReauth = ({ isOpen, onSuccess, onCancel, operation = "this action
         },
         body: JSON.stringify({
           id: credential.id,
-          rawId: btoa(String.fromCharCode(...new Uint8Array(credential.rawId))),
+          rawId: arrayBufferToBase64url(credential.rawId),
           type: credential.type,
           response: {
-            authenticatorData: btoa(String.fromCharCode(...new Uint8Array(credential.response.authenticatorData))),
-            clientDataJSON: btoa(String.fromCharCode(...new Uint8Array(credential.response.clientDataJSON))),
-            signature: btoa(String.fromCharCode(...new Uint8Array(credential.response.signature))),
-            userHandle: credential.response.userHandle ? btoa(String.fromCharCode(...new Uint8Array(credential.response.userHandle))) : null
+            authenticatorData: arrayBufferToBase64url(credential.response.authenticatorData),
+            clientDataJSON: arrayBufferToBase64url(credential.response.clientDataJSON),
+            signature: arrayBufferToBase64url(credential.response.signature),
+            userHandle: credential.response.userHandle ? arrayBufferToBase64url(credential.response.userHandle) : null
           }
         })
       });
