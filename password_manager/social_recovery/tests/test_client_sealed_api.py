@@ -58,10 +58,11 @@ class ClientSealedCircleApiTests(TestCase):
         self.assertFalse(RecoveryCircle.objects.exists())
 
     def test_vouchers_without_sealed_shares_are_refused(self):
+        original = dict(self.vouchers[0])
         for field, bad in (("hybrid_public_key", fx.b64(b"\x01" * 32)),
                            ("sealed_share", fx.b64(b"\x01" * 64)),
                            ("share_proof_hash", "")):
-            self.vouchers[0] = {**self.vouchers[0], field: bad}
+            self.vouchers[0] = {**original, field: bad}
             r = self._create()
             self.assertEqual(r.status_code, 400, (field, r.content))
         self.assertFalse(RecoveryCircle.objects.exists())
