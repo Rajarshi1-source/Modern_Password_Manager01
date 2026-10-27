@@ -189,8 +189,9 @@ const BehavioralRecoveryStatus = () => {
             <ProgressFill progress={profileCompleteness} />
           </ProgressBar>
           <InfoText>
-            Your behavioral profile is being built silently in the background as you use the app.
-            This enables advanced AI-powered password recovery using behavioral biometrics.
+            Your behavioral profile is built in this browser as you use the app. It no longer
+            enables recovery: behavioral recovery is retired. Use your recovery key or your
+            guardians instead.
           </InfoText>
 
           {profileStats && (
