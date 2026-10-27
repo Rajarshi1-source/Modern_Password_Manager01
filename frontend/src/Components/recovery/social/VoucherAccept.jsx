@@ -41,10 +41,17 @@ const VoucherAccept = () => {
       const invitation = await ApiService.socialRecovery.getVoucherInvitation(invitationToken);
       await getOrCreateGuardianPublicKey();
       const keyPair = await loadGuardianKeyPair();
-      const shareProof = await proveShareHolding({
-        keyPair,
-        sealedShare: invitation.data.sealed_share,
-      });
+      let shareProof;
+      try {
+        shareProof = await proveShareHolding({
+          keyPair,
+          sealedShare: invitation.data.sealed_share,
+        });
+      } catch {
+        setError('This browser cannot open the share sealed for you. Use the browser '
+          + 'that created the guardian key you gave the circle owner.');
+        return;
+      }
       const resp = await ApiService.socialRecovery.acceptVoucher(
         invitationToken,
         { signature_b64: signatureB64.trim(), share_proof: shareProof }
