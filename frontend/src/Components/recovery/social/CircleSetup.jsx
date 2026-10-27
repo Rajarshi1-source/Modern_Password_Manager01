@@ -126,8 +126,9 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
     // X25519 + ML-KEM-768 key HERE, on this device. The server receives
     // sealed shares, per-share proof digests and a seed check only, so it
     // can never reconstruct the secret (sealedShareRecovery.js).
-    if (!/^[0-9a-fA-F]+$/.test(masterSecret) || masterSecret.length < 32) {
-      setError('Master secret must be a hex string of at least 32 chars.');
+    if (!/^[0-9a-fA-F]+$/.test(masterSecret) || masterSecret.length < 32
+        || masterSecret.length % 2 !== 0) {
+      setError('Master secret must be an even-length hex string of at least 32 chars.');
       return;
     }
     if (threshold > vouchers.length) {

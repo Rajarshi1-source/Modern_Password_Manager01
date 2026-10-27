@@ -30,6 +30,13 @@ export default function GuardianKey() {
         message or in person. Only this browser can open the share they seal
         to it, so accept their invitation and approve recoveries from here.
       </p>
+      <p role="note" data-testid="guardian-key-storage-note">
+        This key is stored only in this browser, and so is your sealed share once
+        you accept. Do not use a private window, and do not clear this site&apos;s
+        data: if they are lost, you can no longer approve a recovery for this
+        person. Tell them, so they can set up their guardians again with a new key
+        from you.
+      </p>
       <textarea rows="4" readOnly className="mono" value={publicKey}
         data-testid="guardian-public-key" />
       <p>

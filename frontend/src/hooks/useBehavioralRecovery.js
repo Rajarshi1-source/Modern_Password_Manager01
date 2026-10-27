@@ -44,11 +44,11 @@ export function useBehavioralRecovery() {
   // Get recovery readiness status
   const getRecoveryReadiness = () => {
     if (commitmentStatus.ready_for_recovery) {
-      return { status: 'ready', message: 'Behavioral recovery is set up and ready' };
+      return { status: 'ready', message: 'Behavioral recovery is retired' };
     }
     
     if (isProfileReady()) {
-      return { status: 'can_setup', message: 'Profile ready - click to set up recovery' };
+      return { status: 'can_setup', message: 'Behavioral recovery is retired' };
     }
     
     const completeness = getProfileCompleteness();
