@@ -300,6 +300,19 @@ CVE-2026-115776 exp:2026-11-23
 # Re-assess before putting daphne behind any other proxy or load balancer
 # that passes raw HTTP through. Same short expiry, same removal step.
 CVE-2026-115877 exp:2026-11-23
+#
+# CVE-2026-83813 / GHSA-jj36-9pvh-vj5r (surfaced on PR #594's scan
+# 2026-10-27): twisted.names.dns.DNSDatagramProtocol accepts a UDP DNS answer
+# whose transaction ID matches without checking it came from the queried
+# server. First fix 26.10.0rc1 only; pypi.org still lists 26.4.0 as the newest
+# release (verified 2026-10-27). Unreachable here, verified by grep rather
+# than assumed: no `twisted.names`, `createResolver` or `DNSDatagramProtocol`
+# anywhere in password_manager/ (excluding the venv). daphne does no DNS
+# lookups, and scrapy's resolver (DNS_RESOLVER, default
+# scrapy.resolver.CachingThreadedResolver, not overridden here) subclasses
+# twisted.internet.base.ThreadedResolver, which calls the system's
+# getaddrinfo, not twisted.names. Same short expiry, same removal step.
+CVE-2026-83813 exp:2026-11-23
 
 # filelock batch (surfaced on PR #588's scan 2026-10-24), fixed in 4.2.1, a
 # major release. NOT installable here: `safety` 3.8.1 (requirements.txt

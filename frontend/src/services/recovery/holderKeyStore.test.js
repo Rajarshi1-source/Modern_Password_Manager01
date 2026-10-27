@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   _setWrappingKeyBackendForTests,
+  assertKeyStorageAvailable,
   forgetRequesterKeyPair,
   getOrCreateGuardianPublicKey,
   loadGuardianKeyPair,
@@ -58,6 +59,16 @@ describe('holderKeyStore', () => {
     });
     await expect(getOrCreateGuardianPublicKey()).rejects.toThrow('QuotaExceededError');
     expect(window.localStorage.length).toBe(0);
+  });
+
+  it('reports whether a requester key can be stored, leaving nothing behind', async () => {
+    await expect(assertKeyStorageAvailable()).resolves.toBeUndefined();
+    expect(window.localStorage.length).toBe(0);
+    _setWrappingKeyBackendForTests({
+      async get() { return undefined; },
+      async add() { throw new Error('QuotaExceededError'); },
+    });
+    await expect(assertKeyStorageAvailable()).rejects.toThrow('QuotaExceededError');
   });
 
   it('keeps requester keys per request and forgets them', async () => {
