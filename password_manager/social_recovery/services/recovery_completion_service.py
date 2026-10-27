@@ -8,7 +8,7 @@ from shared import sealed_shares
 
 from ..models import SocialRecoveryRequest, VouchAttestation, Voucher
 from .audit_service import record_event
-from .stake_service import release_stake, slash_stake
+from .stake_service import slash_stake
 from .web_of_trust_service import evaluate_quorum
 
 
@@ -48,16 +48,12 @@ def complete_request(*, request: SocialRecoveryRequest) -> dict:
         request.completed_at = timezone.now()
         request.save(update_fields=["status", "completed_at"])
 
-        # Release stake for approving vouchers, on the assumption that a
-        # successful recovery implies those vouchers behaved honestly.
+        # Approvers' stakes stay committed: the server cannot tell whether a
+        # re-sealed share is genuine (only the requester's device can, with
+        # the seed check), so completing is no evidence of honest vouching,
+        # and a fraudulent approval can still be slashed afterwards
+        # (reject_fraudulent_attestation).
         q = evaluate_quorum(request)
-        for att in approvals:
-            if att.voucher.user and att.stake_committed:
-                release_stake(
-                    user=att.voucher.user,
-                    amount=int(att.stake_committed),
-                    request_id=str(request.request_id),
-                )
 
         record_event(
             event_type="request_completed",

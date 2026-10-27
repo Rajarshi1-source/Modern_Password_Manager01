@@ -6,7 +6,7 @@ These tests exercise the full web-of-trust recovery flow end to end:
 * Circle creation from shares split and sealed on the owner's device
 * Invitation acceptance by Ed25519-signed tokens plus a share proof
 * Schnorr equality proof construction and verification at attestation time
-* Quorum evaluation, stake commitment / release / slashing
+* Quorum evaluation, stake commitment / slashing
 * Completion releases only shares re-sealed to the requester
 * Append-only audit log hash chain
 """
@@ -395,6 +395,20 @@ class QuorumAndStakeTests(TestCase):
         request.refresh_from_db()
         assert request.status == "cancelled"
 
+    def test_completion_keeps_approver_stakes_committed(self):
+        from password_reputation.models import ReputationEvent
+        request = _initiate(self.circle)
+        vouchers = list(self.circle.vouchers.order_by("share_index"))
+        for v, (private, _) in list(zip(vouchers, self.voucher_keypairs))[:2]:
+            self._submit_approval(request, v, private, stake=8)
+        request.refresh_from_db()
+        complete_request(request=request)
+        # The server cannot verify the re-sealed shares, so completing
+        # releases nothing; a fraudulent approval can still be slashed.
+        notes = ReputationEvent.objects.filter(note__contains=str(request.request_id)).values_list("note", flat=True)
+        self.assertFalse([n for n in notes if "|release|" in n])
+        self.assertEqual(len([n for n in notes if "|commit|" in n]), 2)
+
     def test_complete_request_returns_only_the_resealed_shares(self):
         request = _initiate(self.circle)
         vouchers = list(self.circle.vouchers.order_by("share_index"))
@@ -415,7 +429,7 @@ class QuorumAndStakeTests(TestCase):
         assert "secret_hex" not in result
         request.refresh_from_db()
         assert request.status == "completed"
-        # Completing again returns the same shares without a second stake release.
+        # Completing again returns the same shares.
         assert complete_request(request=request)["sealed_shares"] == result["sealed_shares"]
 
 
