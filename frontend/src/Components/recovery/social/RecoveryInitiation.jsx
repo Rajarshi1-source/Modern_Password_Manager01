@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import DeviceFingerprint from '../../../utils/deviceFingerprint';
 import ApiService from '../../../services/api';
 import {
+  assertKeyStorageAvailable,
   newRequesterKeyPair,
   saveRequesterKeyPair,
 } from '../../../services/recovery/holderKeyStore';
@@ -74,6 +75,15 @@ export const RecoveryInitiation = ({
         /* noop — proceed without fingerprint */
       }
 
+      // Fail before the server records a request this device could not
+      // finish: a pending request blocks a new one until the cooldown ends.
+      try {
+        await assertKeyStorageAvailable();
+      } catch {
+        setError('This browser cannot store the recovery key (a private window '
+          + 'or blocked site data?). Use a normal window and try again.');
+        return;
+      }
       // One-time key pair: guardians re-seal their shares to its public
       // half; the private half never leaves this device.
       const keyPair = await newRequesterKeyPair();

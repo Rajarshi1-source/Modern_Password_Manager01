@@ -194,6 +194,19 @@ export async function loadGuardianKeyPair() {
   return stored?.wrappedSecretKey ? unseal(stored, GUARDIAN_KEY) : null;
 }
 
+/**
+ * Throws unless this browser can store a wrapped requester key: the wrapping
+ * key loads (or is created and saved) and localStorage accepts a write. Call
+ * it before asking the server for a recovery request, so a request is never
+ * recorded for a key this device cannot keep.
+ */
+export async function assertKeyStorageAvailable() {
+  await wrappingKey();
+  const probe = 'pwm.recovery.storageProbe';
+  write(probe, 1);
+  remove(probe);
+}
+
 export async function newRequesterKeyPair() {
   return newHolderKeyPair();
 }
