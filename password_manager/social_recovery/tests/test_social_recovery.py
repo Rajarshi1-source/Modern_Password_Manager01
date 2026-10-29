@@ -50,6 +50,7 @@ from social_recovery.services import (
     submit_attestation,
 )
 from social_recovery.services.recovery_completion_service import (
+    abandon_request,
     cancel_request,
     reject_fraudulent_attestation,
 )
@@ -431,6 +432,25 @@ class QuorumAndStakeTests(TestCase):
         assert request.status == "completed"
         # Completing again returns the same shares.
         assert complete_request(request=request)["sealed_shares"] == result["sealed_shares"]
+
+    def test_requester_can_mark_a_failed_recombination_and_start_again(self):
+        token = _secrets.token_bytes(32)
+        request = _initiate(self.circle, abandon_token_hash=hashlib.sha256(token).digest())
+        vouchers = list(self.circle.vouchers.order_by("share_index"))
+        with pytest.raises(ValueError):
+            abandon_request(request=request, abandon_token=token)  # nothing released yet
+        for v, (private, _) in list(zip(vouchers, self.voucher_keypairs))[:2]:
+            self._submit_approval(request, v, private)
+        request.refresh_from_db()
+        complete_request(request=request)
+        with pytest.raises(ValueError):
+            _initiate(self.circle)  # cooldown
+        with pytest.raises(ValueError):
+            abandon_request(request=request, abandon_token=b"\x00" * 32)
+        abandon_request(request=request, abandon_token=token)
+        request.refresh_from_db()
+        assert request.status == "failed"
+        assert _initiate(self.circle).status == "pending"
 
 
 @pytest.mark.django_db

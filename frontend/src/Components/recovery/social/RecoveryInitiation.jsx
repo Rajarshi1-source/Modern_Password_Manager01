@@ -7,7 +7,7 @@ import {
   newRequesterKeyPair,
   saveRequesterKeyPair,
 } from '../../../services/recovery/holderKeyStore';
-import { keyFingerprint } from '../../../services/recovery/sealedShareRecovery';
+import { abandonTokenHash, keyFingerprint } from '../../../services/recovery/sealedShareRecovery';
 import './RecoveryInitiation.css';
 
 /**
@@ -93,6 +93,7 @@ export const RecoveryInitiation = ({
         device_fingerprint: deviceFingerprint,
         geo: {},
         requester_public_key: keyPair.publicKey,
+        abandon_token_hash: abandonTokenHash(keyPair),
       });
 
       const requestId = resp.data?.request_id;

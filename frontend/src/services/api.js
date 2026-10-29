@@ -235,6 +235,8 @@ const ApiService = {
       api.post(`/api/social-recovery/requests/${requestId}/attest/`, data),
     completeRequest: (requestId) =>
       api.post(`/api/social-recovery/requests/${requestId}/complete/`, {}),
+    abandonRequest: (requestId, data) =>
+      api.post(`/api/social-recovery/requests/${requestId}/abandon/`, data),
     cancelRequest: (requestId, data) =>
       api.post(`/api/social-recovery/requests/${requestId}/cancel/`, data || {}),
     auditLog: () => api.get('/api/social-recovery/audit/'),

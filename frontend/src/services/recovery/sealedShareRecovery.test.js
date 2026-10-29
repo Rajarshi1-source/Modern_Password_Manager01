@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { sha256 } from '@noble/hashes/sha256';
 import { combineShares, splitSecret } from './shamirGf256';
 import {
+  abandonToken,
+  abandonTokenHash,
   fromB64,
   keyFingerprint,
   newHolderKeyPair,
@@ -162,5 +164,14 @@ describe('guardian recovery on the client', () => {
     await expect(recoverSeed({
       keyPair: requester, sealedShares: resealed, threshold: 2, secretCheck: a.secretCheck,
     })).rejects.toThrow(/does not match/);
+  });
+
+  it('derives an abandon token only the key holder has, and sends only its hash', async () => {
+    const keyPair = await newHolderKeyPair();
+    const token = abandonToken(keyPair);
+    expect(fromB64(token)).toHaveLength(32);
+    expect(abandonTokenHash(keyPair)).toBe(toB64(sha256(fromB64(token))));
+    expect(token).not.toBe(abandonToken(await newHolderKeyPair()));
+    expect(token).not.toContain(keyPair.secretKey.slice(0, 16));
   });
 });

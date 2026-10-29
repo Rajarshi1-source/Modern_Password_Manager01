@@ -5,7 +5,7 @@ import {
   forgetRequesterKeyPair,
   loadRequesterKeyPair,
 } from '../../../services/recovery/holderKeyStore';
-import { recoverSeed } from '../../../services/recovery/sealedShareRecovery';
+import { abandonToken, recoverSeed } from '../../../services/recovery/sealedShareRecovery';
 import './RecoveryProgress.css';
 
 const STATUS_STEPS = [
@@ -110,8 +110,16 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
           keyPair = await loadRequesterKeyPair(requestId);
           if (keyPair) done = await ApiService.socialRecovery.completeRequest(requestId);
         } catch (fetchErr) {
-          // Storage or network: completion is idempotent, so a later poll
-          // retries.
+          const code = fetchErr?.response?.status;
+          if (code >= 400 && code < 500 && code !== 429) {
+            // The server refused completion; every poll would get the same
+            // answer, so keep the guard set and stop asking.
+            setError(ApiService.handleError(fetchErr).error
+              || 'The server cannot complete this recovery.');
+            return;
+          }
+          // Storage, network, 429 or 5xx: completion is idempotent, so a
+          // later poll retries.
           reconstructedFiredRef.current = false;
           console.warn('RecoveryProgress: fetching shares failed, will retry:', fetchErr);
           return;
@@ -133,9 +141,18 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
           });
         } catch (recombineErr) {
           // A share that does not open or a seed that fails its check
-          // fails the same way on every poll: latch, drop the one-time
-          // key (this request cannot use it again) and tell the user.
+          // fails the same way on every poll: latch, mark the request
+          // failed so the cooldown does not block a new one, drop the
+          // one-time key (this request cannot use it again) and tell the
+          // user.
           console.warn('RecoveryProgress: recombination failed:', recombineErr);
+          try {
+            await ApiService.socialRecovery.abandonRequest(
+              requestId, { abandon_token: abandonToken(keyPair) },
+            );
+          } catch (abandonErr) {
+            console.warn('RecoveryProgress: marking the request failed did not work:', abandonErr);
+          }
           forgetRequesterKeyPair(requestId);
           setError(
             'Your shares could not be recombined on this device. '

@@ -300,6 +300,8 @@ class SocialRecoveryRequest(models.Model):
         ("expired", "Expired"),
         ("cancelled", "Cancelled"),
         ("completed", "Completed"),
+        # The requester's device could not recombine the released shares.
+        ("failed", "Failed"),
     )
 
     request_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -315,6 +317,9 @@ class SocialRecoveryRequest(models.Model):
     # One-time hybrid public key of the requester's device; approving
     # vouchers re-seal their shares to it.
     requester_public_key = models.BinaryField(default=bytes, blank=True)
+    # SHA-256 of a token only the requester's device can derive (from its
+    # one-time key); presenting the token marks a completed request failed.
+    abandon_token_hash = models.BinaryField(default=bytes, blank=True)
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
 
@@ -415,6 +420,7 @@ class SocialRecoveryAuditLog(models.Model):
         ("attestation_rejected", "Attestation Rejected"),
         ("request_completed", "Request Completed"),
         ("request_cancelled", "Request Cancelled"),
+        ("request_failed", "Request Failed"),
         ("stake_slashed", "Stake Slashed"),
     )
 

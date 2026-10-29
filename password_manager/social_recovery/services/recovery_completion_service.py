@@ -1,6 +1,9 @@
 """Complete an approved recovery request by releasing the re-sealed shares."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+
 from django.db import transaction
 from django.utils import timezone
 
@@ -73,6 +76,31 @@ def complete_request(*, request: SocialRecoveryRequest) -> dict:
         "sealed_shares": shares,
         "algorithm": sealed_shares.HYBRID_KEM_ALGORITHM,
     }
+
+
+@transaction.atomic
+def abandon_request(*, request: SocialRecoveryRequest, abandon_token: bytes) -> None:
+    """The requester's device reports that the released shares did not
+    recombine (a guardian sent a bad share). The request becomes ``failed``,
+    which the cooldown does not count, so the requester can start again.
+
+    Only the device holding the request's one-time key can derive the token
+    whose SHA-256 it sent at initiation. The token says nothing about the
+    key, a share or the seed.
+    """
+    request = SocialRecoveryRequest.objects.select_for_update().get(pk=request.pk)
+    stored = bytes(request.abandon_token_hash or b"")
+    if (request.status != "completed" or not stored
+            or not hmac.compare_digest(hashlib.sha256(abandon_token).digest(), stored)):
+        raise ValueError("request cannot be abandoned")
+    request.status = "failed"
+    request.save(update_fields=["status"])
+    record_event(
+        event_type="request_failed",
+        user=request.circle.user,
+        circle=request.circle,
+        event_data={"request_id": str(request.request_id)},
+    )
 
 
 @transaction.atomic
