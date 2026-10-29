@@ -183,6 +183,10 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             if len({g['share_index'] for g in guardians}) != len(guardians):
                 return Response({'error': 'share_index values must be distinct'},
                                 status=status.HTTP_400_BAD_REQUEST)
+            # One key on two guardians lets its holder open both shares.
+            if len({g['public_key'] for g in guardians}) != len(guardians):
+                return Response({'error': 'Each guardian needs their own key'},
+                                status=status.HTTP_400_BAD_REQUEST)
 
             with transaction.atomic():
                 if legacy_setup is not None:

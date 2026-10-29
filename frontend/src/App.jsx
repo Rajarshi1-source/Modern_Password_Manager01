@@ -2447,13 +2447,16 @@ function App() {
                 <Route path="/passkey-recovery/recover" element={<PasskeyPrimaryRecoveryInitiate />} />
                 {/* Guardian (social-mesh) recovery. The old setup page here sent
                     guardian emails without sealed shares, which the server
-                    refuses; guardian shares are sealed on the owner's device
-                    by the social-recovery pages. (The tier-2 enroll-v2 and
-                    recover-v2 pages stay gated until browser validation.) */}
+                    refuses. Client-sealed guardian recovery is finished only
+                    by the tier-2 pages (RecoveryProgress recombines the
+                    shares only with their onSecretReconstructed callback),
+                    which stay gated and say so until browser validation;
+                    the standalone /recovery/social pages cannot finish a
+                    recovery, so this entry point does not lead there. */}
                 <Route path="/recovery/social-mesh" element={
                   isAuthenticated
-                    ? <Navigate to="/recovery/social/circles" replace />
-                    : <Navigate to="/recovery/social/initiate" replace />
+                    ? <Navigate to="/recovery/social-mesh/enroll-v2" replace />
+                    : <Navigate to="/recovery/social-mesh/recover-v2" replace />
                 } />
                 {/* Genetic Password OAuth callback */}
                 <Route path="/genetic-callback" element={<GeneticOAuthCallback />} />

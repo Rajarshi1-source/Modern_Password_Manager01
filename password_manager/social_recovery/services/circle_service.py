@@ -107,6 +107,9 @@ def create_circle(
 
     if len({v["share_index"] for v in voucher_list}) != total:
         raise ValueError("share_index values must be distinct")
+    # One key on two vouchers lets its holder open both shares.
+    if len({bytes(v["hybrid_public_key"]) for v in voucher_list}) != total:
+        raise ValueError("each voucher needs its own guardian key")
 
     circle = RecoveryCircle.objects.create(
         user=user,
