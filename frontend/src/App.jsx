@@ -2448,11 +2448,12 @@ function App() {
                 {/* Guardian (social-mesh) recovery. The old setup page here sent
                     guardian emails without sealed shares, which the server
                     refuses; guardian shares are sealed on the owner's device
-                    through the social-mesh pages. */}
+                    by the social-recovery pages. (The tier-2 enroll-v2 and
+                    recover-v2 pages stay gated until browser validation.) */}
                 <Route path="/recovery/social-mesh" element={
                   isAuthenticated
-                    ? <Navigate to="/recovery/social-mesh/enroll-v2" replace />
-                    : <Navigate to="/recovery/social-mesh/recover-v2" replace />
+                    ? <Navigate to="/recovery/social/circles" replace />
+                    : <Navigate to="/recovery/social/initiate" replace />
                 } />
                 {/* Genetic Password OAuth callback */}
                 <Route path="/genetic-callback" element={<GeneticOAuthCallback />} />

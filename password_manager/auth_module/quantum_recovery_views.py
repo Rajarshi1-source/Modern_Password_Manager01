@@ -798,7 +798,9 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 return Response({
                     'error': 'Recovery not ready for completion'
                 }, status=status.HTTP_400_BAD_REQUEST)
-            if attempt.is_expired():
+            # A completed attempt only repeats its earlier answer, so a lost
+            # response can still be fetched after expires_at.
+            if attempt.status != 'completed' and attempt.is_expired():
                 return Response({'error': 'Recovery attempt expired'},
                                 status=status.HTTP_400_BAD_REQUEST)
 

@@ -340,3 +340,45 @@ CVE-2026-83813 exp:2026-11-23
 CVE-2026-112940 exp:2026-11-23
 CVE-2026-112913 exp:2026-11-23
 CVE-2026-112907 exp:2026-11-23
+#
+# Second filelock batch (surfaced on PR #594's scan 2026-10-29), all fixed in
+# 4.2.1 (CVE-2026-112936 in 4.0.9) and blocked by the same `safety` 3.8.1
+# `filelock<4.0` requirement, re-verified 2026-10-29 against pypi.org (safety
+# 3.8.1 is still the newest release; filelock 4.2.4 is current).
+#
+# Every one needs ANOTHER local account that can create, rename or write
+# names in the lock's directory (a shared /tmp, a group-writable cache, or
+# a Windows directory whose inherited ACL admits other accounts). The backend
+# image runs one non-root account (`appuser`, docker/backend/Dockerfile) and
+# keeps its caches inside its own home, so no second local user exists to
+# plant or swap those files. No project code imports filelock; the installed
+# consumers (huggingface_hub, torch, transformers, safety, tldextract,
+# cachecontrol, pip, setuptools) use FileLock/SoftFileLock only, and none
+# uses the Strict/ReadWrite/Lease variants (the only grep hit, in trio, is a
+# comment).
+#   CVE-2026-112909 / GHSA-69hj-f68j-2879  UnixFileLock truncates/chmods a
+#     file another user hard-linked onto the lock path
+#   CVE-2026-112939 / GHSA-rfpc-qcw5-3pc4  soft-lock marker owner forged by
+#     a user who can write it
+#   CVE-2026-112935 / GHSA-fq56-3cx3-fjxp  soft-lock stale break confused by
+#     inode reuse
+#   CVE-2026-112912 / GHSA-9j6q-wvj5-jgjg  soft-lock writability check
+#     follows a swapped symlink
+#   CVE-2026-112910 / GHSA-8mx5-7m5m-r77g  Windows ignores `mode` (inherits
+#     the directory ACL); the backend runs on Linux
+#   CVE-2026-112938 / GHSA-m462-7rxw-wvpg, CVE-2026-112911 /
+#     GHSA-9c4x-gm8v-wgc4, CVE-2026-112908 / GHSA-6627-m3xw-93mp
+#     StrictSoftFileLock / SoftReadWriteLock claim directories; unused
+#   CVE-2026-112936 / GHSA-j8f7-rjxc-mr56, CVE-2026-112915 /
+#     GHSA-cwqr-hh33-gh44  SQLite ReadWriteLock; unused
+# Same short expiry and the same way out as the batch above.
+CVE-2026-112909 exp:2026-11-23
+CVE-2026-112939 exp:2026-11-23
+CVE-2026-112935 exp:2026-11-23
+CVE-2026-112912 exp:2026-11-23
+CVE-2026-112910 exp:2026-11-23
+CVE-2026-112938 exp:2026-11-23
+CVE-2026-112911 exp:2026-11-23
+CVE-2026-112908 exp:2026-11-23
+CVE-2026-112936 exp:2026-11-23
+CVE-2026-112915 exp:2026-11-23
