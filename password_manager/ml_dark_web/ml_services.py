@@ -41,6 +41,7 @@ class BreachClassifierService:
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
                 self.config.BERT_MODEL_NAME,
+                revision=self.config.BERT_MODEL_REVISION,
                 cache_dir=self.config.MODELS_DIR
             )
 
@@ -56,12 +57,15 @@ class BreachClassifierService:
                 # Load base model for fine-tuning
                 config = AutoConfig.from_pretrained(  # nosec B615
                     self.config.BERT_MODEL_NAME,
+                    revision=self.config.BERT_MODEL_REVISION,
+                    cache_dir=self.config.MODELS_DIR,
                     num_labels=self.config.BERT_NUM_LABELS,
                     hidden_dropout_prob=self.config.BERT_DROPOUT,
                     attention_probs_dropout_prob=self.config.BERT_DROPOUT
                 )
                 self.model = AutoModelForSequenceClassification.from_pretrained(  # nosec B615
                     self.config.BERT_MODEL_NAME,
+                    revision=self.config.BERT_MODEL_REVISION,
                     config=config,
                     cache_dir=self.config.MODELS_DIR
                 )

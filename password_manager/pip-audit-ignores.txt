@@ -368,14 +368,15 @@ CVE-2026-112907 exp:2026-11-23
 # passes `MLDarkWebConfig.MODELS_DIR` (BASE_DIR/ml_models/dark_web, i.e.
 # /app/ml_models/dark_web) as `cache_dir`, inside the application tree.
 # Where that tree comes from is a separate condition, per deployment
-# (verified 2026-10-29): the k8s manifests run the image's own /app; the
-# root docker-compose.yml (development) bind-mounts ./password_manager at
-# /app read-write, and docker/docker-compose.yml bind-mounts it read-only.
-# In both bind-mounted cases, anyone who can write the host checkout can
-# write the cache directory, so these advisories reduce to "another account
-# with write access to the developer's checkout", which already lets that
-# account change the code itself. Keep the host checkout writable by its
-# owner only. No project code imports filelock; the installed
+# (2026-10-29): the k8s manifests and docker/docker-compose.yml run the
+# image's own /app on a read-only root filesystem, with the pinned model
+# baked in and loaded offline (HF_HUB_OFFLINE), so nothing writes or locks
+# there at run time. Only the root docker-compose.yml (development)
+# bind-mounts ./password_manager at /app read-write; there, anyone who can
+# write the host checkout can write the cache directory, so these advisories
+# reduce to "another account with write access to the developer's
+# checkout", which already lets that account change the code itself. Keep
+# the host checkout writable by its owner only. No project code imports filelock; the installed
 # consumers (huggingface_hub, torch, transformers, safety, tldextract,
 # cachecontrol, pip, setuptools) use FileLock/SoftFileLock only, and none
 # uses the Strict/ReadWrite/Lease variants (the only grep hit, in trio, is a
