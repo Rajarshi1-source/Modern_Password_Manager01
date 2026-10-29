@@ -924,6 +924,15 @@ def accept_guardian_invitation(request):
         invitation_token = request.data.get('invitation_token') or ''
 
         with transaction.atomic():
+            # Lock the setup before the guardian, so acceptances for one
+            # setup run one at a time and the last one sees every other
+            # acceptance when it counts the pending guardians below.
+            setup_id = RecoveryGuardian.objects.filter(
+                invitation_token=invitation_token
+            ).values_list('recovery_setup_id', flat=True).first()
+            recovery_setup = PasskeyRecoverySetup.objects.select_for_update().filter(
+                pk=setup_id
+            ).first()
             guardian = RecoveryGuardian.objects.select_for_update().filter(
                 invitation_token=invitation_token
             ).first()
@@ -947,7 +956,6 @@ def accept_guardian_invitation(request):
             guardian.save(update_fields=['status', 'accepted_at', 'updated_at'])
 
             # Check if all guardians have accepted - if so, activate recovery
-            recovery_setup = guardian.recovery_setup
             all_accepted = recovery_setup.guardians.filter(status='pending').count() == 0
 
             if all_accepted:
