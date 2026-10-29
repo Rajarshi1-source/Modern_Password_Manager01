@@ -113,9 +113,10 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
           const code = fetchErr?.response?.status;
           if (code >= 400 && code < 500 && code !== 429) {
             // The server refused completion; every poll would get the same
-            // answer, so keep the guard set and stop asking.
-            setError(ApiService.handleError(fetchErr).error
-              || 'The server cannot complete this recovery.');
+            // answer, so keep the guard set and stop asking. The body is a
+            // bare code (invalid_request), not a message for the user.
+            ApiService.handleError(fetchErr);
+            setError('The server cannot complete this recovery.');
             return;
           }
           // Storage, network, 429 or 5xx: completion is idempotent, so a
