@@ -90,6 +90,14 @@ data:
   GUNICORN_THREADS: "2"
   CELERY_CONCURRENCY: "4"
 
+  # Hugging Face models load offline from the copy baked into the image
+  # (docker/backend/Dockerfile, model stage): the pods have no internet egress
+  # and a read-only root filesystem. Anything else Hugging Face would write
+  # goes to the /tmp emptyDir.
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  HF_HOME: "/tmp/huggingface"
+
   # Tor — anonymity transport for Dark Protocol (see k8s/tor.yaml).
   # "false" here means the cluster has no Tor daemon, so the feature reports
   # Unavailable. Apply k8s/tor.yaml and flip this to "true" to enable it.
