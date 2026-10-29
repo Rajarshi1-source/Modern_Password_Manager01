@@ -347,8 +347,11 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
               <div className="info-box success-tint">
                 <h4>🛡️ Threshold Reached</h4>
                 <p>
-                  Enough approvals have been collected. Submit the decrypted
-                  shares to complete reconstruction.
+                  Enough approvals have been collected.{' '}
+                  {typeof onSecretReconstructed === 'function'
+                    ? 'This device is opening the shares your guardians re-sealed to it '
+                      + 'and recombining your secret. Keep this page open.'
+                    : 'This page cannot open the shares or finish the recovery.'}
                 </p>
               </div>
             </div>
