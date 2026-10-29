@@ -201,6 +201,9 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
         cooldown_hours: Number(cooldown),
         vouchers: vouchers.map((v, i) => ({
           ...v,
+          // The key each share was sealed to, in canonical base64: atob
+          // accepts line breaks and missing padding, the server does not.
+          hybrid_public_key: toB64(keys[i]),
           vouch_weight: Number(v.vouch_weight) || 1,
           stake_amount: Number(v.stake_amount) || 0,
           share_index: sealed.shares[i].shareIndex,

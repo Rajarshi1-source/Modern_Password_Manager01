@@ -13,6 +13,7 @@ vi.mock('../../../../services/recovery/holderKeyStore', () => ({
 }));
 
 import ApiService from '../../../../services/api';
+import { newHolderKeyPair } from '../../../../services/recovery/sealedShareRecovery';
 import CircleSetup from '../CircleSetup';
 import GuardianKey from '../GuardianKey';
 
@@ -47,6 +48,26 @@ describe('CircleSetup', () => {
     fill([key('a'), key('a'), key('c')]);
     expect(await screen.findByText(/Two vouchers have the same guardian key/)).toBeTruthy();
     expect(ApiService.socialRecovery.createCircle).not.toHaveBeenCalled();
+  });
+
+  it('sends each guardian key in canonical base64, as it was sealed to', async () => {
+    ApiService.socialRecovery.createCircle.mockResolvedValueOnce({ data: {} });
+    const { container } = render(<CircleSetup />);
+    await waitFor(() => expect(ApiService.socialRecovery.listCircles).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('+ New Circle'));
+    fireEvent.change(screen.getByPlaceholderText(/64\+ hex chars/), { target: { value: 'ab'.repeat(32) } });
+    const keys = await Promise.all([1, 2, 3].map(async () => (await newHolderKeyPair()).publicKey));
+    screen.getAllByPlaceholderText('alice@example.com').forEach((el, i) =>
+      fireEvent.change(el, { target: { value: `v${i}@example.com` } }));
+    screen.getAllByPlaceholderText('64 hex chars').forEach((el) =>
+      fireEvent.change(el, { target: { value: 'cd'.repeat(32) } }));
+    // As pasted from a chat: a line break inside, the padding dropped.
+    screen.getAllByPlaceholderText(/copies this from/).forEach((el, i) =>
+      fireEvent.change(el, { target: { value: `${keys[i].slice(0, 40)}\n${keys[i].slice(40)}`.replace(/=+$/, '') } }));
+    fireEvent.submit(container.querySelector('form'));
+    await waitFor(() => expect(ApiService.socialRecovery.createCircle).toHaveBeenCalled());
+    const sent = ApiService.socialRecovery.createCircle.mock.calls[0][0].vouchers;
+    expect(sent.map((v) => v.hybrid_public_key)).toEqual(keys);
   });
 });
 
