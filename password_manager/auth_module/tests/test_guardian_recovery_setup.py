@@ -283,6 +283,13 @@ class GuardianRecoveryFlowTests(TestCase):
         r = self.anon.post(url, {'attempt_id': str(attempt.id)}, format='json')
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(r.json()['sealed_shares'], body['sealed_shares'])
+        # ...even once the attempt's window has passed.
+        attempt.expires_at = timezone.now() - timedelta(minutes=1)
+        attempt.save(update_fields=['expires_at'])
+        cache.clear()  # the completion URL allows three calls an hour
+        r = self.anon.post(url, {'attempt_id': str(attempt.id)}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()['sealed_shares'], body['sealed_shares'])
 
     def test_low_trust_or_expired_attempts_release_nothing(self):
         attempt, _ = self._attempt_with_approvals()
