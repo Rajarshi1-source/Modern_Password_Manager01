@@ -30,7 +30,7 @@ from .services import (
     initiate_request,
     submit_attestation,
 )
-from .services.recovery_completion_service import cancel_request
+from .services.recovery_completion_service import abandon_request, cancel_request
 from shared import sealed_shares
 from shared.client_ip import get_client_ip
 
@@ -166,6 +166,7 @@ class InitiateRecoveryView(APIView):
             recovery_request = initiate_request(
                 circle=circle,
                 requester_public_key=data["requester_public_key"],
+                abandon_token_hash=data.get("abandon_token_hash", b""),
                 initiator_email=data.get("initiator_email", ""),
                 initiator_ip=_client_ip(request),
                 device_fingerprint=data.get("device_fingerprint", ""),
@@ -244,6 +245,24 @@ class CompleteRequestView(APIView):
             logger.exception("Handled ValueError in view")
             return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
         return Response({**result, "status": recovery_request.status})
+
+
+class AbandonRequestView(APIView):
+    # Authorised by the token only the requester's device can derive.
+    permission_classes = [AllowAny]
+    throttle_classes = [VouchAttestationThrottle]
+
+    def post(self, request, request_id):
+        recovery_request = get_object_or_404(SocialRecoveryRequest, request_id=request_id)
+        token = sealed_shares.decode_digest(request.data.get("abandon_token", ""))
+        try:
+            if token is None:
+                raise ValueError("abandon_token must be a base64 32-byte value")
+            abandon_request(request=recovery_request, abandon_token=token)
+        except ValueError:
+            logger.exception("Handled ValueError in view")
+            return Response({"error": "invalid_request"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"status": "failed"})
 
 
 class CancelRequestView(APIView):

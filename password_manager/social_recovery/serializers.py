@@ -187,10 +187,14 @@ class InitiateRequestSerializer(serializers.Serializer):
     device_fingerprint = serializers.CharField(required=False, allow_blank=True, max_length=128)
     geo = serializers.JSONField(required=False, default=dict)
     requester_public_key = serializers.CharField()
+    abandon_token_hash = serializers.CharField(required=False)
 
     def validate_requester_public_key(self, value):
         return _sealed(sealed_shares.decode_hybrid_public_key,
                        sealed_shares.INVALID_HYBRID_PUBLIC_KEY, value)
+
+    def validate_abandon_token_hash(self, value):
+        return _sealed(sealed_shares.decode_digest, sealed_shares.INVALID_DIGEST, value)
 
 
 class AttestationSerializer(serializers.Serializer):

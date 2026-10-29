@@ -151,7 +151,7 @@ const AttestationForm = () => {
     );
   }
 
-  const isFinal = ['completed', 'cancelled', 'expired', 'denied', 'rejected'].includes(request.status);
+  const isFinal = ['completed', 'failed', 'cancelled', 'expired', 'denied', 'rejected'].includes(request.status);
 
   return (
     <div className="attestation-form">
@@ -192,7 +192,7 @@ const AttestationForm = () => {
             <input
               type="text"
               value={voucherId}
-              onChange={(e) => setVoucherId(e.target.value.trim())}
+              onChange={(e) => { setVoucherId(e.target.value.trim()); setResealedShare(''); }}
               placeholder="UUID of your voucher in this circle"
               required
               className="mono"

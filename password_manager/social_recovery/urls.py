@@ -27,6 +27,11 @@ urlpatterns = [
         name="social-recovery-request-complete",
     ),
     path(
+        "requests/<uuid:request_id>/abandon/",
+        views.AbandonRequestView.as_view(),
+        name="social-recovery-request-abandon",
+    ),
+    path(
         "requests/<uuid:request_id>/cancel/",
         views.CancelRequestView.as_view(),
         name="social-recovery-request-cancel",

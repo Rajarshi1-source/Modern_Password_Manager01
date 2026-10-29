@@ -52,11 +52,13 @@ const VoucherAccept = () => {
           + 'that created the guardian key you gave the circle owner.');
         return;
       }
+      // Keep the sealed copy before the server marks the voucher accepted:
+      // after that the invitation no longer returns it.
+      saveSealedShare(invitation.data.voucher_id, invitation.data.sealed_share);
       const resp = await ApiService.socialRecovery.acceptVoucher(
         invitationToken,
         { signature_b64: signatureB64.trim(), share_proof: shareProof }
       );
-      saveSealedShare(resp.data.voucher_id, invitation.data.sealed_share);
       setResult(resp.data);
     } catch (err) {
       setError(ApiService.handleError(err).error || 'Failed to accept invitation.');

@@ -109,6 +109,25 @@ function normalizeFingerprint(value) {
   return String(value || '').toUpperCase().replace(/[^0-9A-F]/g, '');
 }
 
+/**
+ * Requester: the token that lets this device mark its request failed when
+ * the released shares do not recombine. Derived from the one-time secret
+ * key, so only this device has it; it reveals nothing about the key.
+ * The server gets SHA-256 of it at initiation (`abandonTokenHash`).
+ */
+export function abandonToken(keyPair) {
+  const secret = fromB64(keyPair.secretKey);
+  try {
+    return toB64(sha256(concat(encoder.encode('pwm-recovery-abandon-v1|'), secret)));
+  } finally {
+    secret.fill(0);
+  }
+}
+
+export function abandonTokenHash(keyPair) {
+  return toB64(sha256(fromB64(abandonToken(keyPair))));
+}
+
 /** Guardian or requester: a new hybrid key pair, base64-encoded. */
 export async function newHolderKeyPair() {
   const { publicKey, secretKey } = await generateHybridKeyPair();
