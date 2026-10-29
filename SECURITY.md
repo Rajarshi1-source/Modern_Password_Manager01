@@ -55,7 +55,7 @@ Scans are required:
 - **Severity:** High (Potential Key Leak)
 - **Issue:** `ecdsa.SigningKey.sign_digest()` is vulnerable to timing attacks on P-256 curve, potentially leaking nonces.
 - **Mitigation:** We do not perform P-256 signing operations directly; dependency usage is limited to non-signing contexts or verified safe paths.
-- **Status:** Accepted risk (Upstream considers side-channel out of scope)
+- **Status:** Accepted risk (Upstream considers side-channel out of scope). sendgrid uses ecdsa only to verify Event Webhook signatures with a public key, which holds no secret, and nothing here calls that helper. Suppression (PYSEC-2026-1325) renewed 2026-10-29 to 2026-12-28 in `password_manager/pip-audit-ignores.txt`.
 
 ### 5️⃣ `nltk` – Model-Artifact Path Traversal (CVE-2026-81726) — RESOLVED 2026-10-24
 - **Advisory:** GHSA-8mgp-746c-j5xp / PYSEC-2026-3740, affecting every nltk release up to 3.10.3.

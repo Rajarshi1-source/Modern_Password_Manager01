@@ -67,6 +67,14 @@ class ClientSealedCircleApiTests(TestCase):
             self.assertEqual(r.status_code, 400, (field, r.content))
         self.assertFalse(RecoveryCircle.objects.exists())
 
+    def test_one_guardian_key_for_two_vouchers_is_refused(self):
+        # Its holder could open both shares and meet a threshold of two alone.
+        self.vouchers[1] = {**self.vouchers[1],
+                            "hybrid_public_key": self.vouchers[0]["hybrid_public_key"]}
+        r = self._create()
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertFalse(RecoveryCircle.objects.exists())
+
     def test_the_sealed_shares_are_stored_as_sent(self):
         r = self._create()
         self.assertEqual(r.status_code, 201, r.content)

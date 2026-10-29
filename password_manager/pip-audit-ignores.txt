@@ -244,7 +244,20 @@
 # key handling), same reasoning as the nltk floor two entries up. This app's
 # own signing/verification goes through cryptography (Ed25519/EC via
 # hazmat.primitives.asymmetric) and liboqs, never ecdsa directly.
-PYSEC-2026-1325 exp:2026-10-30
+#
+# RENEWED 2026-10-29 (first renewal, PR #594), re-checked rather than carried
+# forward: pypi.org still lists 0.19.2 as the newest ecdsa release and gives
+# PYSEC-2026-1325 / GHSA-wj6h-64fc-37mp no fixed version; `git grep` still
+# finds no `import ecdsa` / `from ecdsa` under password_manager/. Correction
+# to the source named above: in the installed environment ecdsa is required
+# by sendgrid, not web3/eth-account (`pip show ecdsa`: Required-by sendgrid).
+# sendgrid uses it only in sendgrid.helpers.eventwebhook, to VERIFY an Event
+# Webhook signature with SendGrid's public key (VerifyingKey); Minerva
+# recovers a private key from the timing of signing or key generation, and a
+# verification holds no secret. Nothing here uses that helper either (no
+# EventWebhook reference in password_manager/). A second renewal needs a
+# tracking issue, per the policy at the top of this file.
+PYSEC-2026-1325 exp:2026-12-28
 
 # Twisted ReDoS in twisted.mail.imap4.wildcardToRegexp (CVE-2026-106454,
 # alias GHSA-8pqf-f4m5-798g, medium), surfaced on PR #555's scan 2026-10-16.

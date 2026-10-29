@@ -151,7 +151,15 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
               requestId, { abandon_token: abandonToken(keyPair) },
             );
           } catch (abandonErr) {
-            console.warn('RecoveryProgress: marking the request failed did not work:', abandonErr);
+            const code = abandonErr?.response?.status;
+            if (!(code >= 400 && code < 500 && code !== 429)) {
+              // Network, 429 or 5xx: keep the key (only it derives the
+              // token) and let a later poll retry the abandon.
+              console.warn('RecoveryProgress: marking the request failed did not work, will retry:', abandonErr);
+              reconstructedFiredRef.current = false;
+              return;
+            }
+            console.warn('RecoveryProgress: the server refused to mark the request failed:', abandonErr);
           }
           forgetRequesterKeyPair(requestId);
           setError(

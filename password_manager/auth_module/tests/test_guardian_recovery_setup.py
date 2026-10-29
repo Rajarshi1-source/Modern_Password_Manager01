@@ -111,6 +111,10 @@ class GuardianRecoverySetupTests(TestCase):
         self.assertEqual(self._setup(three, threshold_shards=4).status_code, 400)
         dup = [_guardian(1)[0], _guardian(1)[0], _guardian(3)[0]]
         self.assertEqual(self._setup(dup).status_code, 400)
+        # One key on two guardians would let its holder open both shares.
+        same_key = [_guardian(i)[0] for i in (1, 2, 3)]
+        same_key[1]['public_key'] = same_key[0]['public_key']
+        self.assertEqual(self._setup(same_key).status_code, 400)
         self.assertFalse(PasskeyRecoverySetup.objects.filter(user=self.user).exists())
 
     def test_a_setup_from_before_client_sealing_is_replaced(self):
