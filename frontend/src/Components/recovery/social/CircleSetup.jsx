@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import ApiService from '../../../services/api';
-import { keyFingerprint, sealSeedForGuardians } from '../../../services/recovery/sealedShareRecovery';
+import { HYBRID_PUBLIC_KEY_SIZE } from '../../../services/quantum/hybridKem';
+import {
+  fromB64,
+  keyFingerprint,
+  sealSeedForGuardians,
+  toB64,
+} from '../../../services/recovery/sealedShareRecovery';
 import { hexToBytes } from '../../../utils/hex';
 import './CircleSetup.css';
 
@@ -17,13 +23,20 @@ const EMPTY_VOUCHER = () => ({
 
 // The server never relays a guardian key to the owner: the owner pastes it
 // from the guardian, and checks this fingerprint with them out of band.
-const safeFingerprint = (publicKeyB64) => {
+// The decoded guardian key, or null when it is not base64 of a hybrid
+// public key's length.
+const decodeGuardianKey = (publicKeyB64) => {
   try {
-    return keyFingerprint(publicKeyB64);
+    const key = fromB64(publicKeyB64);
+    return key.length === HYBRID_PUBLIC_KEY_SIZE ? key : null;
   } catch {
-    return 'not a valid key';
+    return null;
   }
 };
+
+const safeFingerprint = (publicKeyB64) => (
+  decodeGuardianKey(publicKeyB64) ? keyFingerprint(publicKeyB64) : 'not a valid key'
+);
 
 const statusBadge = (status) => {
   const map = {
@@ -148,6 +161,20 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
       );
       return;
     }
+    // A pasted key is checked here, so a bad one reads as an input error,
+    // not a failed request. One key on two vouchers would let its holder
+    // open both shares (the server refuses that too).
+    const keys = vouchers.map((v) => decodeGuardianKey(v.hybrid_public_key));
+    const badKey = keys.findIndex((k) => !k);
+    if (badKey !== -1) {
+      setError(`Voucher #${badKey + 1}'s guardian key is not a valid key. Ask them `
+        + 'to copy it again from /recovery/guardian-key.');
+      return;
+    }
+    if (new Set(keys.map(toB64)).size !== keys.length) {
+      setError('Two vouchers have the same guardian key. Each voucher needs their own.');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -157,8 +184,13 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
         sealed = await sealSeedForGuardians({
           seed,
           threshold: Number(threshold),
-          guardianPublicKeys: vouchers.map((v) => v.hybrid_public_key),
+          guardianPublicKeys: keys.map(toB64),
         });
+      } catch {
+        // Right length but unusable key material (e.g. a low-order X25519 point).
+        setError('A guardian key could not be used. Ask each voucher to copy '
+          + 'their key again from /recovery/guardian-key.');
+        return;
       } finally {
         seed.fill(0);
       }
