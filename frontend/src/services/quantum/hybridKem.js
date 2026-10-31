@@ -46,7 +46,15 @@ const INFO_LABEL = new TextEncoder().encode('pwm-hybrid-kem-v1');
 
 let mlkemPromise = null;
 function mlkem() {
-  if (!mlkemPromise) mlkemPromise = createMlKem768();
+  // Forget a failed start so a later call retries: a cached rejection would
+  // fail every seal and open on the page, and recoverSeed would read that as
+  // guardians sending bad shares.
+  if (!mlkemPromise) {
+    mlkemPromise = createMlKem768().catch((err) => {
+      mlkemPromise = null;
+      throw err;
+    });
+  }
   return mlkemPromise;
 }
 
