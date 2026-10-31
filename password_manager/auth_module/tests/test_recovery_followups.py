@@ -55,34 +55,6 @@ class RecoveryFollowupTests(TestCase):
             self.assertEqual(r.status_code, 410, r.content)
             self.assertNotIn('exists', r.json())
 
-    def test_behavioral_initiate_answers_every_email_the_same_way(self):
-        from behavioral_recovery.models import BehavioralCommitment, BehavioralRecoveryAttempt
-        enrolled = User.objects.create_user('enrolled', 'enrolled@example.com', 'Enrolled-Pass-1!')
-        BehavioralCommitment.objects.create(
-            user=enrolled, encrypted_embedding=b'x', challenge_type='typing')
-        # The first challenge is typing: a mouse-only account could not pass it
-        mouse_only = User.objects.create_user('mouse', 'mouse@example.com', 'Mouse-Pass-1!')
-        BehavioralCommitment.objects.create(
-            user=mouse_only, encrypted_embedding=b'x', challenge_type='mouse')
-        url = '/api/behavioral-recovery/initiate/'
-        answers = [self.anon.post(url, {'email': e}, format='json')
-                   for e in ('nobody@example.com', 'owner@example.com',
-                             'mouse@example.com', 'enrolled@example.com')]
-        for r in answers:
-            self.assertEqual(r.status_code, 200, r.content)
-            self.assertEqual(r.json(), answers[0].json())
-            self.assertNotIn('attempt_id', r.json())
-        # Only the enrolled account gets a link, by email, to its own attempt
-        attempt = BehavioralRecoveryAttempt.objects.get(user=enrolled)
-        links = [m for m in mail.outbox if 'behavioral_attempt=' in m.body]
-        self.assertEqual([m.to for m in links], [['enrolled@example.com']])
-        # The link opens the frontend origin, and states the attempt's deadline
-        self.assertIn(
-            f'https://app.example.com/password-recovery?behavioral_attempt={attempt.attempt_id}',
-            links[0].body)
-        days = attempt.metadata['recovery_config']['days']
-        self.assertIn(f'over the next {days} days', links[0].body)
-
     def _queries(self, url, email):
         with CaptureQueriesContext(connection) as queries:
             self.anon.post(url, {'email': email}, format='json')
@@ -96,12 +68,13 @@ class RecoveryFollowupTests(TestCase):
         from behavioral_recovery.tasks import start_behavioral_recovery
         BehavioralCommitment.objects.create(
             user=self.owner, encrypted_embedding=b'x', challenge_type='typing')
+        # Behavioral initiate is retired: it does no account work at all.
         with patch.object(send_password_reset_email, 'delay') as reset,                 patch.object(start_behavioral_recovery, 'delay') as behavioral:
             for url in ('/api/auth/request_password_reset/', '/api/behavioral-recovery/initiate/'):
                 self.assertEqual(self._queries(url, 'owner@example.com'),
                                  self._queries(url, 'nobody@example.com'), url)
         self.assertEqual(reset.call_count, 2)
-        self.assertEqual(behavioral.call_count, 2)
+        self.assertEqual(behavioral.call_count, 0)
 
     def test_behavioral_challenge_errors_are_logged_not_crashed(self):
         # The audit log field is `details`; writing `event_data` raised a

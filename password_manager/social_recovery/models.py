@@ -64,11 +64,17 @@ class RecoveryCircle(models.Model):
         help_text="Total vouchers enrolled (N in M-of-N)",
     )
 
-    # Pedersen commitment of the master recovery seed; 33-byte compressed
-    # point on secp256k1 to match zk_proofs/crypto/schnorr.py.
+    # Pedersen commitment of the master recovery seed, computed by the server
+    # on circles made before the seed was split on the client. Empty on new
+    # circles: the server never sees the seed.
     secret_commitment = models.BinaryField(
-        help_text="Pedersen commitment of the master recovery seed (33 bytes)"
+        default=bytes,
+        blank=True,
+        help_text="Legacy: Pedersen commitment of the master recovery seed (33 bytes)",
     )
+    # SHA-256("pwm-recovery-seed-check-v1|" || seed), from the owner's device;
+    # returned at completion so the requester's device can check the seed.
+    secret_check = models.BinaryField(default=bytes, blank=True)
     # Key-derivation salt used to bind the circle to the owner's login.
     salt = models.BinaryField(default=bytes)
 
@@ -183,10 +189,13 @@ class Voucher(models.Model):
         help_text="Relative weight this voucher contributes toward the quorum.",
     )
 
-    # Encrypted Shamir share + metadata. The share itself is a hex-encoded
-    # ``ShamirSecretSharer`` string wrapped with XChaCha20-Poly1305 under a key
-    # derived from the voucher's Ed25519 public key (X25519 key agreement).
+    # Shamir share sealed on the owner's device to ``hybrid_public_key``
+    # (shared/sealed_shares.py). The server cannot open it.
     encrypted_shard_data = models.BinaryField()
+    # The voucher's X25519 + ML-KEM-768 public key, from the voucher's device.
+    hybrid_public_key = models.BinaryField(default=bytes, blank=True)
+    # SHA-256 of the voucher's share proof, checked when the voucher accepts.
+    share_proof_hash = models.BinaryField(default=bytes, blank=True)
     encryption_metadata = models.JSONField(default=dict, blank=True)
     share_index = models.IntegerField(
         help_text="Shamir share index (x-coordinate).",
@@ -291,6 +300,8 @@ class SocialRecoveryRequest(models.Model):
         ("expired", "Expired"),
         ("cancelled", "Cancelled"),
         ("completed", "Completed"),
+        # The requester's device could not recombine the released shares.
+        ("failed", "Failed"),
     )
 
     request_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -303,6 +314,12 @@ class SocialRecoveryRequest(models.Model):
     initiator_ip = models.GenericIPAddressField(null=True, blank=True)
     device_fingerprint = models.CharField(max_length=128, blank=True, default="")
     geo = models.JSONField(default=dict, blank=True)
+    # One-time hybrid public key of the requester's device; approving
+    # vouchers re-seal their shares to it.
+    requester_public_key = models.BinaryField(default=bytes, blank=True)
+    # SHA-256 of a token only the requester's device can derive (from its
+    # one-time key); presenting the token marks a completed request failed.
+    abandon_token_hash = models.BinaryField(default=bytes, blank=True)
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
 
@@ -359,6 +376,10 @@ class VouchAttestation(models.Model):
     zk_proof_s = models.BinaryField(null=True, blank=True)
     fresh_commitment = models.BinaryField(null=True, blank=True)
 
+    # On approval: the voucher's share re-sealed to the request's
+    # requester_public_key on the voucher's device.
+    resealed_share = models.BinaryField(null=True, blank=True)
+
     # Optional ``SocialVouch`` VC linking this attestation to an issuer.
     vc_id = models.UUIDField(null=True, blank=True)
 
@@ -399,6 +420,7 @@ class SocialRecoveryAuditLog(models.Model):
         ("attestation_rejected", "Attestation Rejected"),
         ("request_completed", "Request Completed"),
         ("request_cancelled", "Request Cancelled"),
+        ("request_failed", "Request Failed"),
         ("stake_slashed", "Stake Slashed"),
     )
 

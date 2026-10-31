@@ -1,9 +1,11 @@
 """RecoveryCircle management.
 
-The owner of the vault calls ``create_circle`` to split the recovery secret
-with Shamir and publish a Pedersen commitment of it. Individual Voucher rows
-are created in ``draft`` status; the circle flips to ``active`` once every
-voucher accepts their invitation.
+The owner's device splits the recovery seed with Shamir and seals each share
+to a voucher's hybrid X25519 + ML-KEM-768 public key
+(``frontend/src/services/recovery/sealedShareRecovery.js``); ``create_circle``
+stores those sealed shares and the seed check. The server never sees the seed
+or a share. Individual Voucher rows are created in ``pending`` status; the
+circle flips to ``active`` once every voucher accepts their invitation.
 """
 from __future__ import annotations
 
@@ -16,8 +18,7 @@ from typing import Iterable, List, Mapping, Optional
 from django.db import transaction
 from django.utils import timezone
 
-from auth_module.services.shamir_py3 import ShamirSecretSharer
-from decentralized_identity.services.did_service import multibase_decode
+from shared import sealed_shares
 from zk_proofs.crypto import secp256k1 as ec
 from zk_proofs.crypto import schnorr
 
@@ -27,7 +28,6 @@ from ..models import (
     Voucher,
 )
 from .audit_service import record_event
-from .shard_crypto import SHARE_ENCRYPTION_ALGORITHM, encrypt_shard
 
 
 DEFAULT_INVITATION_TTL = timedelta(days=7)
@@ -43,18 +43,6 @@ def _scalar_from_bytes(blob: bytes) -> int:
     if not blob:
         return 1  # never return 0 - commitments would be trivially openable
     return int.from_bytes(hashlib.sha256(blob).digest(), "big") % ec.N or 1
-
-
-def _encrypt_share_for_voucher(share: str, public_key_multibase: str) -> bytes:
-    """Seal a Shamir share with X25519-HKDF-AES-GCM to the voucher's pubkey.
-
-    Unlike the previous construction (which derived the KEK from the voucher's
-    *public* key and was therefore decryptable by anyone with DB read access),
-    this routine requires the voucher's Ed25519 *private* seed to decrypt,
-    because the KEK is a function of an ephemeral X25519 ECDH output.
-    """
-    ed_pub = multibase_decode(public_key_multibase)
-    return encrypt_shard(share, public_key_multibase, ed_pub)
 
 
 def _relationship_commitment(voucher_public_key: str, circle_id: uuid.UUID):
@@ -87,7 +75,7 @@ def _relationship_commitment(voucher_public_key: str, circle_id: uuid.UUID):
 def create_circle(
     *,
     user,
-    master_secret_hex: str,
+    secret_check: bytes,
     threshold: int,
     vouchers: Iterable[Mapping],
     min_voucher_reputation: int = 0,
@@ -99,7 +87,11 @@ def create_circle(
 
     ``vouchers`` is an iterable of dicts with at minimum:
 
-        ``{"ed25519_public_key": "z...", "relationship_label": "..."}``
+        ``{"ed25519_public_key": "z...", "hybrid_public_key": bytes,
+        "share_index": int, "sealed_share": bytes, "share_proof_hash": bytes}``
+
+    (the last four already decoded and checked by
+    ``shared.sealed_shares``). ``secret_check`` is the owner's seed check.
 
     Additional optional keys:
 
@@ -113,22 +105,17 @@ def create_circle(
     if total < 2:
         raise ValueError("at least two vouchers required")
 
-    # 1) Split the master secret with Shamir.
-    shares = ShamirSecretSharer.split_secret(master_secret_hex, threshold, total)
-
-    # 2) Publish a Pedersen commitment to the master secret itself so the
-    #    completion service can later verify reconstruction correctness.
-    master_m = _scalar_from_bytes(bytes.fromhex(master_secret_hex))
-    master_salt = _secrets.token_bytes(32)
-    master_r = _scalar_from_bytes(master_salt) or 1
-    master_commit_bytes = ec.encode_point(schnorr.commit(master_m, master_r))
+    if len({v["share_index"] for v in voucher_list}) != total:
+        raise ValueError("share_index values must be distinct")
+    # One key on two vouchers lets its holder open both shares.
+    if len({bytes(v["hybrid_public_key"]) for v in voucher_list}) != total:
+        raise ValueError("each voucher needs its own guardian key")
 
     circle = RecoveryCircle.objects.create(
         user=user,
         threshold=threshold,
         total_vouchers=total,
-        secret_commitment=master_commit_bytes,
-        salt=master_salt,
+        secret_check=bytes(secret_check),
         status="draft",
         min_voucher_reputation=min_voucher_reputation,
         min_total_stake=min_total_stake,
@@ -138,9 +125,8 @@ def create_circle(
     ttl = invitation_ttl or DEFAULT_INVITATION_TTL
     now = timezone.now()
 
-    for idx, (share_str, voucher_spec) in enumerate(zip(shares, voucher_list), start=1):
+    for voucher_spec in voucher_list:
         ed_pub = voucher_spec["ed25519_public_key"]
-        ciphertext = _encrypt_share_for_voucher(share_str, ed_pub)
 
         voucher = Voucher.objects.create(
             circle=circle,
@@ -151,15 +137,13 @@ def create_circle(
             ed25519_public_key=ed_pub,
             relationship_label=voucher_spec.get("relationship_label", "") or "",
             vouch_weight=int(voucher_spec.get("vouch_weight", 1)),
-            share_index=idx,
-            encrypted_shard_data=ciphertext,
+            share_index=voucher_spec["share_index"],
+            encrypted_shard_data=voucher_spec["sealed_share"],
+            hybrid_public_key=voucher_spec["hybrid_public_key"],
+            share_proof_hash=voucher_spec["share_proof_hash"],
             encryption_metadata={
-                "algorithm": SHARE_ENCRYPTION_ALGORITHM,
-                "target_public_key": ed_pub,
-                "share_format": "shamir-py3/v1",
-                "nonce_length": 12,
-                "ephemeral_pub_length": 32,
-                "aad": "pwm-social-recovery-v2|<target_public_key>",
+                "algorithm": sealed_shares.HYBRID_KEM_ALGORITHM,
+                "share_format": sealed_shares.SHARE_FORMAT,
             },
             stake_amount=int(voucher_spec.get("stake_amount", 0)),
             status="pending",
@@ -189,54 +173,6 @@ def create_circle(
     )
 
     return circle
-
-
-@transaction.atomic
-def add_voucher(
-    *,
-    circle: RecoveryCircle,
-    ed25519_public_key: str,
-    share_index: int,
-    encrypted_share: bytes,
-    did_string: str = "",
-    email: str = "",
-    display_name: str = "",
-    user=None,
-    vouch_weight: int = 1,
-    stake_amount: int = 0,
-) -> Voucher:
-    """Attach an additional voucher (used by tests and admin actions)."""
-    voucher = Voucher.objects.create(
-        circle=circle,
-        ed25519_public_key=ed25519_public_key,
-        did_string=did_string,
-        email=email,
-        display_name=display_name,
-        user=user,
-        share_index=share_index,
-        encrypted_shard_data=encrypted_share,
-        vouch_weight=vouch_weight,
-        stake_amount=stake_amount,
-        status="pending",
-        invitation_expires_at=timezone.now() + DEFAULT_INVITATION_TTL,
-    )
-    commit_bytes, _r, salt, salt_hash = _relationship_commitment(
-        ed25519_public_key, circle.circle_id
-    )
-    RelationshipCommitment.objects.create(
-        circle=circle,
-        voucher=voucher,
-        pedersen_commitment=commit_bytes,
-        salt=salt,
-        salt_hash=salt_hash,
-    )
-    record_event(
-        event_type="voucher_invited",
-        user=circle.user,
-        circle=circle,
-        event_data={"voucher_id": str(voucher.voucher_id)},
-    )
-    return voucher
 
 
 @transaction.atomic

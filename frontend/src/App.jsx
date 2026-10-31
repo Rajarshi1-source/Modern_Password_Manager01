@@ -341,7 +341,6 @@ export const VaultItemsSection = () => {
 const PasskeyPrimaryRecoverySetup = lazy(() => import('./Components/auth/PasskeyPrimaryRecoverySetup'));
 const PasskeyPrimaryRecoveryInitiate = lazy(() => import('./Components/auth/PasskeyPrimaryRecoveryInitiate'));
 // Quantum (Social Mesh) Recovery component
-const QuantumRecoverySetup = lazy(() => import('./Components/auth/QuantumRecoverySetup'));
 // Genetic Password OAuth callback
 const GeneticOAuthCallback = lazy(() => import('./Components/auth/GeneticOAuthCallback'));
 // Natural Entropy Dashboard
@@ -443,6 +442,7 @@ const SocialRecoveryCircleSetup = lazy(() => import('./Components/recovery/socia
 const SocialRecoveryInitiation = lazy(() => import('./Components/recovery/social/RecoveryInitiation'));
 const SocialRecoveryProgress = lazy(() => import('./Components/recovery/social/RecoveryProgress'));
 const SocialRecoveryVoucherAccept = lazy(() => import('./Components/recovery/social/VoucherAccept'));
+const SocialRecoveryGuardianKey = lazy(() => import('./Components/recovery/social/GuardianKey'));
 const SocialRecoveryAttestationForm = lazy(() => import('./Components/recovery/social/AttestationForm'));
 
 // Dead Drop Mesh (BLE mesh + Shamir fragments + geofenced collection).
@@ -2445,8 +2445,19 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : <PasskeyPrimaryRecoverySetup />
                 } />
                 <Route path="/passkey-recovery/recover" element={<PasskeyPrimaryRecoveryInitiate />} />
-                {/* Quantum (Social Mesh) Recovery route */}
-                <Route path="/recovery/social-mesh" element={<QuantumRecoverySetup />} />
+                {/* Guardian (social-mesh) recovery. The old setup page here sent
+                    guardian emails without sealed shares, which the server
+                    refuses. Client-sealed guardian recovery is finished only
+                    by the tier-2 pages (RecoveryProgress recombines the
+                    shares only with their onSecretReconstructed callback),
+                    which stay gated and say so until browser validation;
+                    the standalone /recovery/social pages cannot finish a
+                    recovery, so this entry point does not lead there. */}
+                <Route path="/recovery/social-mesh" element={
+                  isAuthenticated
+                    ? <Navigate to="/recovery/social-mesh/enroll-v2" replace />
+                    : <Navigate to="/recovery/social-mesh/recover-v2" replace />
+                } />
                 {/* Genetic Password OAuth callback */}
                 <Route path="/genetic-callback" element={<GeneticOAuthCallback />} />
                 {/* Natural Entropy Dashboard */}
@@ -2635,6 +2646,12 @@ function App() {
                 <Route path="/recovery/social/attest/:requestId" element={
                   <ErrorBoundary fallbackMessage="Failed to load Attestation Form">
                     <SocialRecoveryAttestationForm />
+                  </ErrorBoundary>
+                } />
+                {/* A guardian's key, made in their browser before any invitation */}
+                <Route path="/recovery/guardian-key" element={
+                  <ErrorBoundary fallbackMessage="Failed to load Guardian Key">
+                    <SocialRecoveryGuardianKey />
                   </ErrorBoundary>
                 } />
                 <Route path="/recovery/social/voucher/:invitationToken" element={

@@ -7,6 +7,8 @@ from typing import Any
 
 from rest_framework import serializers
 
+from shared import sealed_shares
+
 from .models import (
     RecoveryCircle,
     RelationshipCommitment,
@@ -25,7 +27,15 @@ def _b64_decode(value: Any, field_name: str) -> bytes:
     try:
         return base64.b64decode(value, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise serializers.ValidationError({field_name: f"invalid base64: {exc}"})
+        raise serializers.ValidationError({field_name: "invalid base64"})
+
+
+def _sealed(decoder, message, value):
+    """``decoder(value)``, or a validation error with the fixed ``message``."""
+    raw = decoder(value)
+    if raw is None:
+        raise serializers.ValidationError(message)
+    return raw
 
 
 def _b64_encode(blob: Any) -> str:
@@ -45,6 +55,22 @@ class VoucherInputSerializer(serializers.Serializer):
     relationship_label = serializers.CharField(required=False, allow_blank=True, max_length=64)
     vouch_weight = serializers.IntegerField(required=False, default=1, min_value=1, max_value=10)
     stake_amount = serializers.IntegerField(required=False, default=0, min_value=0)
+    # Sealed on the owner's device (shared/sealed_shares.py).
+    hybrid_public_key = serializers.CharField()
+    share_index = serializers.IntegerField(min_value=1, max_value=255)
+    sealed_share = serializers.CharField()
+    share_proof_hash = serializers.CharField()
+
+    def validate_hybrid_public_key(self, value):
+        return _sealed(sealed_shares.decode_hybrid_public_key,
+                       sealed_shares.INVALID_HYBRID_PUBLIC_KEY, value)
+
+    def validate_sealed_share(self, value):
+        return _sealed(sealed_shares.decode_sealed_share,
+                       sealed_shares.INVALID_SEALED_SHARE, value)
+
+    def validate_share_proof_hash(self, value):
+        return _sealed(sealed_shares.decode_digest, sealed_shares.INVALID_DIGEST, value)
 
     def validate(self, attrs):
         if not any(
@@ -61,12 +87,26 @@ class VoucherInputSerializer(serializers.Serializer):
 
 
 class CreateCircleSerializer(serializers.Serializer):
-    master_secret_hex = serializers.RegexField(regex=r"^[0-9a-fA-F]+$", max_length=4096)
+    # The seed is split and sealed on the owner's device; only its check is sent.
+    secret_check = serializers.CharField()
     threshold = serializers.IntegerField(min_value=2, max_value=10)
     min_voucher_reputation = serializers.IntegerField(required=False, default=0, min_value=0)
     min_total_stake = serializers.IntegerField(required=False, default=0, min_value=0)
     cooldown_hours = serializers.IntegerField(required=False, default=24, min_value=0)
     vouchers = VoucherInputSerializer(many=True)
+
+    def to_internal_value(self, data):
+        if hasattr(data, "keys") and any(
+            k in data for k in ("master_secret_hex", "secret_hex", "secret")
+        ):
+            raise serializers.ValidationError(
+                {"master_secret_hex": "send sealed shares only; the recovery seed "
+                                      "never leaves your device"}
+            )
+        return super().to_internal_value(data)
+
+    def validate_secret_check(self, value):
+        return _sealed(sealed_shares.decode_digest, sealed_shares.INVALID_DIGEST, value)
 
 
 class VoucherSerializer(serializers.ModelSerializer):
@@ -133,6 +173,7 @@ class CircleSerializer(serializers.ModelSerializer):
 class AcceptInvitationSerializer(serializers.Serializer):
     invitation_token = serializers.CharField(max_length=128)
     signature_b64 = serializers.CharField()
+    share_proof = serializers.CharField()
 
     def to_internal_value(self, data):
         cleaned = super().to_internal_value(data)
@@ -145,6 +186,15 @@ class InitiateRequestSerializer(serializers.Serializer):
     initiator_email = serializers.EmailField(required=False, allow_blank=True)
     device_fingerprint = serializers.CharField(required=False, allow_blank=True, max_length=128)
     geo = serializers.JSONField(required=False, default=dict)
+    requester_public_key = serializers.CharField()
+    abandon_token_hash = serializers.CharField(required=False)
+
+    def validate_requester_public_key(self, value):
+        return _sealed(sealed_shares.decode_hybrid_public_key,
+                       sealed_shares.INVALID_HYBRID_PUBLIC_KEY, value)
+
+    def validate_abandon_token_hash(self, value):
+        return _sealed(sealed_shares.decode_digest, sealed_shares.INVALID_DIGEST, value)
 
 
 class AttestationSerializer(serializers.Serializer):
@@ -155,39 +205,22 @@ class AttestationSerializer(serializers.Serializer):
     proof_T_b64 = serializers.CharField(required=False, allow_blank=True)
     proof_s_b64 = serializers.CharField(required=False, allow_blank=True)
     stake_amount = serializers.IntegerField(required=False, default=0, min_value=0)
+    resealed_share = serializers.CharField(required=False, allow_blank=True)
 
     def to_internal_value(self, data):
         cleaned = super().to_internal_value(data)
         cleaned["signature"] = _b64_decode(cleaned.pop("signature_b64"), "signature_b64")
+        resealed = cleaned.pop("resealed_share", "")
+        cleaned["resealed_share"] = None
+        if resealed:
+            cleaned["resealed_share"] = sealed_shares.decode_sealed_share(resealed)
+            if cleaned["resealed_share"] is None:
+                raise serializers.ValidationError(
+                    {"resealed_share": sealed_shares.INVALID_SEALED_SHARE})
         for key in ("fresh_commitment", "proof_T", "proof_s"):
             src = cleaned.pop(f"{key}_b64", "")
             cleaned[key] = _b64_decode(src, f"{key}_b64") if src else None
         return cleaned
-
-
-class CompleteRequestSerializer(serializers.Serializer):
-    decrypted_shares = serializers.ListField(
-        child=serializers.DictField(), min_length=1
-    )
-
-    def validate_decrypted_shares(self, value):
-        # Coerce ``voucher_id`` to a ``uuid.UUID`` here so the service layer
-        # receives a type-consistent value. The service compares against the
-        # set of approving voucher UUIDs returned by ``values_list`` (which
-        # are ``uuid.UUID`` objects); if we left ``voucher_id`` as a raw
-        # string, legitimate approvers would be rejected.
-        voucher_id_field = serializers.UUIDField()
-        share_field = serializers.CharField(allow_blank=False)
-        normalised = []
-        for entry in value:
-            if "voucher_id" not in entry or "share" not in entry:
-                raise serializers.ValidationError(
-                    "each entry must contain 'voucher_id' and 'share'"
-                )
-            vid = voucher_id_field.run_validation(entry["voucher_id"])
-            share = share_field.run_validation(entry["share"])
-            normalised.append({"voucher_id": vid, "share": share})
-        return normalised
 
 
 class AttestationDetailSerializer(serializers.ModelSerializer):
@@ -212,6 +245,12 @@ class AttestationDetailSerializer(serializers.ModelSerializer):
 
 class RequestSerializer(serializers.ModelSerializer):
     attestations = AttestationDetailSerializer(many=True, read_only=True)
+    # Guardians re-seal their shares to this key after checking its
+    # fingerprint with the requester over another channel.
+    requester_public_key = serializers.SerializerMethodField()
+
+    def get_requester_public_key(self, obj):
+        return _b64_encode(obj.requester_public_key)
 
     class Meta:
         model = SocialRecoveryRequest
@@ -226,6 +265,7 @@ class RequestSerializer(serializers.ModelSerializer):
             "total_stake_committed",
             "challenge_nonce",
             "risk_score",
+            "requester_public_key",
             "created_at",
             "expires_at",
             "completed_at",

@@ -1,149 +1,106 @@
-"""Complete an approved recovery request by reconstructing the secret."""
+"""Complete an approved recovery request by releasing the re-sealed shares."""
 from __future__ import annotations
 
 import hashlib
 import hmac
-import uuid
-from typing import Iterable, List, Mapping
 
 from django.db import transaction
 from django.utils import timezone
 
-from auth_module.services.shamir_py3 import ShamirSecretSharer
-from zk_proofs.crypto import secp256k1 as ec
-from zk_proofs.crypto import schnorr
+from shared import sealed_shares
 
 from ..models import SocialRecoveryRequest, VouchAttestation, Voucher
 from .audit_service import record_event
-from .stake_service import release_stake, slash_stake
+from .stake_service import slash_stake
 from .web_of_trust_service import evaluate_quorum
 
 
-def _scalar_from_bytes(blob: bytes) -> int:
-    """Mirror the scalar derivation used when the commitment was built."""
-    if not blob:
-        return 1
-    return int.from_bytes(hashlib.sha256(blob).digest(), "big") % ec.N or 1
-
-
-def _verify_secret_commitment(circle, recovered_secret_hex: str) -> bool:
-    """Recompute the Pedersen commitment from the recovered secret + circle salt
-    and compare against the stored one.
-
-    Returns True if, and only if, the Pedersen commitment opens to the
-    reconstructed secret. A mismatch indicates at least one corrupted or
-    forged share in the recovery set and the result MUST be rejected.
-    """
-    stored = bytes(circle.secret_commitment or b"")
-    salt = bytes(circle.salt or b"")
-    if not stored or not salt:
-        # If we have no commitment to check against (legacy rows) we cannot
-        # prove correctness — treat as a verification failure rather than a
-        # silent pass.
-        return False
-    try:
-        m_scalar = _scalar_from_bytes(bytes.fromhex(recovered_secret_hex))
-    except ValueError:
-        return False
-    r_scalar = _scalar_from_bytes(salt) or 1
-    recomputed = ec.encode_point(schnorr.commit(m_scalar, r_scalar))
-    return hmac.compare_digest(stored, recomputed)
-
-
 @transaction.atomic
-def complete_request(
-    *,
-    request: SocialRecoveryRequest,
-    decrypted_shares: Iterable[Mapping],
-) -> str:
-    """Reconstruct the master secret using voucher-supplied decrypted shares.
+def complete_request(*, request: SocialRecoveryRequest) -> dict:
+    """Return the approving vouchers' shares, re-sealed to the requester.
 
-    ``decrypted_shares`` is an iterable of ``{"voucher_id": ..., "share": ...}``
-    mappings. The caller (API view) is responsible for only accepting shares
-    that arrive inside a signed envelope from the voucher's device; the
-    service then ensures the submitting voucher actually approved the request.
+    The requester's device opens them with its one-time private key,
+    recombines the seed and checks it against ``secret_check``. The server
+    never sees a share or the seed, so it cannot check the result itself.
     """
     if request.status not in ("approved", "completed"):
         raise ValueError("request must be approved before completion")
+    circle = request.circle
+    if not bytes(circle.secret_check or b"") or not bytes(request.requester_public_key or b""):
+        raise ValueError("circle predates client-side sealing; create it again")
 
-    approved_voucher_ids = set(
-        VouchAttestation.objects.filter(
-            request=request, decision="approve"
-        ).values_list("voucher_id", flat=True)
+    approvals = (
+        VouchAttestation.objects.filter(request=request, decision="approve")
+        .exclude(resealed_share=None)
+        .select_related("voucher__user")
+        .order_by("voucher__share_index")
     )
+    shares = [
+        {
+            "voucher_id": str(att.voucher.voucher_id),
+            "share_index": att.voucher.share_index,
+            "sealed_share": sealed_shares.b64(att.resealed_share),
+        }
+        for att in approvals
+    ]
+    if len(shares) < circle.threshold:
+        raise ValueError(f"need >= {circle.threshold} shares, got {len(shares)}")
 
-    # ``approved_voucher_ids`` is a set of ``uuid.UUID`` (Django returns
-    # native UUID objects from ``values_list`` on a UUIDField). Callers
-    # may submit ``voucher_id`` as a string, so normalise both sides to
-    # ``uuid.UUID`` before the membership check — otherwise the ``in``
-    # check would spuriously fail and the service would wrongly reject
-    # legitimate approvers.
-    supplied: List[str] = []
-    used_voucher_ids: List[uuid.UUID] = []
-    for entry in decrypted_shares:
-        raw_vid = entry["voucher_id"]
-        share = entry["share"]
-        try:
-            vid = raw_vid if isinstance(raw_vid, uuid.UUID) else uuid.UUID(str(raw_vid))
-        except (ValueError, TypeError, AttributeError):
-            raise ValueError(f"voucher_id {raw_vid!r} is not a valid UUID")
-        if vid not in approved_voucher_ids:
-            raise ValueError(f"voucher {vid} did not approve this request")
-        if vid in used_voucher_ids:
-            continue  # idempotent; duplicates are ignored
-        supplied.append(share)
-        used_voucher_ids.append(vid)
+    if request.status != "completed":
+        request.status = "completed"
+        request.completed_at = timezone.now()
+        request.save(update_fields=["status", "completed_at"])
 
-    if len(supplied) < request.circle.threshold:
-        raise ValueError(
-            f"need >= {request.circle.threshold} shares, got {len(supplied)}"
-        )
+        # Approvers' stakes stay committed: the server cannot tell whether a
+        # re-sealed share is genuine (only the requester's device can, with
+        # the seed check), so completing is no evidence of honest vouching,
+        # and a fraudulent approval can still be slashed afterwards
+        # (reject_fraudulent_attestation).
+        q = evaluate_quorum(request)
 
-    secret_hex = ShamirSecretSharer.recover_secret(supplied[: request.circle.threshold])
-
-    # Verify the recovered secret against the Pedersen commitment published at
-    # circle-creation time. A mismatch means at least one share was corrupted
-    # or forged — we must not return a wrong secret to the caller.
-    if not _verify_secret_commitment(request.circle, secret_hex):
         record_event(
-            event_type="request_commitment_mismatch",
-            user=request.circle.user,
-            circle=request.circle,
-            event_data={"request_id": str(request.request_id)},
+            event_type="request_completed",
+            user=circle.user,
+            circle=circle,
+            event_data={
+                "request_id": str(request.request_id),
+                "approvals": q.approve_count,
+                "total_weight": q.total_weight,
+                "total_stake": q.total_stake,
+            },
         )
-        raise ValueError(
-            "reconstructed secret failed Pedersen commitment verification"
-        )
 
-    request.status = "completed"
-    request.completed_at = timezone.now()
-    request.save(update_fields=["status", "completed_at"])
+    return {
+        "threshold": circle.threshold,
+        "secret_check": sealed_shares.b64(circle.secret_check),
+        "sealed_shares": shares,
+        "algorithm": sealed_shares.HYBRID_KEM_ALGORITHM,
+    }
 
-    # Release stake for approving vouchers, on the assumption that a
-    # successful recovery implies those vouchers behaved honestly. Vouchers
-    # that denied or failed their proof path are left untouched.
-    q = evaluate_quorum(request)
-    for att in VouchAttestation.objects.filter(request=request, decision="approve").select_related("voucher__user"):
-        if att.voucher.user and att.stake_committed:
-            release_stake(
-                user=att.voucher.user,
-                amount=int(att.stake_committed),
-                request_id=str(request.request_id),
-            )
 
+@transaction.atomic
+def abandon_request(*, request: SocialRecoveryRequest, abandon_token: bytes) -> None:
+    """The requester's device reports that the released shares did not
+    recombine (a guardian sent a bad share). The request becomes ``failed``,
+    which the cooldown does not count, so the requester can start again.
+
+    Only the device holding the request's one-time key can derive the token
+    whose SHA-256 it sent at initiation. The token says nothing about the
+    key, a share or the seed.
+    """
+    request = SocialRecoveryRequest.objects.select_for_update().get(pk=request.pk)
+    stored = bytes(request.abandon_token_hash or b"")
+    if (request.status != "completed" or not stored
+            or not hmac.compare_digest(hashlib.sha256(abandon_token).digest(), stored)):
+        raise ValueError("request cannot be abandoned")
+    request.status = "failed"
+    request.save(update_fields=["status"])
     record_event(
-        event_type="request_completed",
+        event_type="request_failed",
         user=request.circle.user,
         circle=request.circle,
-        event_data={
-            "request_id": str(request.request_id),
-            "approvals": q.approve_count,
-            "total_weight": q.total_weight,
-            "total_stake": q.total_stake,
-        },
+        event_data={"request_id": str(request.request_id)},
     )
-
-    return secret_hex
 
 
 @transaction.atomic

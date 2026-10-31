@@ -6,7 +6,7 @@ Implements BERT Classifier and Siamese Network for credential matching
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoConfig
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 import hashlib
@@ -34,37 +34,34 @@ class BreachClassifierService:
         self._load_model(model_path)
     
     def _load_model(self, model_path: Optional[Path] = None):
-        """Load or initialize BERT model"""
+        """Load the trained breach classifier, or raise.
+
+        There is no fallback to the base model: its classification head is
+        untrained, so its predictions are random and a missed breach would be
+        reported as "no breach". Callers treat the error as a failure (the
+        task retries, the API answers 500).
+        """
         try:
             model_path = model_path or self.config.BERT_MODEL_PATH
             
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
                 self.config.BERT_MODEL_NAME,
+                revision=self.config.BERT_MODEL_REVISION,
                 cache_dir=self.config.MODELS_DIR
             )
 
-            # Try to load fine-tuned model
-            if model_path.exists():
-                logger.info(f"Loading fine-tuned model from {model_path}")
-                self.model = AutoModelForSequenceClassification.from_pretrained(  # nosec B615
-                    model_path,
-                    num_labels=self.config.BERT_NUM_LABELS
+            if not model_path.exists():
+                raise FileNotFoundError(
+                    f"Trained breach classifier not found at {model_path}. Train it "
+                    "(ml_dark_web/training/train_breach_classifier.py) and build it "
+                    "into the image; the untrained base model is not used."
                 )
-            else:
-                logger.warning(f"Fine-tuned model not found at {model_path}. Using base model.")
-                # Load base model for fine-tuning
-                config = AutoConfig.from_pretrained(  # nosec B615
-                    self.config.BERT_MODEL_NAME,
-                    num_labels=self.config.BERT_NUM_LABELS,
-                    hidden_dropout_prob=self.config.BERT_DROPOUT,
-                    attention_probs_dropout_prob=self.config.BERT_DROPOUT
-                )
-                self.model = AutoModelForSequenceClassification.from_pretrained(  # nosec B615
-                    self.config.BERT_MODEL_NAME,
-                    config=config,
-                    cache_dir=self.config.MODELS_DIR
-                )
+            logger.info(f"Loading fine-tuned model from {model_path}")
+            self.model = AutoModelForSequenceClassification.from_pretrained(  # nosec B615
+                model_path,
+                num_labels=self.config.BERT_NUM_LABELS
+            )
             
             self.model.to(self.device)
             self.model.eval()
@@ -142,14 +139,10 @@ class BreachClassifierService:
             }
             
         except Exception:
+            # Raise, never answer "not a breach": the caller would record a
+            # failure as a clean result.
             logger.exception("Error classifying breach")
-            return {
-                'is_breach': False,
-                'severity': 'LOW',
-                'confidence': 0.0,
-                'probabilities': {},
-                'error': 'Classification failed.'
-            }
+            raise
     
     def batch_classify(self, texts: List[str]) -> List[Dict]:
         """

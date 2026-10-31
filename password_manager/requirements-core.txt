@@ -76,7 +76,7 @@ certifi>=2026.10.19  # PYSEC-2026-4320: fixed in the 2026.10.19 CA bundle
 charset-normalizer==3.4.1
 idna==3.18
 urllib3==2.8.0
-dnspython==2.7.0
+dnspython==2.9.0  # CVE-2026-114605
 httpx>=0.27.0
 
 # Tor transport for Dark Protocol anonymous vault access.
@@ -137,7 +137,7 @@ packaging==25.0
 # Encoding
 cffi>=2.0.0
 pycparser>=2.22
-pyasn1==0.6.4  # GHSA-8ppf-4f7h-5ppj/GHSA-m4p7-r5rc-7g4j/GHSA-hm4w-wwcw-mr6r (CVE-2026-59884/-59885/-59886): quadratic OID/RELATIVE-OID decoding, unbounded BER long-form tag IDs, and REAL-value float conversion could each be driven into excessive CPU/memory by crafted ASN.1 input; all three fixed in 0.6.4
+pyasn1==0.6.5  # GHSA-8ppf-4f7h-5ppj/GHSA-m4p7-r5rc-7g4j/GHSA-hm4w-wwcw-mr6r (CVE-2026-59884/-59885/-59886): quadratic OID/RELATIVE-OID decoding, unbounded BER long-form tag IDs, and REAL-value float conversion could each be driven into excessive CPU/memory by crafted ASN.1 input; all three fixed in 0.6.4; + CVE-2026-119194/-119195/-119196/-119197 (GHSA-fm9c-5rcf-2q5p, GHSA-9m75-vc3g-4x39, GHSA-2qm8-x737-gmw5, GHSA-mm57-4v3p-rchx), fixed in 0.6.5
 rsa==4.9.1
 six==1.17.0
 
@@ -192,7 +192,7 @@ pytest-asyncio==1.3.0
 pytest-cov>=5.0.0
 
 # Optional: MongoDB Support
-pymongo==4.18.2  # CVE-2026-88029/-96747/-96748/-96749; optional, no code imports it
+pymongo==4.18.3  # CVE-2026-88029/-96747/-96748/-96749, CVE-2026-106435; optional, no code imports it
 aiohttp>=3.14.4  # GHSA-mfx4-hv73-q22v (CVE-2026-69243) WebSocket-upgrade request smuggling, fixed 3.14.2; 3.14.3 adds permessage-deflate / control-frame hardening; + GHSA-2g87-pp6c-29x5 (unbounded memory/CPU), GHSA-5wr8-gcqf-gqf3 (CVE-2026-111064, no initial request/header timeout) and GHSA-494j-54xm-rwp3 (CVE-2026-111063, shared-cookie Secure attribute), fixed in 3.14.4; 3.14.5 is the current patch
 authlib>=1.6.12
 filelock>=3.20.3

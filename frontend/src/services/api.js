@@ -190,6 +190,15 @@ const ApiService = {
     initiateRecovery: (data) => api.post('/auth/quantum-recovery/initiate_recovery/', data),
     submitChallengeResponse: (data) => api.post('/auth/quantum-recovery/respond_to_challenge/', data),
     completeRecovery: (data) => api.post('/auth/quantum-recovery/complete_recovery/', data),
+    approveRecovery: (data) => api.post('/auth/quantum-recovery/approve_recovery/', data),
+    // Guardian side: fetch the sealed share for an invitation or approval,
+    // then accept with the share proof (sealedShareRecovery.js).
+    getGuardianInvitation: (invitationToken) =>
+      api.post('/auth/quantum-recovery/guardian-invitation/', { invitation_token: invitationToken }),
+    acceptGuardianInvitation: (data) =>
+      api.post('/auth/quantum-recovery/accept-guardian-invitation/', data),
+    getGuardianShare: (approvalToken) =>
+      api.post('/auth/quantum-recovery/guardian_share/', { approval_token: approvalToken }),
   },
   
   // Vault endpoints
@@ -216,14 +225,18 @@ const ApiService = {
     listCircles: () => api.get('/api/social-recovery/circles/'),
     createCircle: (data) => api.post('/api/social-recovery/circles/', data),
     getCircle: (circleId) => api.get(`/api/social-recovery/circles/${circleId}/`),
+    getVoucherInvitation: (invitationToken) =>
+      api.get(`/api/social-recovery/vouchers/${invitationToken}/accept/`),
     acceptVoucher: (invitationToken, data) =>
       api.post(`/api/social-recovery/vouchers/${invitationToken}/accept/`, data),
     initiateRequest: (data) => api.post('/api/social-recovery/requests/', data),
     getRequest: (requestId) => api.get(`/api/social-recovery/requests/${requestId}/`),
     submitAttestation: (requestId, data) =>
       api.post(`/api/social-recovery/requests/${requestId}/attest/`, data),
-    completeRequest: (requestId, data) =>
-      api.post(`/api/social-recovery/requests/${requestId}/complete/`, data),
+    completeRequest: (requestId) =>
+      api.post(`/api/social-recovery/requests/${requestId}/complete/`, {}),
+    abandonRequest: (requestId, data) =>
+      api.post(`/api/social-recovery/requests/${requestId}/abandon/`, data),
     cancelRequest: (requestId, data) =>
       api.post(`/api/social-recovery/requests/${requestId}/cancel/`, data || {}),
     auditLog: () => api.get('/api/social-recovery/audit/'),

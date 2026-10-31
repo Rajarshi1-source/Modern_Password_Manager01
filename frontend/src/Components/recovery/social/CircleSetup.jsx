@@ -1,5 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import ApiService from '../../../services/api';
+import { HYBRID_PUBLIC_KEY_SIZE } from '../../../services/quantum/hybridKem';
+import {
+  fromB64,
+  keyFingerprint,
+  sealSeedForGuardians,
+  toB64,
+} from '../../../services/recovery/sealedShareRecovery';
+import { hexToBytes } from '../../../utils/hex';
 import './CircleSetup.css';
 
 const EMPTY_VOUCHER = () => ({
@@ -7,10 +15,28 @@ const EMPTY_VOUCHER = () => ({
   email: '',
   did_string: '',
   ed25519_public_key: '',
+  hybrid_public_key: '',
   relationship_label: '',
   vouch_weight: 1,
   stake_amount: 0,
 });
+
+// The server never relays a guardian key to the owner: the owner pastes it
+// from the guardian, and checks this fingerprint with them out of band.
+// The decoded guardian key, or null when it is not base64 of a hybrid
+// public key's length.
+const decodeGuardianKey = (publicKeyB64) => {
+  try {
+    const key = fromB64(publicKeyB64);
+    return key.length === HYBRID_PUBLIC_KEY_SIZE ? key : null;
+  } catch {
+    return null;
+  }
+};
+
+const safeFingerprint = (publicKeyB64) => (
+  decodeGuardianKey(publicKeyB64) ? keyFingerprint(publicKeyB64) : 'not a valid key'
+);
 
 const statusBadge = (status) => {
   const map = {
@@ -47,10 +73,8 @@ const statusBadge = (status) => {
  *   hidden and the value is used verbatim. When absent the user
  *   types it (legacy flow).
  * @param {string} [props.secretType]
- *   Informational — surfaces "vault_dek_seed" vs the implicit
- *   legacy "passkey_private_key". Not currently sent to the
- *   server; the existing createCircle endpoint doesn't yet
- *   accept a secret_type discriminator.
+ *   Informational — surfaces "vault_dek_seed". Not sent to the
+ *   server.
  * @param {(circleId: string) => void} [props.onComplete]
  *   Invoked with the server-issued `circle_id` after a successful
  *   create. Tier-2 wraps this in a PATCH to the wdek factor row's
@@ -111,49 +135,13 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
     e.preventDefault();
     setError(null);
 
-    // 🔴 ZK GUARD — tier-2 social-mesh DEK enrollment cannot use
-    // the legacy `/api/social-recovery/circles/` endpoint.
-    //
-    // That endpoint takes `master_secret_hex` as plaintext and
-    // performs the Shamir split + per-guardian Kyber wrap
-    // SERVER-SIDE (see
-    // password_manager/social_recovery/services/circle_service.py:
-    // ~L116-L121). For the legacy passkey-recovery flow that's
-    // tolerated because the secret being split is a passkey
-    // private key the server already holds.
-    //
-    // In tier-2 mode (`externallyControlledSecret === true`) the
-    // secret is the freshly-generated 32-byte recovery seed that
-    // wraps the vault DEK. Letting the server see that seed AND
-    // the wrapped factor blob (which it stores) collapses the
-    // zero-knowledge property — the server could unwrap the DEK
-    // and read the entire vault. That is exactly the situation
-    // the layered-recovery design exists to prevent.
-    //
-    // The correct architecture is client-side Shamir + per-
-    // guardian Kyber, then POST only the encrypted shards. That
-    // pipeline doesn't exist yet (it's the "client-side share
-    // split" follow-up tracked separately from this PR), so we
-    // hard-refuse in tier-2 mode rather than silently committing
-    // a ZK violation. The tier-2 enroll route stays unlinked
-    // from the main UI in the meantime.
-    if (externallyControlledSecret) {
-      setError(
-        'Tier-2 social-mesh DEK enrollment is not yet available. '
-        + 'The current /api/social-recovery/circles/ endpoint performs '
-        + 'the Shamir split server-side, which would expose your vault '
-        + 'recovery seed to the server. A client-side split + Kyber '
-        + 'wrap pipeline is required before this flow can be enabled; '
-        + 'tracked as a follow-up to #233. Your wdek factor row from '
-        + 'step (1) of enrollment remains valid for other recovery '
-        + 'tiers; you can revoke it from /settings/security if you '
-        + 'do not want it lingering.',
-      );
-      return;
-    }
-
-    if (!/^[0-9a-fA-F]+$/.test(masterSecret) || masterSecret.length < 32) {
-      setError('Master secret must be a hex string of at least 32 chars.');
+    // The secret is split and each share sealed to its voucher's hybrid
+    // X25519 + ML-KEM-768 key HERE, on this device. The server receives
+    // sealed shares, per-share proof digests and a seed check only, so it
+    // can never reconstruct the secret (sealedShareRecovery.js).
+    if (!/^[0-9a-fA-F]+$/.test(masterSecret) || masterSecret.length < 32
+        || masterSecret.length % 2 !== 0) {
+      setError('Master secret must be an even-length hex string of at least 32 chars.');
       return;
     }
     if (threshold > vouchers.length) {
@@ -163,24 +151,64 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
     const invalid = vouchers.find(
       (v) =>
         !v.ed25519_public_key ||
+        !v.hybrid_public_key ||
         !(v.email || v.did_string)
     );
     if (invalid) {
-      setError('Each voucher requires an Ed25519 public key and either email or DID.');
+      setError(
+        'Each voucher requires an Ed25519 public key, a guardian key from '
+        + 'their device, and either email or DID.',
+      );
+      return;
+    }
+    // A pasted key is checked here, so a bad one reads as an input error,
+    // not a failed request. One key on two vouchers would let its holder
+    // open both shares (the server refuses that too).
+    const keys = vouchers.map((v) => decodeGuardianKey(v.hybrid_public_key));
+    const badKey = keys.findIndex((k) => !k);
+    if (badKey !== -1) {
+      setError(`Voucher #${badKey + 1}'s guardian key is not a valid key. Ask them `
+        + 'to copy it again from /recovery/guardian-key.');
+      return;
+    }
+    if (new Set(keys.map(toB64)).size !== keys.length) {
+      setError('Two vouchers have the same guardian key. Each voucher needs their own.');
       return;
     }
 
     setSubmitting(true);
     try {
+      const seed = hexToBytes(masterSecret);
+      let sealed;
+      try {
+        sealed = await sealSeedForGuardians({
+          seed,
+          threshold: Number(threshold),
+          guardianPublicKeys: keys.map(toB64),
+        });
+      } catch {
+        // Right length but unusable key material (e.g. a low-order X25519 point).
+        setError('A guardian key could not be used. Ask each voucher to copy '
+          + 'their key again from /recovery/guardian-key.');
+        return;
+      } finally {
+        seed.fill(0);
+      }
       const resp = await ApiService.socialRecovery.createCircle({
-        master_secret_hex: masterSecret,
+        secret_check: sealed.secretCheck,
         threshold: Number(threshold),
         min_total_stake: Number(minStake),
         cooldown_hours: Number(cooldown),
-        vouchers: vouchers.map((v) => ({
+        vouchers: vouchers.map((v, i) => ({
           ...v,
+          // The key each share was sealed to, in canonical base64: atob
+          // accepts line breaks and missing padding, the server does not.
+          hybrid_public_key: toB64(keys[i]),
           vouch_weight: Number(v.vouch_weight) || 1,
           stake_amount: Number(v.stake_amount) || 0,
+          share_index: sealed.shares[i].shareIndex,
+          sealed_share: sealed.shares[i].sealedShare,
+          share_proof_hash: sealed.shares[i].shareProofHash,
         })),
       });
       setShowForm(false);
@@ -245,17 +273,10 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
               // read-only badge so the user knows we have it.
               <div className="form-group full">
                 <label>Recovery Seed</label>
-                <p className="muted-note" role="alert">
-                  <strong>⚠ Not yet available.</strong> Tier-2
-                  social-mesh DEK enrollment is gated until the
-                  client-side Shamir + Kyber pipeline lands —
-                  the current backend endpoint would perform the
-                  split server-side, breaking the zero-knowledge
-                  property for your vault seed. Your wdek factor
-                  row from step (1) is unaffected; submitting
-                  this form will surface a clear error rather
-                  than commit anything. (Tracked as a follow-up
-                  to #233.)
+                <p className="muted-note">
+                  Your recovery seed was generated on this device. It is
+                  split and sealed to your vouchers&apos; guardian keys here;
+                  the server only receives the sealed shares.
                 </p>
               </div>
             ) : (
@@ -270,7 +291,7 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
                   spellCheck="false"
                   required
                 />
-                <small>Generated client-side from your vault KEK. Never sent in plaintext after sharing.</small>
+                <small>Split and sealed on this device; never sent to the server.</small>
               </div>
             )}
 
@@ -370,6 +391,24 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
                       placeholder="64 hex chars"
                       required
                     />
+                  </div>
+                  <div className="form-group full">
+                    <label>Guardian Key (base64)</label>
+                    <textarea
+                      rows="2"
+                      value={v.hybrid_public_key}
+                      onChange={(e) =>
+                        updateVoucher(idx, 'hybrid_public_key', e.target.value.trim())
+                      }
+                      placeholder="The voucher copies this from /recovery/guardian-key"
+                      required
+                    />
+                    {v.hybrid_public_key ? (
+                      <small className="mono">
+                        Fingerprint: {safeFingerprint(v.hybrid_public_key)}. Check it
+                        with the voucher by phone or in person before you create the circle.
+                      </small>
+                    ) : null}
                   </div>
                   <div className="form-group">
                     <label>Relationship</label>

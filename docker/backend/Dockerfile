@@ -258,6 +258,25 @@ RUN PY_SITELIB=$(python -c "import sysconfig; print(sysconfig.get_path('purelib'
     rm -rf /tmp/oqs-staging
 
 # -----------------------------------------------------------------------------
+# Stage 2b: Model - the breach classifier's base model, baked in
+# -----------------------------------------------------------------------------
+# Production pods have no internet egress (k8s/network-policy.yaml) and a
+# read-only root filesystem, so the model cannot be fetched at run time. It is
+# fetched here as pinned in ml_config.py (BERT_MODEL_NAME at the commit
+# BERT_MODEL_REVISION, both read from that file so the two cannot drift), only
+# the files transformers loads, into the cache layout
+# from_pretrained(cache_dir=MODELS_DIR) reads offline.
+FROM deps-builder AS model
+COPY password_manager/ml_dark_web/ml_config.py /tmp/ml_config.py
+RUN NAME=$(sed -n "s/^ *BERT_MODEL_NAME = '\([A-Za-z0-9._/-]*\)'.*/\1/p" /tmp/ml_config.py) && \
+    REV=$(sed -n "s/^ *BERT_MODEL_REVISION = '\([0-9a-f]\{40\}\)'.*/\1/p" /tmp/ml_config.py) && \
+    test -n "$NAME" && test -n "$REV" && \
+    python -I -c "import sys; from huggingface_hub import snapshot_download; \
+snapshot_download(sys.argv[1], revision=sys.argv[2], cache_dir='/models/dark_web', \
+allow_patterns=['config.json', 'model.safetensors', 'tokenizer.json', 'tokenizer_config.json', 'vocab.txt'])" "$NAME" "$REV" && \
+    rm -f /tmp/ml_config.py
+
+# -----------------------------------------------------------------------------
 # Stage 3: Production - Final optimized image
 # -----------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm AS production
@@ -429,12 +448,19 @@ WORKDIR ${APP_HOME}
 # Copy application code
 COPY --chown=${APP_USER}:${APP_GROUP} password_manager/ .
 
-# Create necessary directories
+# The pinned base model (see the model stage).
+COPY --from=model /models/dark_web ${APP_HOME}/ml_models/dark_web
+
+# Create necessary directories. ml_dark_web/ml_config.py creates the ml_*
+# directories on import, which fails on a read-only root filesystem unless
+# they already exist.
 RUN mkdir -p \
     ${APP_HOME}/staticfiles \
     ${APP_HOME}/media \
     ${APP_HOME}/logs \
     ${APP_HOME}/geoip \
+    ${APP_HOME}/ml_models/dark_web \
+    ${APP_HOME}/ml_data/dark_web/training \
     && chown -R ${APP_USER}:${APP_GROUP} ${APP_HOME}
 
 # Copy entrypoint script

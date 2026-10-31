@@ -8,13 +8,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth.jsx';
 import { behavioralCaptureEngine } from '../services/behavioralCapture';
-import { behavioralDNAModel } from '../ml/behavioralDNA';
 import { secureBehavioralStorage } from '../services/SecureBehavioralStorage';
-// Direct import instead of re-export via index — kyberService was removed from
-// quantum/index.js to prevent it being bundled into the main chunk (it is
-// lazy-loaded by App.jsx). BehavioralContext runs only after login, so a
-// direct static import here is safe and does not affect initial load time.
-import { kyberService } from '../services/quantum/kyberService';
 import axios from 'axios';
 
 const BehavioralContext = createContext(null);
@@ -41,85 +35,16 @@ export const BehavioralProvider = ({ children }) => {
   const statsIntervalRef = useRef(null);
 
   /**
-   * Create behavioral commitments from current profile
-   * Phase 2A: Now with quantum-resistant Kyber-768 encryption + ML embeddings
+   * Behavioral recovery setup is retired: it sent the raw behavioral profile
+   * to the server, which never receives raw behavioral data. The profile
+   * stays on this device; nothing is uploaded.
    */
   const createBehavioralCommitments = useCallback(async () => {
-    try {
-      console.log('Creating behavioral commitments with quantum encryption + ML...');
-
-      // Initialize Kyber for quantum protection
-      await kyberService.initialize();
-
-      // Initialize Behavioral DNA model
-      await behavioralDNAModel.initialize();
-
-      const algoInfo = kyberService.getAlgorithmInfo();
-      const dnaStatus = behavioralDNAModel.getStatus();
-
-      console.log(`Using ${algoInfo.algorithm} (${algoInfo.status})`);
-      console.log(`Behavioral DNA: ${dnaStatus.initialized ? 'Active' : 'Fallback'} (${dnaStatus.output_dimensions}D)`);
-
-      // Get current behavioral profile
-      const profile = await behavioralCaptureEngine.getCurrentProfile();
-
-      // Generate behavioral DNA embedding (128-dimensional)
-      let behavioralEmbedding = null;
-      try {
-        behavioralEmbedding = await behavioralDNAModel.generateEmbedding(profile);
-        console.log(`Generated behavioral DNA embedding: ${behavioralEmbedding.length} dimensions`);
-      } catch (error) {
-        console.warn('Behavioral DNA embedding failed, continuing without ML:', error);
-      }
-
-      // Generate Kyber keypair for encryption
-      let kyberPublicKey = null;
-      let isQuantumProtected = false;
-
-      try {
-        const { publicKey, secretKey } = await kyberService.generateKeypair();
-        kyberPublicKey = kyberService.arrayBufferToBase64(publicKey);
-        isQuantumProtected = algoInfo.quantumResistant;
-
-        console.log('Generated Kyber keypair for commitment encryption');
-
-        // Save profile securely to IndexedDB with encryption
-        try {
-          await secureBehavioralStorage.saveBehavioralProfile(
-            { ...profile, userId: user?.email || 'anonymous' },
-            kyberService.arrayBufferToBase64(secretKey)
-          );
-          console.log('✅ Profile saved to secure storage (IndexedDB)');
-        } catch (storageError) {
-          console.warn('Failed to save to secure storage:', storageError);
-        }
-      } catch (error) {
-        console.warn('Kyber keypair generation failed, using classical encryption:', error);
-      }
-
-      // Send to backend to create commitments
-      const response = await axios.post('/api/behavioral-recovery/setup-commitments/', {
-        behavioral_profile: profile,
-        behavioral_embedding: behavioralEmbedding,
-        kyber_public_key: kyberPublicKey,
-        quantum_protected: isQuantumProtected
-      });
-
-      if (response.data.success) {
-        console.log(`✅ Behavioral commitments created (${isQuantumProtected ? 'quantum-resistant' : 'classical'} + ML)`);
-        setCommitmentStatus({
-          has_commitments: true,
-          ready_for_recovery: true,
-          quantum_protected: isQuantumProtected,
-          ml_enhanced: behavioralEmbedding !== null,
-          creation_date: new Date().toISOString()
-        });
-      }
-    } catch (error) {
-      console.error('Error creating commitments:', error);
-      throw error;
-    }
-  }, [user]);
+    throw new Error(
+      'Behavioral recovery is no longer available. '
+      + 'Use your recovery key or your guardians instead.',
+    );
+  }, []);
 
   /**
    * Start silent behavioral capture
@@ -138,11 +63,6 @@ export const BehavioralProvider = ({ children }) => {
       const statsInterval = setInterval(() => {
         const stats = behavioralCaptureEngine.getProfileStatistics();
         setProfileStats(stats);
-
-        // Auto-create commitments when profile is ready
-        if (stats.isReady && !commitmentStatus?.has_commitments) {
-          createBehavioralCommitments();
-        }
       }, 60000); // Update every minute
 
       // Store interval in ref for cleanup
@@ -151,7 +71,7 @@ export const BehavioralProvider = ({ children }) => {
     } catch (error) {
       console.error('Error starting behavioral capture:', error);
     }
-  }, [isCapturing, commitmentStatus?.has_commitments, createBehavioralCommitments]);
+  }, [isCapturing]);
 
   /**
    * Stop behavioral capture

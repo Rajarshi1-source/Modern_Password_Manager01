@@ -22,7 +22,15 @@ class MLDarkWebConfig:
     TRAINING_DATA_DIR.mkdir(parents=True, exist_ok=True)
     
     # BERT Breach Classifier Configuration
-    BERT_MODEL_NAME = 'distilbert-base-uncased'  # Faster, lighter than BERT
+    # Faster, lighter than BERT. The canonical repo id: the legacy alias
+    # 'distilbert-base-uncased' redirects, but Hugging Face's Xet storage
+    # refuses the alias for the weights file.
+    BERT_MODEL_NAME = 'distilbert/distilbert-base-uncased'
+    # Pinned Hugging Face commit. docker/backend/Dockerfile reads these two
+    # lines and bakes exactly this model and revision into the image, where it
+    # is loaded offline (HF_HUB_OFFLINE): the pods have no internet egress and
+    # a read-only root filesystem. Change the image by changing them here.
+    BERT_MODEL_REVISION = '12040accade4e8a0f71eabdb258fecc2e7e948be'
     BERT_MODEL_PATH = MODELS_DIR / 'breach_classifier'
     BERT_MAX_LENGTH = 512
     BERT_NUM_LABELS = 4  # LOW, MEDIUM, HIGH, CRITICAL

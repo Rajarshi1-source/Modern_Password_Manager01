@@ -71,7 +71,7 @@ django-timezone-field==7.2.2
 django_celery_results==2.6.0
 djangorestframework==3.18.3
 djangorestframework_simplejwt==5.5.1
-dnspython==2.7.0
+dnspython==2.9.0  # CVE-2026-114605
 dparse==0.6.4
 drf-yasg==1.21.15
 ecdsa==0.19.2
@@ -185,7 +185,7 @@ psycopg[binary]==3.2.4
 py-serializable==2.1.0
 py-ubjson==0.16.1
 py-vapid==1.9.2
-pyasn1==0.6.4
+pyasn1==0.6.5
 pyasn1_modules==0.4.2
 pycparser==2.22
 pycryptodome==3.23.0
@@ -195,7 +195,7 @@ PyDispatcher==2.0.7
 pyfcm==1.5.4
 Pygments==2.20.0
 PyJWT==2.15.1
-pymongo==4.18.2
+pymongo==4.18.3
 pyOpenSSL==26.4.0
 pyotp==2.10.0
 pyparsing==3.2.5

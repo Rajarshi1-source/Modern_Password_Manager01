@@ -1,6 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
+import {
+  getSealedShare,
+  loadGuardianKeyPair,
+} from '../../../services/recovery/holderKeyStore';
+import {
+  fromB64,
+  resealShareForRequester,
+} from '../../../services/recovery/sealedShareRecovery';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '../../../utils/hex';
 import './AttestationForm.css';
 
 const formatDate = (iso) => {
@@ -29,6 +39,40 @@ const AttestationForm = () => {
 
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null);
+  // An approval re-seals this guardian's share to the requester's one-time
+  // key on this device; the signature covers its digest.
+  const [resealedShare, setResealedShare] = useState('');
+  // The code the requester read out over another channel. Re-sealing is
+  // refused unless it matches the key the server handed over.
+  const [requesterCode, setRequesterCode] = useState('');
+
+  const prepareReseal = async () => {
+    setError(null);
+    try {
+      const keyPair = await loadGuardianKeyPair();
+      const sealedShare = getSealedShare(voucherId);
+      if (!keyPair || !sealedShare) {
+        setError('This device does not hold the guardian key and share for that voucher ID.');
+        return;
+      }
+      setResealedShare(await resealShareForRequester({
+        keyPair,
+        sealedShare,
+        requesterPublicKey: request.requester_public_key,
+        confirmedFingerprint: requesterCode,
+      }));
+    } catch (err) {
+      setError(/fingerprint/.test(err?.message || '')
+        ? 'That code does not match this request. Do not approve: confirm the '
+          + 'code with the person directly.'
+        : 'Could not open your share with this device\'s guardian key.');
+    }
+  };
+
+  const messageToSign = request
+    ? `pwm-social-recovery-v2|${request.request_id}|${decision}|${request.challenge_nonce}|${
+      decision === 'approve' && resealedShare ? bytesToHex(sha256(fromB64(resealedShare))) : ''}`
+    : '';
 
   const loadRequest = useCallback(async () => {
     setLoading(true);
@@ -68,6 +112,12 @@ const AttestationForm = () => {
         stake_amount: Number(stakeAmount) || 0,
       };
       if (decision === 'approve') {
+        if (!resealedShare) {
+          setError('Re-seal your share for the requester before approving.');
+          setSubmitting(false);
+          return;
+        }
+        payload.resealed_share = resealedShare;
         payload.fresh_commitment_b64 = freshCommitmentB64;
         payload.proof_T_b64 = proofTB64;
         payload.proof_s_b64 = proofSB64;
@@ -101,7 +151,7 @@ const AttestationForm = () => {
     );
   }
 
-  const isFinal = ['completed', 'cancelled', 'expired', 'denied', 'rejected'].includes(request.status);
+  const isFinal = ['completed', 'failed', 'cancelled', 'expired', 'denied', 'rejected'].includes(request.status);
 
   return (
     <div className="attestation-form">
@@ -142,7 +192,7 @@ const AttestationForm = () => {
             <input
               type="text"
               value={voucherId}
-              onChange={(e) => setVoucherId(e.target.value.trim())}
+              onChange={(e) => { setVoucherId(e.target.value.trim()); setResealedShare(''); }}
               placeholder="UUID of your voucher in this circle"
               required
               className="mono"
@@ -175,10 +225,28 @@ const AttestationForm = () => {
               rows="3"
               value={signatureB64}
               onChange={(e) => setSignatureB64(e.target.value)}
-              placeholder="base64 signature of challenge_nonce || decision"
+              placeholder="base64 Ed25519 signature of the message below"
               required
             />
+            <small className="mono">{messageToSign}</small>
           </div>
+
+          {decision === 'approve' && (
+            <div className="form-group">
+              <label>Code from the requester (ask them by phone or in person)</label>
+              <input
+                type="text"
+                className="mono"
+                value={requesterCode}
+                onChange={(e) => { setRequesterCode(e.target.value); setResealedShare(''); }}
+                placeholder="XXXX-XXXX-XXXX-XXXX-XXXX"
+              />
+              <button type="button" className="btn-secondary" onClick={prepareReseal}
+                disabled={!voucherId}>
+                {resealedShare ? 'Share re-sealed ✓' : 'Re-seal my share for the requester'}
+              </button>
+            </div>
+          )}
 
           {decision === 'approve' ? (
             <fieldset className="zk-proof-fields">

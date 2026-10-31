@@ -1,6 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
+import {
+  getOrCreateGuardianPublicKey,
+  loadGuardianKeyPair,
+  saveSealedShare,
+} from '../../../services/recovery/holderKeyStore';
+import { proveShareHolding } from '../../../services/recovery/sealedShareRecovery';
 import './VoucherAccept.css';
 
 const VoucherAccept = () => {
@@ -9,6 +15,15 @@ const VoucherAccept = () => {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [guardianPublicKey, setGuardianPublicKey] = useState('');
+
+  // The guardian key pair stays on this device; the owner needs its public
+  // half to seal a share to it.
+  useEffect(() => {
+    getOrCreateGuardianPublicKey()
+      .then(setGuardianPublicKey)
+      .catch(() => setError('Could not create a guardian key on this device.'));
+  }, []);
 
   const handleAccept = async (e) => {
     e.preventDefault();
@@ -21,9 +36,28 @@ const VoucherAccept = () => {
 
     setSubmitting(true);
     try {
+      // Open the sealed share here to prove this device holds the key it
+      // was sealed to; keep the sealed copy for approving a recovery later.
+      const invitation = await ApiService.socialRecovery.getVoucherInvitation(invitationToken);
+      await getOrCreateGuardianPublicKey();
+      const keyPair = await loadGuardianKeyPair();
+      let shareProof;
+      try {
+        shareProof = await proveShareHolding({
+          keyPair,
+          sealedShare: invitation.data.sealed_share,
+        });
+      } catch {
+        setError('This browser cannot open the share sealed for you. Use the browser '
+          + 'that created the guardian key you gave the circle owner.');
+        return;
+      }
+      // Keep the sealed copy before the server marks the voucher accepted:
+      // after that the invitation no longer returns it.
+      saveSealedShare(invitation.data.voucher_id, invitation.data.sealed_share);
       const resp = await ApiService.socialRecovery.acceptVoucher(
         invitationToken,
-        { signature_b64: signatureB64.trim() }
+        { signature_b64: signatureB64.trim(), share_proof: shareProof }
       );
       setResult(resp.data);
     } catch (err) {
@@ -63,6 +97,15 @@ const VoucherAccept = () => {
         circle. To accept, sign the invitation token below with your Ed25519
         private key and paste the base64 signature.
       </p>
+
+      <div className="form-group">
+        <label>Your guardian key (give this to the circle owner)</label>
+        <textarea rows="3" readOnly className="mono" value={guardianPublicKey} />
+        <small>
+          Created on this device. The owner seals your share to it; only this
+          device can open that share, so keep using this browser.
+        </small>
+      </div>
 
       <form onSubmit={handleAccept}>
         <div className="form-group">

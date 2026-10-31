@@ -1,6 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
+import {
+  forgetRequesterKeyPair,
+  loadRequesterKeyPair,
+} from '../../../services/recovery/holderKeyStore';
+import { abandonToken, recoverSeed } from '../../../services/recovery/sealedShareRecovery';
 import './RecoveryProgress.css';
 
 const STATUS_STEPS = [
@@ -27,10 +32,10 @@ const normalizeStatus = (s) => {
  *      `SocialMeshDEKRecover` composes this component and supplies
  *      both `recoveryAttemptId` (the request id from the in-page
  *      flow, no route param available) and `onSecretReconstructed`
- *      (callback invoked once with the reconstructed secret bytes
- *      when the polling sees `status === 'approved'` /
- *      `'completed'` and the server returns the reconstructed
- *      secret in the response).
+ *      (callback invoked once with the secret bytes when the polling
+ *      sees `status === 'approved'` / `'completed'`: this device then
+ *      fetches the shares guardians re-sealed to its one-time key,
+ *      opens them and recombines the secret; the server never has it).
  *
  * Both modes coexist through optional props that default to the
  * legacy params-based behavior — back-compat preserved.
@@ -89,94 +94,102 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
       if (!reconstructedFiredRef.current) {
         setError(null);
       }
-      // If the server has reconstructed the secret AND the caller
-      // gave us a callback to deliver it, fire exactly once. The
-      // server is expected to surface the bytes in one of:
-      //   - resp.data.reconstructed_secret (preferred)
-      //   - resp.data.secret_bytes
-      // both base64-encoded; we decode to Uint8Array. If the field
-      // is absent (older backend, or completion event without
-      // payload) we leave the callback un-fired; the parent's
-      // own polling/timeout path can fall back to a fresh attempt.
-      //
-      // Gate on a final status so an intermediate poll (e.g. pending
-      // with stale fields) cannot fire the callback prematurely with
-      // a decoy / stale value.
-      //
-      // NOTE on the tier-2 completion gap: the legacy poll endpoint
-      // backing `getRequest` (RequestDetailView) does NOT return the
-      // reconstructed secret in its current serializer shape — only
-      // CompleteRequestView returns it (as `secret_hex`). That
-      // completion path is server-side Shamir which would violate the
-      // ZK invariant for the social-mesh DEK seed, so the tier-2
-      // enroll path is intentionally gated (see CircleSetup's
-      // externallyControlledSecret hard-refusal). When the follow-up
-      // client-side Shamir + Kyber pipeline lands, the poller will
-      // either be extended to expose `reconstructed_secret` /
-      // `secret_bytes`, or the parent will drive completion directly
-      // — at which point this block fires onSecretReconstructed.
+      // Once the threshold is met, fetch the shares guardians re-sealed to
+      // this device's one-time key, open them and recombine the secret
+      // here. The server holds only sealed values and cannot do this.
       const polledStatus = normalizeStatus(resp.data?.status);
       const isFinal = polledStatus === 'approved' || polledStatus === 'completed';
       if (isFinal && typeof onSecretReconstructed === 'function' && !reconstructedFiredRef.current) {
-        const b64 = resp.data?.reconstructed_secret || resp.data?.secret_bytes;
-        if (typeof b64 === 'string' && b64.length > 0) {
-          try {
-            // Normalize URL-safe base64 (`-`→`+`, `_`→`/`) and pad
-            // before atob() — some backends (esp. JWT-style Python
-            // libs) emit URL-safe alphabet which native atob rejects.
-            const padLen = (4 - (b64.length % 4)) % 4;
-            const standardB64 = b64.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(padLen);
-            const bin = atob(standardB64);
-            const bytes = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
-            // Set the guard BEFORE calling so a synchronous re-entry
-            // inside the same poll cycle cannot double-fire. The
-            // parent handoff is typically async (factor lookup +
-            // unwrap), so we also watch for a rejection and RESET
-            // the guard in that case — otherwise a transient lookup
-            // failure would permanently strand the user in the
-            // in-progress phase (the 5-second poll keeps seeing the
-            // same completed payload but never re-delivers it).
-            reconstructedFiredRef.current = true;
-            try {
-              const handoff = onSecretReconstructed(bytes);
-              if (handoff && typeof handoff.then === 'function') {
-                handoff.catch((handoffErr) => {
-                  reconstructedFiredRef.current = false;
-                  // eslint-disable-next-line no-console
-                  console.warn(
-                    'RecoveryProgress: parent handoff rejected, will retry on next poll:',
-                    handoffErr,
-                  );
-                });
-              }
-            } catch (syncErr) {
-              // Sync throw from the parent — reset and let the next
-              // poll re-deliver the same completed payload.
-              reconstructedFiredRef.current = false;
-              // eslint-disable-next-line no-console
-              console.warn(
-                'RecoveryProgress: parent handoff threw, will retry on next poll:',
-                syncErr,
-              );
-            }
-          } catch (decodeErr) {
-            // Surface decode failure to the user — there's no
-            // sensible fallback if the server returned garbage.
-            // Latch the one-shot guard so the 5-second poll doesn't
-            // re-attempt a permanently undecodable payload: the next
-            // tick would otherwise call setError(null) at the top of
-            // fetchStatus, then re-throw here, causing the error
-            // message to flicker on/off every 5 seconds and giving
-            // the user no chance to act on it.
-            reconstructedFiredRef.current = true;
-            // eslint-disable-next-line no-console
-            console.warn('RecoveryProgress: secret decode failed:', decodeErr);
-            setError(
-              'Secret decode failed — the server may have returned invalid data. '
-              + 'Please try restarting recovery.',
-            );
+        // Set the guard BEFORE the async work so the 5-second poll cannot
+        // start a second recombination; reset it on a failure that a
+        // later poll can fix (network, a parent lookup).
+        reconstructedFiredRef.current = true;
+        let keyPair;
+        let done;
+        try {
+          keyPair = await loadRequesterKeyPair(requestId);
+          if (keyPair) done = await ApiService.socialRecovery.completeRequest(requestId);
+        } catch (fetchErr) {
+          const code = fetchErr?.response?.status;
+          if (code >= 400 && code < 500 && code !== 429) {
+            // The server refused completion; every poll would get the same
+            // answer, so keep the guard set and stop asking. The body is a
+            // bare code (invalid_request), not a message for the user.
+            ApiService.handleError(fetchErr);
+            setError('The server cannot complete this recovery.');
+            return;
           }
+          // Storage, network, 429 or 5xx: completion is idempotent, so a
+          // later poll retries.
+          reconstructedFiredRef.current = false;
+          console.warn('RecoveryProgress: fetching shares failed, will retry:', fetchErr);
+          return;
+        }
+        if (!keyPair) {
+          setError(
+            'This device does not hold the key this recovery was started with. '
+            + 'Start recovery again from this device.',
+          );
+          return;
+        }
+        let seed;
+        try {
+          seed = await recoverSeed({
+            keyPair,
+            sealedShares: done.data.sealed_shares.map((s) => s.sealed_share),
+            threshold: done.data.threshold,
+            secretCheck: done.data.secret_check,
+          });
+        } catch (recombineErr) {
+          // A share that does not open or a seed that fails its check
+          // fails the same way on every poll: latch, mark the request
+          // failed so the cooldown does not block a new one, drop the
+          // one-time key (this request cannot use it again) and tell the
+          // user.
+          console.warn('RecoveryProgress: recombination failed:', recombineErr);
+          try {
+            await ApiService.socialRecovery.abandonRequest(
+              requestId, { abandon_token: abandonToken(keyPair) },
+            );
+          } catch (abandonErr) {
+            const code = abandonErr?.response?.status;
+            if (!(code >= 400 && code < 500 && code !== 429)) {
+              // Network, 429 or 5xx: keep the key (only it derives the
+              // token) and let a later poll retry the abandon.
+              console.warn('RecoveryProgress: marking the request failed did not work, will retry:', abandonErr);
+              reconstructedFiredRef.current = false;
+              return;
+            }
+            console.warn('RecoveryProgress: the server refused to mark the request failed:', abandonErr);
+          }
+          forgetRequesterKeyPair(requestId);
+          setError(
+            'Your shares could not be recombined on this device. '
+            + 'Please try restarting recovery.',
+          );
+          return;
+        }
+        try {
+          const handoff = onSecretReconstructed(seed);
+          if (handoff && typeof handoff.then === 'function') {
+            handoff
+              .then(() => forgetRequesterKeyPair(requestId))
+              .catch((handoffErr) => {
+                reconstructedFiredRef.current = false;
+                console.warn(
+                  'RecoveryProgress: parent handoff rejected, will retry on next poll:',
+                  handoffErr,
+                );
+              });
+          } else {
+            forgetRequesterKeyPair(requestId);
+          }
+        } catch (syncErr) {
+          reconstructedFiredRef.current = false;
+          console.warn(
+            'RecoveryProgress: parent handoff threw, will retry on next poll:',
+            syncErr,
+          );
         }
       }
     } catch (err) {
@@ -334,8 +347,11 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
               <div className="info-box success-tint">
                 <h4>🛡️ Threshold Reached</h4>
                 <p>
-                  Enough approvals have been collected. Submit the decrypted
-                  shares to complete reconstruction.
+                  Enough approvals have been collected.{' '}
+                  {typeof onSecretReconstructed === 'function'
+                    ? 'This device is opening the shares your guardians re-sealed to it '
+                      + 'and recombining your secret. Keep this page open.'
+                    : 'This page cannot open the shares or finish the recovery.'}
                 </p>
               </div>
             </div>

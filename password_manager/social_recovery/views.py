@@ -19,7 +19,6 @@ from .serializers import (
     AttestationSerializer,
     AuditLogSerializer,
     CircleSerializer,
-    CompleteRequestSerializer,
     CreateCircleSerializer,
     InitiateRequestSerializer,
     RequestSerializer,
@@ -31,7 +30,8 @@ from .services import (
     initiate_request,
     submit_attestation,
 )
-from .services.recovery_completion_service import cancel_request
+from .services.recovery_completion_service import abandon_request, cancel_request
+from shared import sealed_shares
 from shared.client_ip import get_client_ip
 
 
@@ -70,7 +70,7 @@ class CircleListCreateView(APIView):
         try:
             circle = create_circle(
                 user=request.user,
-                master_secret_hex=data["master_secret_hex"],
+                secret_check=data["secret_check"],
                 threshold=data["threshold"],
                 vouchers=voucher_specs,
                 min_voucher_reputation=data.get("min_voucher_reputation", 0),
@@ -102,9 +102,23 @@ class CircleDetailView(APIView):
 
 
 class AcceptInvitationView(APIView):
-    """Public endpoint: voucher signs the invitation token."""
+    """Public endpoint: voucher signs the invitation token.
+
+    GET returns the voucher's sealed share so its device can compute the
+    share proof that POST requires.
+    """
 
     permission_classes = [AllowAny]
+
+    def get(self, request, invitation_token):
+        voucher = Voucher.objects.filter(invitation_token=invitation_token).first()
+        if voucher is None or not voucher.invitation_is_valid:
+            return Response({"error": "invalid_request"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "voucher_id": str(voucher.voucher_id),
+            "share_index": voucher.share_index,
+            "sealed_share": sealed_shares.b64(voucher.encrypted_shard_data),
+        })
 
     def post(self, request, invitation_token):
         payload = dict(request.data)
@@ -116,6 +130,7 @@ class AcceptInvitationView(APIView):
             voucher = accept_invitation(
                 invitation_token=data["invitation_token"],
                 signature=data["signature"],
+                share_proof=data["share_proof"],
             )
         except ValueError as exc:
             logger.exception("Handled ValueError in view")
@@ -150,6 +165,8 @@ class InitiateRecoveryView(APIView):
         try:
             recovery_request = initiate_request(
                 circle=circle,
+                requester_public_key=data["requester_public_key"],
+                abandon_token_hash=data.get("abandon_token_hash", b""),
                 initiator_email=data.get("initiator_email", ""),
                 initiator_ip=_client_ip(request),
                 device_fingerprint=data.get("device_fingerprint", ""),
@@ -196,6 +213,7 @@ class AttestRequestView(APIView):
                 fresh_commitment=data.get("fresh_commitment"),
                 proof_T=data.get("proof_T"),
                 proof_s=data.get("proof_s"),
+                resealed_share=data.get("resealed_share"),
                 stake_amount=data.get("stake_amount", 0),
                 ip_address=_client_ip(request),
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
@@ -214,26 +232,37 @@ class AttestRequestView(APIView):
 
 
 class CompleteRequestView(APIView):
-    # Reconstruction is the highest-value step in the flow. Rate-limiting
-    # by request id + IP makes it harder for an attacker who somehow
-    # collected enough share envelopes to brute-force-replay completion
-    # variants against a single recovery request.
+    # Returns only shares re-sealed to the requester's one-time key, which
+    # nobody else can open; the throttle limits polling.
     permission_classes = [AllowAny]
     throttle_classes = [VouchAttestationThrottle]
 
     def post(self, request, request_id):
         recovery_request = get_object_or_404(SocialRecoveryRequest, request_id=request_id)
-        serializer = CompleteRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
         try:
-            secret_hex = complete_request(
-                request=recovery_request,
-                decrypted_shares=serializer.validated_data["decrypted_shares"],
-            )
-        except ValueError as exc:
+            result = complete_request(request=recovery_request)
+        except ValueError:
             logger.exception("Handled ValueError in view")
             return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"secret_hex": secret_hex, "status": recovery_request.status})
+        return Response({**result, "status": recovery_request.status})
+
+
+class AbandonRequestView(APIView):
+    # Authorised by the token only the requester's device can derive.
+    permission_classes = [AllowAny]
+    throttle_classes = [VouchAttestationThrottle]
+
+    def post(self, request, request_id):
+        recovery_request = get_object_or_404(SocialRecoveryRequest, request_id=request_id)
+        token = sealed_shares.decode_digest(request.data.get("abandon_token", ""))
+        try:
+            if token is None:
+                raise ValueError("abandon_token must be a base64 32-byte value")
+            abandon_request(request=recovery_request, abandon_token=token)
+        except ValueError:
+            logger.exception("Handled ValueError in view")
+            return Response({"error": "invalid_request"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"status": "failed"})
 
 
 class CancelRequestView(APIView):

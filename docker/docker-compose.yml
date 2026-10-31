@@ -187,8 +187,9 @@ services:
           cpus: '1.0'
           memory: 1G
 
+    # The code is the image's own copy (built and scanned in CI), never a host
+    # checkout; only data is mounted.
     volumes:
-      - ./password_manager:/app:ro # Read-only app code
       - static_volume:/app/staticfiles
       - media_volume:/app/media
       - ./password_manager/logs:/app/logs  # writable log dir
@@ -202,6 +203,12 @@ services:
     environment:
       - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set in .env}"
+      # Required at startup when DEBUG=False (settings/base.py guards): the
+      # image carries no .env, so they come from here.
+      - "JWT_PRIVATE_KEY=${JWT_PRIVATE_KEY:?Error: JWT_PRIVATE_KEY not set}"
+      - "DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY:?Error: DATA_ENCRYPTION_KEY not set}"
+      - "GENETIC_CERT_SECRET=${GENETIC_CERT_SECRET:?Error: GENETIC_CERT_SECRET not set}"
+      - "QUANTUM_CERT_SECRET=${QUANTUM_CERT_SECRET:?Error: QUANTUM_CERT_SECRET not set}"
       - "DATABASE_URL=postgresql://${DB_USER:?Error: DB_USER not set}:${DB_PASSWORD:?Error: DB_PASSWORD not set}@pgbouncer:6432/${DB_NAME:?Error: DB_NAME not set}"
       - "REDIS_URL=redis://:${REDIS_PASSWORD:?Error: REDIS_PASSWORD not set}@redis:6379/0"
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -227,6 +234,10 @@ services:
       - OIDC_OP_BASE_URL=${OIDC_OP_BASE_URL:-https://accounts.google.com}
       - OIDC_VERIFY_SSL=${OIDC_VERIFY_SSL:-True}
       - OIDC_USE_NONCE=${OIDC_USE_NONCE:-True}
+      # Models load offline from the copy baked into the image.
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/tmp/huggingface
 
     depends_on:
       pgbouncer:
@@ -243,6 +254,11 @@ services:
 
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
 
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health/" ]
@@ -273,8 +289,8 @@ services:
 
     command: daphne -b 0.0.0.0 -p 8001 password_manager.asgi:application
 
-    volumes:
-      - ./password_manager:/app:ro
+    # The code is the image's own copy (built and scanned in CI), never a host
+    # checkout; only data is mounted.
 
     ports:
       - "${WEBSOCKET_PORT:-8001}:8001"
@@ -283,6 +299,12 @@ services:
     environment:
       - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
+      # Required at startup when DEBUG=False (settings/base.py guards): the
+      # image carries no .env, so they come from here.
+      - "JWT_PRIVATE_KEY=${JWT_PRIVATE_KEY:?Error: JWT_PRIVATE_KEY not set}"
+      - "DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY:?Error: DATA_ENCRYPTION_KEY not set}"
+      - "GENETIC_CERT_SECRET=${GENETIC_CERT_SECRET:?Error: GENETIC_CERT_SECRET not set}"
+      - "QUANTUM_CERT_SECRET=${QUANTUM_CERT_SECRET:?Error: QUANTUM_CERT_SECRET not set}"
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@pgbouncer:6432/${DB_NAME}
       - DB_PREPARE_THRESHOLD=0
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -308,6 +330,14 @@ services:
 
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      # DEBUG=True adds file log handlers under /app/logs (settings/base.py);
+      # the root filesystem is read-only, and logs also go to stdout.
+      - /app/logs
+    cap_drop:
+      - ALL
 
   # ===========================================================================
   # Celery Worker - HARDENED
@@ -331,20 +361,34 @@ services:
 
     command: celery -A password_manager worker -l info --concurrency=4
 
+    # The code is the image's own copy (built and scanned in CI), never a host
+    # checkout; only data is mounted.
     volumes:
-      - ./password_manager:/app:ro
       - media_volume:/app/media
 
     # ✅ FIX #3: Mandatory secrets
     environment:
       - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
+      # Required at startup when DEBUG=False (settings/base.py guards): the
+      # image carries no .env, so they come from here.
+      - "JWT_PRIVATE_KEY=${JWT_PRIVATE_KEY:?Error: JWT_PRIVATE_KEY not set}"
+      - "DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY:?Error: DATA_ENCRYPTION_KEY not set}"
+      - "GENETIC_CERT_SECRET=${GENETIC_CERT_SECRET:?Error: GENETIC_CERT_SECRET not set}"
+      - "QUANTUM_CERT_SECRET=${QUANTUM_CERT_SECRET:?Error: QUANTUM_CERT_SECRET not set}"
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@pgbouncer:6432/${DB_NAME}
       - DB_PREPARE_THRESHOLD=0
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
       - USE_REDIS_CACHE=true
+      # Required when DEBUG=False (settings/base.py guard); tasks send
+      # notifications through the channel layer, which connects via REDIS_URL.
+      - USE_REDIS_CHANNELS=true
+      # Models load offline from the copy baked into the image.
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - HF_HOME=/tmp/huggingface
 
     depends_on:
       - pgbouncer
@@ -358,6 +402,14 @@ services:
 
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      # DEBUG=True adds file log handlers under /app/logs (settings/base.py);
+      # the root filesystem is read-only, and logs also go to stdout.
+      - /app/logs
+    cap_drop:
+      - ALL
 
   # ===========================================================================
   # Celery Beat - HARDENED
@@ -381,19 +433,28 @@ services:
 
     command: celery -A password_manager beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
 
-    volumes:
-      - ./password_manager:/app:ro
+    # The code is the image's own copy (built and scanned in CI), never a host
+    # checkout; only data is mounted.
 
     # ✅ FIX #3: Mandatory secrets
     environment:
       - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
+      # Required at startup when DEBUG=False (settings/base.py guards): the
+      # image carries no .env, so they come from here.
+      - "JWT_PRIVATE_KEY=${JWT_PRIVATE_KEY:?Error: JWT_PRIVATE_KEY not set}"
+      - "DATA_ENCRYPTION_KEY=${DATA_ENCRYPTION_KEY:?Error: DATA_ENCRYPTION_KEY not set}"
+      - "GENETIC_CERT_SECRET=${GENETIC_CERT_SECRET:?Error: GENETIC_CERT_SECRET not set}"
+      - "QUANTUM_CERT_SECRET=${QUANTUM_CERT_SECRET:?Error: QUANTUM_CERT_SECRET not set}"
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@pgbouncer:6432/${DB_NAME}
       - DB_PREPARE_THRESHOLD=0
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
       - USE_REDIS_CACHE=true
+      # Required when DEBUG=False (settings/base.py guard); tasks send
+      # notifications through the channel layer, which connects via REDIS_URL.
+      - USE_REDIS_CHANNELS=true
 
     depends_on:
       - pgbouncer
@@ -407,6 +468,14 @@ services:
 
     security_opt:
       - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      # DEBUG=True adds file log handlers under /app/logs (settings/base.py);
+      # the root filesystem is read-only, and logs also go to stdout.
+      - /app/logs
+    cap_drop:
+      - ALL
 
   # ===========================================================================
   # React Frontend - HARDENED

@@ -47,8 +47,13 @@ class PasskeyRecoverySetup(models.Model):
     # KEM of kyber_public_key/kyber_private_key_encrypted. Rows from before
     # the ML-KEM migration say 'CRYSTALS-Kyber-768' (round-3 Kyber768).
     encryption_algorithm = models.CharField(max_length=50, default='ML-KEM-768')
-    kyber_public_key = models.BinaryField(help_text="Post-quantum public key")
-    kyber_private_key_encrypted = models.BinaryField(help_text="Encrypted private key")
+    # Server-generated owner keypair of setups made before shares were sealed
+    # on the client. New setups leave both empty: the server holds no key.
+    kyber_public_key = models.BinaryField(default=bytes, blank=True, help_text="Legacy: unused by client-sealed setups")
+    kyber_private_key_encrypted = models.BinaryField(default=bytes, blank=True, help_text="Legacy: unused by client-sealed setups")
+    # SHA-256("pwm-recovery-seed-check-v1|" || seed), from the owner's device.
+    # Empty on setups made before client-side sealing; those cannot complete.
+    secret_check = models.BinaryField(default=bytes, blank=True)
     
     # Security settings
     max_recovery_attempts_per_month = models.IntegerField(default=3)
@@ -175,7 +180,10 @@ class RecoveryGuardian(models.Model):
     
     # Guardian information (encrypted to maintain anonymity from other guardians)
     encrypted_guardian_info = models.BinaryField(help_text="Encrypted email/phone/identity")
-    guardian_public_key = models.BinaryField(help_text="Guardian's public key for shard encryption")
+    guardian_public_key = models.BinaryField(help_text="Guardian's hybrid X25519 + ML-KEM-768 public key")
+    # SHA-256 of the guardian's share proof (shared/sealed_shares.py); the
+    # guardian presents the proof when accepting the invitation.
+    share_proof_hash = models.BinaryField(default=bytes, blank=True)
     
     # Shard reference
     shard = models.OneToOneField(
@@ -253,6 +261,9 @@ class RecoveryAttempt(models.Model):
     initiated_from_ip = models.GenericIPAddressField()
     initiated_from_device_fingerprint = models.CharField(max_length=255, blank=True)
     initiated_from_location = models.JSONField(default=dict, blank=True)
+    # One-time hybrid public key of the requester's device; guardians re-seal
+    # their shares to it.
+    requester_public_key = models.BinaryField(default=bytes, blank=True)
     
     # Temporal Proof-of-Identity tracking
     challenges_sent = models.IntegerField(default=0)
@@ -444,6 +455,9 @@ class GuardianApproval(models.Model):
     # Shard release
     shard_released = models.BooleanField(default=False)
     shard_released_at = models.DateTimeField(null=True, blank=True)
+    # The guardian's share re-sealed on its device to the attempt's
+    # requester_public_key. The server cannot open it.
+    resealed_share = models.BinaryField(default=bytes, blank=True)
     
     class Meta:
         verbose_name = "Guardian Approval"

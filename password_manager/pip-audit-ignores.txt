@@ -244,7 +244,20 @@
 # key handling), same reasoning as the nltk floor two entries up. This app's
 # own signing/verification goes through cryptography (Ed25519/EC via
 # hazmat.primitives.asymmetric) and liboqs, never ecdsa directly.
-PYSEC-2026-1325 exp:2026-10-30
+#
+# RENEWED 2026-10-29 (first renewal, PR #594), re-checked rather than carried
+# forward: pypi.org still lists 0.19.2 as the newest ecdsa release and gives
+# PYSEC-2026-1325 / GHSA-wj6h-64fc-37mp no fixed version; `git grep` still
+# finds no `import ecdsa` / `from ecdsa` under password_manager/. Correction
+# to the source named above: in the installed environment ecdsa is required
+# by sendgrid, not web3/eth-account (`pip show ecdsa`: Required-by sendgrid).
+# sendgrid uses it only in sendgrid.helpers.eventwebhook, to VERIFY an Event
+# Webhook signature with SendGrid's public key (VerifyingKey); Minerva
+# recovers a private key from the timing of signing or key generation, and a
+# verification holds no secret. Nothing here uses that helper either (no
+# EventWebhook reference in password_manager/). A second renewal needs a
+# tracking issue, per the policy at the top of this file.
+PYSEC-2026-1325 exp:2026-12-28
 
 # Twisted ReDoS in twisted.mail.imap4.wildcardToRegexp (CVE-2026-106454,
 # alias GHSA-8pqf-f4m5-798g, medium), surfaced on PR #555's scan 2026-10-16.
@@ -300,6 +313,19 @@ CVE-2026-115776 exp:2026-11-23
 # Re-assess before putting daphne behind any other proxy or load balancer
 # that passes raw HTTP through. Same short expiry, same removal step.
 CVE-2026-115877 exp:2026-11-23
+#
+# CVE-2026-83813 / GHSA-jj36-9pvh-vj5r (surfaced on PR #594's scan
+# 2026-10-27): twisted.names.dns.DNSDatagramProtocol accepts a UDP DNS answer
+# whose transaction ID matches without checking it came from the queried
+# server. First fix 26.10.0rc1 only; pypi.org still lists 26.4.0 as the newest
+# release (verified 2026-10-27). Unreachable here, verified by grep rather
+# than assumed: no `twisted.names`, `createResolver` or `DNSDatagramProtocol`
+# anywhere in password_manager/ (excluding the venv). daphne does no DNS
+# lookups, and scrapy's resolver (DNS_RESOLVER, default
+# scrapy.resolver.CachingThreadedResolver, not overridden here) subclasses
+# twisted.internet.base.ThreadedResolver, which calls the system's
+# getaddrinfo, not twisted.names. Same short expiry, same removal step.
+CVE-2026-83813 exp:2026-11-23
 
 # filelock batch (surfaced on PR #588's scan 2026-10-24), fixed in 4.2.1, a
 # major release. NOT installable here: `safety` 3.8.1 (requirements.txt
@@ -327,3 +353,57 @@ CVE-2026-115877 exp:2026-11-23
 CVE-2026-112940 exp:2026-11-23
 CVE-2026-112913 exp:2026-11-23
 CVE-2026-112907 exp:2026-11-23
+#
+# Second filelock batch (surfaced on PR #594's scan 2026-10-29), all fixed in
+# 4.2.1 (CVE-2026-112936 in 4.0.9) and blocked by the same `safety` 3.8.1
+# `filelock<4.0` requirement, re-verified 2026-10-29 against pypi.org (safety
+# 3.8.1 is still the newest release; filelock 4.2.4 is current).
+#
+# Every one needs ANOTHER local account that can create, rename or write
+# names in the lock's directory (a shared /tmp, a group-writable cache, or
+# a Windows directory whose inherited ACL admits other accounts). The backend
+# image runs one non-root account (`appuser`, docker/backend/Dockerfile), so
+# inside the container no second local user exists to plant or swap those
+# files. The model cache is NOT in that user's home: the breach classifier
+# passes `MLDarkWebConfig.MODELS_DIR` (BASE_DIR/ml_models/dark_web, i.e.
+# /app/ml_models/dark_web) as `cache_dir`, inside the application tree.
+# Where that tree comes from is a separate condition, per deployment
+# (2026-10-29): the k8s manifests and docker/docker-compose.yml run the
+# image's own /app on a read-only root filesystem, with the pinned model
+# baked in and loaded offline (HF_HUB_OFFLINE), so nothing writes or locks
+# there at run time. Only the root docker-compose.yml (development)
+# bind-mounts ./password_manager at /app read-write; there, anyone who can
+# write the host checkout can write the cache directory, so these advisories
+# reduce to "another account with write access to the developer's
+# checkout", which already lets that account change the code itself. Keep
+# the host checkout writable by its owner only. No project code imports filelock; the installed
+# consumers (huggingface_hub, torch, transformers, safety, tldextract,
+# cachecontrol, pip, setuptools) use FileLock/SoftFileLock only, and none
+# uses the Strict/ReadWrite/Lease variants (the only grep hit, in trio, is a
+# comment).
+#   CVE-2026-112909 / GHSA-69hj-f68j-2879  UnixFileLock truncates/chmods a
+#     file another user hard-linked onto the lock path
+#   CVE-2026-112939 / GHSA-rfpc-qcw5-3pc4  soft-lock marker owner forged by
+#     a user who can write it
+#   CVE-2026-112935 / GHSA-fq56-3cx3-fjxp  soft-lock stale break confused by
+#     inode reuse
+#   CVE-2026-112912 / GHSA-9j6q-wvj5-jgjg  soft-lock writability check
+#     follows a swapped symlink
+#   CVE-2026-112910 / GHSA-8mx5-7m5m-r77g  Windows ignores `mode` (inherits
+#     the directory ACL); the backend runs on Linux
+#   CVE-2026-112938 / GHSA-m462-7rxw-wvpg, CVE-2026-112911 /
+#     GHSA-9c4x-gm8v-wgc4, CVE-2026-112908 / GHSA-6627-m3xw-93mp
+#     StrictSoftFileLock / SoftReadWriteLock claim directories; unused
+#   CVE-2026-112936 / GHSA-j8f7-rjxc-mr56, CVE-2026-112915 /
+#     GHSA-cwqr-hh33-gh44  SQLite ReadWriteLock; unused
+# Same short expiry and the same way out as the batch above.
+CVE-2026-112909 exp:2026-11-23
+CVE-2026-112939 exp:2026-11-23
+CVE-2026-112935 exp:2026-11-23
+CVE-2026-112912 exp:2026-11-23
+CVE-2026-112910 exp:2026-11-23
+CVE-2026-112938 exp:2026-11-23
+CVE-2026-112911 exp:2026-11-23
+CVE-2026-112908 exp:2026-11-23
+CVE-2026-112936 exp:2026-11-23
+CVE-2026-112915 exp:2026-11-23
