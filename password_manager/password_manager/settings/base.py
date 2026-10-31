@@ -339,15 +339,31 @@ _USE_REDIS_CHANNELS = (
     os.environ.get('USE_REDIS_CHANNELS', 'False').lower() == 'true'
 )
 
+def _channel_layer_host():
+    """REDIS_URL when set, else REDIS_HOST/REDIS_PORT plus REDIS_PASSWORD.
+
+    Compose and k8s run Redis with --requirepass. Host and port alone connect
+    unauthenticated, so every group_send fails. REDIS_URL carries the password
+    (and rediss:// for TLS), like the cache and Celery settings use.
+    """
+    url = os.environ.get('REDIS_URL')
+    if url:
+        return url
+    host = {
+        'host': os.environ.get('REDIS_HOST', 'localhost'),
+        'port': int(os.environ.get('REDIS_PORT', 6379)),
+    }
+    if os.environ.get('REDIS_PASSWORD'):
+        host['password'] = os.environ['REDIS_PASSWORD']
+    return host
+
+
 if _USE_REDIS_CHANNELS:
     CHANNEL_LAYERS = {
         'default': {
             'BACKEND': 'channels_redis.core.RedisChannelLayer',
             'CONFIG': {
-                'hosts': [(
-                    os.environ.get('REDIS_HOST', 'localhost'),
-                    int(os.environ.get('REDIS_PORT', 6379))
-                )],
+                'hosts': [_channel_layer_host()],
                 'capacity': 1500,
                 'expiry': 10,
             },
@@ -3013,7 +3029,7 @@ if (
         "(DEBUG=False). InMemoryChannelLayer does not fan out across "
         "Daphne pods, which silently breaks WebSocket-backed features "
         "(breach alerts, adversarial-AI). Set USE_REDIS_CHANNELS=True "
-        "and configure REDIS_HOST / REDIS_PORT."
+        "and configure REDIS_URL (or REDIS_HOST / REDIS_PORT / REDIS_PASSWORD)."
     )
 
 

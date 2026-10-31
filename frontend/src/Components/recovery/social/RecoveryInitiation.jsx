@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import DeviceFingerprint from '../../../utils/deviceFingerprint';
 import ApiService from '../../../services/api';
 import {
@@ -11,29 +11,23 @@ import { abandonTokenHash, keyFingerprint } from '../../../services/recovery/sea
 import './RecoveryInitiation.css';
 
 /**
- * Social-recovery initiation form. Used in two routes:
+ * Social-recovery initiation form.
  *
- *   1. Legacy passkey recovery (/recovery/social/initiate): the
- *      component manages its own email/circleId state and navigates
- *      to /recovery/social/progress/:requestId on success.
- *
- *   2. Layered Recovery Mesh tier-2 (/recovery/social-mesh/recover-v2):
- *      `SocialMeshDEKRecover` composes this component and supplies
- *      callback props so it can drive its own state machine
- *      (`await-username` → `in-progress` → `change-password` →
- *      `done`) without route navigation.
- *
- * Both modes are supported through optional props that default to
- * the legacy navigate-based behavior — back-compat is preserved.
+ * Only the Layered Recovery Mesh tier-2 page
+ * (/recovery/social-mesh/recover-v2) can finish a recovery:
+ * `SocialMeshDEKRecover` supplies `onInitiated` and drives its own state
+ * machine (`await-username` → `in-progress` → `change-password` → `done`).
+ * The standalone /recovery/social/initiate route has no such caller, and
+ * its progress page cannot open the shares, so without `onInitiated` this
+ * component starts no request (an unfinishable request would also hold
+ * the circle in cooldown) and points to the tier-2 page instead.
  *
  * @param {object} [props]
  * @param {string} [props.email]               Controlled email value.
  * @param {(email: string) => void} [props.onEmailChange]
  * @param {(requestId: string) => void} [props.onInitiated]
- *   When provided, called with the server-issued `request_id`
- *   INSTEAD of navigating. The caller is responsible for advancing
- *   its own phase. When absent, the legacy navigate-to-progress
- *   behavior fires.
+ *   Called with the server-issued `request_id`. The caller advances its
+ *   own phase. When absent, no request can be started here.
  */
 export const RecoveryInitiation = ({
   email: controlledEmail,
@@ -48,7 +42,6 @@ export const RecoveryInitiation = ({
   // so a guardian re-seals only to this device's key.
   const [fingerprint, setFingerprint] = useState(null);
   const [startedRequestId, setStartedRequestId] = useState(null);
-  const navigate = useNavigate();
 
   // Bridge controlled / uncontrolled. We only enter controlled mode
   // when the parent supplies BOTH `email` and a working `onEmailChange`
@@ -109,15 +102,25 @@ export const RecoveryInitiation = ({
     }
   };
 
-  const continueToProgress = () => {
-    // Hand the request_id to the caller's state machine if the tier-2
-    // wrapper opted in. Otherwise navigate to the legacy progress route.
-    if (typeof onInitiated === 'function') {
-      onInitiated(startedRequestId);
-    } else {
-      navigate(`/recovery/social/progress/${startedRequestId}`);
-    }
-  };
+  // Hand the request_id to the tier-2 caller's state machine.
+  const continueToProgress = () => onInitiated(startedRequestId);
+
+  if (typeof onInitiated !== 'function') {
+    return (
+      <div className="recovery-initiation">
+        <div className="recovery-card">
+          <h3>Guardian recovery has moved</h3>
+          <p>
+            This page cannot finish a guardian recovery. Start it from the
+            guardian recovery page, which recombines your shares on this device.
+          </p>
+          <Link className="btn-primary" to="/recovery/social-mesh/recover-v2">
+            Go to guardian recovery
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (fingerprint) {
     return (

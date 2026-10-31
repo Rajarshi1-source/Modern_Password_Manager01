@@ -17,7 +17,7 @@ from rest_framework.test import APIClient
 
 from decentralized_identity.services.did_service import multibase_encode_ed25519_pub
 from shared.tests import sealed_share_fixtures as fx
-from social_recovery.models import RecoveryCircle, Voucher
+from social_recovery.models import RecoveryCircle, SocialRecoveryRequest, Voucher
 
 User = get_user_model()
 
@@ -117,3 +117,16 @@ class ClientSealedCircleApiTests(TestCase):
         # Guardians read the key from the request to re-seal their shares.
         r = anon.get(f"/api/social-recovery/requests/{r.json()['request_id']}/")
         self.assertEqual(r.json()["requester_public_key"], key)
+
+    def test_no_request_for_a_circle_from_before_client_sealing(self):
+        # Such a request could never complete but would block a new one.
+        self.assertEqual(self._create().status_code, 201)
+        circle = RecoveryCircle.objects.get()
+        circle.status = "active"
+        circle.secret_check = b""
+        circle.save()
+        r = APIClient().post("/api/social-recovery/requests/", {
+            "circle_id": str(circle.circle_id),
+            "requester_public_key": fx.hybrid_public_key()}, format="json")
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertFalse(SocialRecoveryRequest.objects.exists())
