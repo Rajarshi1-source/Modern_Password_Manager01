@@ -75,5 +75,5 @@ setuptools>=78.1.1 # not directly required, pinned by Snyk to avoid a vulnerabil
 
 # Security overrides for transitive dependencies (Dependabot)
 nltk>=3.10.4  # GHSA-x99w-6fgc-pmfw (CVE-2026-71513/CVE-2026-79657) fixed in 3.10.3; GHSA-8mgp-746c-j5xp (CVE-2026-81726, PYSEC-2026-3740) model-artifact pathsec bypass, affecting all nltk <=3.10.3, fixed in 3.10.4 (pip-audit on python:3.12-slim, 2026-10-24). No project code imports nltk; it is a floor for the version `safety` pulls in.
-twisted>=26.4.0  # GHSA-grgv-6hw6-v9g4 (CVE-2026-42304) DNS compression DoS
+twisted>=26.10.0  # GHSA-grgv-6hw6-v9g4 (CVE-2026-42304) DNS compression DoS; 26.10.0 fixes the 2026-10 batch (see requirements.txt)
 ujson>=5.13.0  # GHSA-c38f-wx89-p2xg (CVE-2026-44660) memory leak in ujson.dump()

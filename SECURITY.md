@@ -61,18 +61,13 @@ Scans are required:
 - **Advisory:** GHSA-8mgp-746c-j5xp / PYSEC-2026-3740, affecting every nltk release up to 3.10.3.
 - **Resolution:** nltk 3.10.4 fixes it; every nltk floor and pin now names 3.10.4, and the suppression was removed from `password_manager/pip-audit-ignores.txt` instead of renewed. Verified with pip-audit (no suppressions) on python:3.12-slim against the `requirements.txt` CI audits.
 
-### 6️⃣ `Twisted` – IMAP LIST Wildcard ReDoS (CVE-2026-106454)
-- **Source:** Indirect dependency (daphne's ASGI server, scrapy); `Twisted>=26.4.0` in `requirements.txt` is a floor for an older, fixed advisory.
-- **Severity (upstream):** Moderate — GitHub advisory GHSA-8pqf-f4m5-798g (`medium` in the advisory API).
-- **Issue:** `twisted.mail.imap4.wildcardToRegexp()` compiles an authenticated IMAP client's LIST/LSUB pattern as a regex, so a backtracking pattern can stall the reactor.
-- **Mitigation:** Unreachable in this codebase — no `twisted.mail`, `imap4` or IMAP service anywhere in `password_manager/`.
-- **Status:** Accepted risk (fix merged upstream but not released: twisted/twisted#12788 landed on trunk 2026-08-15, after 26.4.0; affected `<= 26.4.0`, which is the newest release, `fix_versions: []`). Suppressed in `password_manager/pip-audit-ignores.txt` with a short expiry; remove it and raise the `Twisted>=` floor once a fixed release ships.
+### 6️⃣ `Twisted` – IMAP LIST Wildcard ReDoS (CVE-2026-106454) — RESOLVED 2026-11-01
+- **Advisory:** GHSA-8pqf-f4m5-798g, `twisted.mail.imap4.wildcardToRegexp()` ReDoS (unreachable here: no IMAP service).
+- **Resolution:** Twisted 26.10.0 (stable, 2026-10-30) fixes it; every Twisted floor and pin now names 26.10.0, and the suppression was removed from `password_manager/pip-audit-ignores.txt` instead of renewed. PyPI's vulnerability feed lists none for 26.10.0.
 
-### 7️⃣ `Twisted` – 2026-10-23 batch, fixed only in 26.10.0rc1
-- **Source:** Indirect dependency (daphne's ASGI server, scrapy). 26.4.0 is the newest stable release; the first fix is the 26.10.0rc1 release candidate, which is not shipped to production.
-- **Advisories:** CVE-2026-115778 (conch telnet), CVE-2026-115774 (mail IMAP4), CVE-2026-115775 (words XML stream), CVE-2026-115776 (words IRC), CVE-2026-115877 (`twisted.web.http` bare CR/LF in header values, request smuggling), and CVE-2026-83813 (`twisted.names` DNS client accepts an answer from any source address).
-- **Mitigation:** The first four are unreachable: no conch, mail, words, IMAP, telnet, IRC or XML-stream code in `password_manager/`. CVE-2026-83813 is unreachable too: nothing uses `twisted.names`; daphne does no DNS lookups, and scrapy's default resolver uses the system's `getaddrinfo` through Twisted's `ThreadedResolver`. CVE-2026-115877's code is reachable, because daphne's HTTP server is built on `twisted.web.http`, but the smuggling needs a front end that ends header lines at a bare LF and forwards the raw request. The supported front end, nginx, parses the headers itself and re-serialises them with CRLF, so it creates no such mismatch; re-assess before putting daphne behind any other proxy or load balancer that passes raw HTTP through.
-- **Status:** Accepted risk with a short expiry (2026-11-23) in `password_manager/pip-audit-ignores.txt`; when 26.10.0 ships, remove the entries and raise the `Twisted>=` floor in every requirements file.
+### 7️⃣ `Twisted` – 2026-10-23 batch — RESOLVED 2026-11-01
+- **Advisories:** CVE-2026-115778 (conch telnet), CVE-2026-115774 (mail IMAP4), CVE-2026-115775 (words XML stream), CVE-2026-115776 (words IRC), CVE-2026-115877 (`twisted.web.http` bare CR/LF in header values, request smuggling) and CVE-2026-83813 (`twisted.names` DNS client accepts an answer from any source address).
+- **Resolution:** Fixed in Twisted 26.10.0, the stable release after 26.10.0rc1; the same bump and removal as entry 6.
 
 ### 8️⃣ `filelock` – lock-file handling (fixed only in 4.2.1)
 - **Source:** Indirect dependency (huggingface-hub, torch, transformers, safety). `safety` 3.8.1, the newest release, requires `filelock<4.0`, so 4.2.1 cannot be installed while `safety` is a runtime requirement.

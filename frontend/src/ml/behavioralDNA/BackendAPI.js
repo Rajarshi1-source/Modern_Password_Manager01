@@ -4,10 +4,10 @@
  * Provides integration with Django backend Transformer model
  * Use this when you want server-side ML processing instead of client-side TensorFlow.js
  * 
- * Features:
- * - Backend embedding generation (247D → 128D)
- * - Profile verification via backend
- * - Commitment management
+ * Raw behavioral data never leaves the browser: the methods that sent it
+ * (embedding generation, profile verification, commitment setup) are
+ * retired and refuse without a request. Only the commitment status read
+ * remains.
  */
 
 import axios from 'axios';
@@ -59,67 +59,20 @@ export class BackendAPI {
   }
 
   /**
-   * Generate embedding via backend Transformer model
-   * 
-   * @param {Object|Array} behavioralData - Behavioral profile
-   * @returns {Promise<Array>} 128-dimensional embedding
+   * Retired: sent the raw behavioral profile to the server, which must not
+   * receive it. Embeddings are generated in the browser (HybridModel).
+   * Refuses without sending anything.
    */
-  async generateEmbedding(behavioralData) {
-    try {
-      // Check cache first
-      const cacheKey = this._getCacheKey(behavioralData);
-      if (this.embeddingCache.has(cacheKey)) {
-        console.log('[BackendAPI] Using cached embedding');
-        return this.embeddingCache.get(cacheKey);
-      }
-
-      console.log('[BackendAPI] Generating embedding via backend...');
-      const response = await axios.post(`${BEHAVIORAL_API_BASE}/generate-embedding/`, {
-        behavioral_data: behavioralData
-      }, {
-        timeout: 10000
-      });
-
-      const embedding = response.data.embedding;
-      
-      // Cache the result
-      this.embeddingCache.set(cacheKey, embedding);
-      
-      console.log('[BackendAPI] ✅ Embedding generated (128 dimensions)');
-      return embedding;
-
-    } catch (error) {
-      console.error('[BackendAPI] Embedding generation failed:', error.message);
-      throw error;
-    }
+  async generateEmbedding() {
+    throw new Error('Server-side behavioral embeddings are no longer available');
   }
 
   /**
-   * Verify profile against stored commitment (backend)
-   * 
-   * @param {Object} currentProfile - Current behavioral data
-   * @param {Array} storedEmbedding - Stored 128-dim embedding
-   * @returns {Promise<Object>} Verification result
+   * Retired for the same reason: sent the current raw profile. Refuses
+   * without sending anything.
    */
-  async verifyProfile(currentProfile, storedEmbedding) {
-    try {
-      const response = await axios.post(`${BEHAVIORAL_API_BASE}/verify-profile/`, {
-        current_profile: currentProfile,
-        stored_embedding: storedEmbedding
-      }, {
-        timeout: 10000
-      });
-
-      return response.data;
-    } catch (error) {
-      console.error('[BackendAPI] Profile verification failed:', error);
-      return {
-        verified: false,
-        similarity_score: 0,
-        confidence: 0,
-        error: error.message
-      };
-    }
+  async verifyProfile() {
+    throw new Error('Server-side behavioral verification is no longer available');
   }
 
   /**

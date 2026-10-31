@@ -41,11 +41,10 @@ mozilla-django-oidc>=4.0.0,<5
 # below 50; everything else sets a lower bound. Nothing in this codebase calls
 # a changed API: no x509/pkcs7, no raw algorithms.ChaCha20 (only the
 # ChaCha20Poly1305 AEAD), no DH, no removed *_KEY_TYPES alias.
-# Known gap, unused here: pyOpenSSL 26.3.0 removed X509Req / X509Extension, and
-# Twisted 26.4.0 (the latest) still calls X509Req in KeyPair.selfSignedCert and
-# requestObject, so those two helpers fail. daphne / scrapy / autobahn only load
-# PEM files, which works (a real TLS handshake is exercised by
-# .github/scripts/dependency_smoke.py); do not use Twisted's cert-generation helpers.
+# pyOpenSSL 26.3.0 removed X509Req / X509Extension. Twisted 26.4.0 still called
+# X509Req in KeyPair.selfSignedCert and requestObject; 26.10.0 (the floor below)
+# no longer does, and both pass in .github/scripts/dependency_smoke.py, which
+# also runs a real TLS handshake through daphne's Twisted path.
 cryptography==50.0.2
 argon2-cffi==21.3.0
 argon2-cffi-bindings==25.1.0
@@ -412,5 +411,5 @@ pillow>=13.0.0  # Fixes a batch of memory-safety CVEs (WindowsViewer command inj
 protego>=0.6.2  # GHSA-wjmf-p669-5m5p (CVE-2026-55520): robots.txt Allow/Disallow wildcards compiled to regex could exponentially backtrack, freezing the crawler on a crafted robots.txt; fixed in 0.6.2 (wildcard matching no longer uses regex)
 soupsieve>=2.8.4  # GHSA-2wc2-fm75-p42x (CVE-2026-49476) unbounded memory from large comma-separated selector lists + GHSA-836r-79rf-4m37 (CVE-2026-49477) catastrophic-backtracking ReDoS on unterminated quoted attribute selectors; both fixed in 2.8.4
 tornado>=6.5.9  # + CVE-2026-82397/GHSA-mpf4-983q-p7j4: urlencoded body parsing omitted max_num_fields, so one request could stall the event loop; fixed in 6.5.8 (also adds multipart-parts and legacy set_cookie hardening). Prior GHSA-mgf9-4vpg-hj56 / GHSA-3x9g-8vmp-wqvf fixes still apply.; + GHSA-c2m8-h5v5-343r (StaticFileHandler followed symlinks outside the static root) and GHSA-chx6-46f5-w4vp (CurlAsyncHTTPClient had no response-size limit, so a decompression bomb could exhaust memory), both fixed in 6.5.9
-Twisted>=26.4.0  # GHSA-grgv-6hw6-v9g4 (CVE-2026-42304) DNS compression DoS
+Twisted>=26.10.0  # GHSA-grgv-6hw6-v9g4 (CVE-2026-42304) DNS compression DoS; 26.10.0 fixes CVE-2026-106454, -115774, -115775, -115776, -115778, -115877 (HTTP bare CR/LF smuggling) and -83813 (twisted.names DNS spoofing); PyPI lists no vulnerability for 26.10.0 (2026-11-01)
 ujson>=5.13.0  # GHSA-c38f-wx89-p2xg (CVE-2026-44660) memory leak in ujson.dump(), fixed 5.12.1; + GHSA-3j69-69wj-xqx2 (CVE-2026-54911) malformed/truncated UTF-8 accepted and silently rewritten by ujson.dumps(), fixed 5.13.0
