@@ -383,10 +383,8 @@ services:
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
       - USE_REDIS_CACHE=true
       # Required when DEBUG=False (settings/base.py guard); tasks send
-      # notifications through the channel layer.
+      # notifications through the channel layer, which connects via REDIS_URL.
       - USE_REDIS_CHANNELS=true
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
       # Models load offline from the copy baked into the image.
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
@@ -455,10 +453,8 @@ services:
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
       - USE_REDIS_CACHE=true
       # Required when DEBUG=False (settings/base.py guard); tasks send
-      # notifications through the channel layer.
+      # notifications through the channel layer, which connects via REDIS_URL.
       - USE_REDIS_CHANNELS=true
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
 
     depends_on:
       - pgbouncer

@@ -133,6 +133,10 @@ def initiate_request(
 ) -> SocialRecoveryRequest:
     if circle.status != "active":
         raise ValueError("circle must be active to initiate recovery")
+    # No guardian holds a sealed share for such a circle, so the request could
+    # never complete, yet it would hold the circle in cooldown.
+    if not bytes(circle.secret_check or b""):
+        raise ValueError("circle predates client-side sealing; create it again")
 
     last_request = (
         SocialRecoveryRequest.objects.filter(circle=circle)
