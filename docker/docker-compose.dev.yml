@@ -32,6 +32,10 @@ services:
     environment:
       - DEBUG=True
       - SECRET_KEY=${DEV_SECRET_KEY}
+      # The bind-mounted checkout hides the model baked into the image, so
+      # download it (pinned by BERT_MODEL_REVISION in ml_config.py).
+      - HF_HUB_OFFLINE=0
+      - TRANSFORMERS_OFFLINE=0
     volumes:
       - ../password_manager:/app
     ports:
@@ -58,6 +62,10 @@ services:
       watchmedo auto-restart --directory=/app --pattern=*.py --recursive -- celery -A password_manager worker --loglevel=debug --concurrency=2
     environment:
       - DEBUG=True
+      # The bind-mounted checkout hides the model baked into the image, so
+      # download it (pinned by BERT_MODEL_REVISION in ml_config.py).
+      - HF_HUB_OFFLINE=0
+      - TRANSFORMERS_OFFLINE=0
     volumes:
       - ../password_manager:/app
 

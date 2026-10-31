@@ -134,6 +134,8 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  // The server retired behavioral recovery (410); offer the recovery key.
+  const [retired, setRetired] = useState(false);
   const [completed, setCompleted] = useState(false);
   
   // Initialize recovery or load existing attempt
@@ -162,6 +164,7 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
       setNotice(response.data.message);
     } catch (err) {
       console.error('Error initiating recovery:', err);
+      setRetired(err.response?.status === 410);
       setError(err.response?.data?.message || 'Failed to initiate recovery');
     } finally {
       setLoading(false);
@@ -244,6 +247,7 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
       }
     } catch (err) {
       console.error('Error submitting challenge:', err);
+      setRetired(err.response?.status === 410);
       setError(err.response?.data?.message || 'Failed to submit challenge');
     } finally {
       setLoading(false);
@@ -300,6 +304,11 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
           <Alert type="error">
             {error}
           </Alert>
+          {retired && (
+            <Button onClick={() => navigate('/recovery/key/use-v2')}>
+              Use my recovery key
+            </Button>
+          )}
           <Button onClick={() => navigate('/password-recovery')}>
             Back to Recovery Options
           </Button>
