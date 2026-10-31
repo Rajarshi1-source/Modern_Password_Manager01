@@ -18,7 +18,8 @@ name: Dependency Compatibility
 #   2. SMOKE -- .github/scripts/dependency_smoke.py exercises the crypto / TLS
 #      stack at the versions step 1 resolved. Resolution only compares version
 #      metadata; it cannot see that a release removed an API another package
-#      still calls (Twisted still uses pyOpenSSL's X509Req, removed in 26.3.0).
+#      still calls (Twisted 26.4.0 still used pyOpenSSL's X509Req, removed in
+#      26.3.0; fixed in Twisted 26.10.0).
 #
 # What this does NOT replace: the Django test suite (ci.yml / backend-ci.yml
 # still install requirements.txt and run everything). This is a fast tripwire

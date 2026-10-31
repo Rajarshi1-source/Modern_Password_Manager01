@@ -259,73 +259,15 @@
 # tracking issue, per the policy at the top of this file.
 PYSEC-2026-1325 exp:2026-12-28
 
-# Twisted ReDoS in twisted.mail.imap4.wildcardToRegexp (CVE-2026-106454,
-# alias GHSA-8pqf-f4m5-798g, medium), surfaced on PR #555's scan 2026-10-16.
-# Fix MERGED but NOT RELEASED: twisted/twisted#12788 (commit 2f8a3c2) landed
-# on trunk 2026-08-15, after 26.4.0, and no release contains it yet. GitHub's
-# advisory lists the range `<= 26.4.0` with no first_patched_version, PyPI's
-# feed for twisted/26.4.0 lists fixed_in [], and 26.4.0 is the newest Twisted
-# release, so no pin can help (verified 2026-10-18 against the GitHub advisory
-# and commits APIs and pypi.org JSON). Do not pin to a trunk commit.
-#
-# Unreachable here, verified by grep rather than assumed: no `twisted.mail`,
-# `imap4` or IMAP server anywhere in password_manager/ (excluding the venv).
-# Twisted is only transitive (daphne's ASGI server, scrapy); the vulnerable
-# function compiles a LIST/LSUB pattern sent by an authenticated IMAP client,
-# and this app runs no IMAP service. Short expiry: drop this entry as soon as
-# a fixed Twisted ships, and raise the `Twisted>=` floor in every
-# requirements file to it.
-CVE-2026-106454 exp:2026-11-16
-
-# Twisted batch of 2026-10-23 (surfaced on PR #588's scan 2026-10-24), all
-# with first fix 26.10.0rc1 only: the newest stable release is 26.4.0, which
-# requirements.txt already floors, and a release candidate is not shipped to
-# production. Verified 2026-10-24 with `pip index versions twisted --pre` in
-# python:3.12-slim (26.10.0rc1 is the only newer version). Short expiry: when
-# 26.10.0 ships, remove all five entries and raise the `Twisted>=` floor in
-# every requirements file to it.
-#
-# Unreachable here, verified by grep rather than assumed: no `twisted.conch`,
-# `twisted.mail`, `twisted.words`, `imap4`, telnet, IRC or XML-stream code
-# anywhere in password_manager/ (excluding the venv); Twisted is transitive
-# (daphne, scrapy) and this app runs none of these services.
-#   CVE-2026-115778 / GHSA-cwm5-jh59-mwxr  conch telnet subnegotiation buffer
-#   CVE-2026-115774 / GHSA-2qrf-pqgx-qh9v  mail.imap4 negative literal size
-#   CVE-2026-115775 / GHSA-3476-c5c2-fr73  words XML element stream growth
-#   CVE-2026-115776 / GHSA-53xc-49m8-p798  words IRC server line buffer
-CVE-2026-115778 exp:2026-11-23
-CVE-2026-115774 exp:2026-11-23
-CVE-2026-115775 exp:2026-11-23
-CVE-2026-115776 exp:2026-11-23
-#
-# CVE-2026-115877 / GHSA-q7qq-6mhp-9rc4: twisted.web.http.HTTPChannel accepts
-# a bare CR or LF inside a header value, which can hide the next header from
-# the parser (request smuggling, CWE-444). The code is reachable (daphne's
-# HTTP server subclasses twisted.web.http.Request/HTTPFactory), but the
-# advisory's attack needs a FRONT END that frames the same bytes differently:
-# one that ends a header line at a bare LF and forwards the raw request, so it
-# and Twisted disagree about where the request ends. The supported front end,
-# docker/nginx, does not create that mismatch: it parses the headers itself
-# (a bare LF ends the header line, a bare CR is a 400) and sends daphne a
-# re-serialised CRLF request, so daphne never sees a bare CR or LF in a value.
-# A client talking to daphne directly has no second parser to desync from
-# (it already controls every header it sends), so that is not this attack.
-# Re-assess before putting daphne behind any other proxy or load balancer
-# that passes raw HTTP through. Same short expiry, same removal step.
-CVE-2026-115877 exp:2026-11-23
-#
-# CVE-2026-83813 / GHSA-jj36-9pvh-vj5r (surfaced on PR #594's scan
-# 2026-10-27): twisted.names.dns.DNSDatagramProtocol accepts a UDP DNS answer
-# whose transaction ID matches without checking it came from the queried
-# server. First fix 26.10.0rc1 only; pypi.org still lists 26.4.0 as the newest
-# release (verified 2026-10-27). Unreachable here, verified by grep rather
-# than assumed: no `twisted.names`, `createResolver` or `DNSDatagramProtocol`
-# anywhere in password_manager/ (excluding the venv). daphne does no DNS
-# lookups, and scrapy's resolver (DNS_RESOLVER, default
-# scrapy.resolver.CachingThreadedResolver, not overridden here) subclasses
-# twisted.internet.base.ThreadedResolver, which calls the system's
-# getaddrinfo, not twisted.names. Same short expiry, same removal step.
-CVE-2026-83813 exp:2026-11-23
+# Twisted CVE-2026-106454 (IMAP wildcard ReDoS), the 2026-10-23 batch
+# (CVE-2026-115778, -115774, -115775, -115776, -115877) and CVE-2026-83813
+# (twisted.names DNS spoofing) -- ALL SEVEN REMOVED 2026-11-01, not renewed.
+# They were suppressed while the only fix was 26.10.0rc1 (106454 had no fixed
+# release at all). Twisted 26.10.0 shipped as a stable release on 2026-10-30,
+# and every Twisted floor and pin now names it. Verified rather than assumed:
+# https://pypi.org/pypi/Twisted/26.10.0/json lists ZERO vulnerabilities, while
+# the same feed for 26.4.0 lists all seven. SECURITY.md entries 6 and 7 are
+# marked resolved.
 
 # filelock batch (surfaced on PR #588's scan 2026-10-24), fixed in 4.2.1, a
 # major release. NOT installable here: `safety` 3.8.1 (requirements.txt

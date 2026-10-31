@@ -147,10 +147,10 @@ PRs that each fail to resolve.
   and the Docker image. It says nothing about Windows or Python 3.13 developer
   machines, where some pinned packages have no wheels.
 - Known, accepted incompatibilities are registered in `KNOWN_BROKEN` in the
-  smoke script rather than hidden. Today: Twisted 26.4.0's
-  `KeyPair.selfSignedCert` / `requestObject` call `OpenSSL.crypto.X509Req`,
-  removed in pyOpenSSL 26.3.0 (needed for `cryptography>=49`). Nothing here calls
-  them. If one starts passing, the script prints `XPASS` so the entry can go.
+  smoke script rather than hidden. If one starts passing, the script prints
+  `XPASS` so the entry can go. Today there are none: Twisted 26.4.0's
+  `KeyPair.selfSignedCert` / `requestObject` called `OpenSSL.crypto.X509Req`,
+  removed in pyOpenSSL 26.3.0, and Twisted 26.10.0 (the current floor) fixed that.
 
 ### OpenSSF Scorecard (2026-09-16)
 

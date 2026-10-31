@@ -50,13 +50,10 @@ def _have(*modules):
 
 # name -> reason. These are real incompatibilities in APIs this project does not
 # call; see the cryptography block in password_manager/requirements.txt.
-KNOWN_BROKEN = {
-    "Twisted KeyPair.selfSignedCert": (
-        "Twisted still calls OpenSSL.crypto.X509Req, removed in pyOpenSSL 26.3.0 "
-        "(needed for cryptography>=49). Unused: daphne/scrapy/autobahn only load PEM files."
-    ),
-    "Twisted CertificateRequest": "same X509Req removal as above",
-}
+# Empty since Twisted 26.10.0, which no longer calls OpenSSL.crypto.X509Req
+# (removed in pyOpenSSL 26.3.0) in KeyPair.selfSignedCert / requestObject;
+# both checks now pass and stay as regression checks.
+KNOWN_BROKEN = {}
 # A KNOWN_BROKEN check is only XFAIL when it fails for the documented reason;
 # any other exception (a new breakage) must still fail the run.
 KNOWN_BROKEN_SIGNATURE = "X509Req"

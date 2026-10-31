@@ -1,13 +1,9 @@
 /**
  * Hybrid Behavioral DNA Model
  * 
- * Intelligently switches between client-side TensorFlow.js and backend API
- * Provides a unified interface for embedding generation
- * 
- * Strategy:
- * 1. Try client-side TensorFlow.js first (faster, privacy-preserving)
- * 2. Fall back to backend API if TensorFlow.js fails or unavailable
- * 3. Cache results for performance
+ * Generates embeddings in the browser only (TensorFlow.js). There is no
+ * backend mode or fallback: either would send the raw behavioral profile to
+ * the server, which must never receive it.
  */
 
 import { TransformerModel } from './TransformerModel';
@@ -44,33 +40,12 @@ export class HybridModel {
 
     console.log('[HybridModel] Initializing hybrid behavioral DNA model...');
 
-    // Test client-side TensorFlow.js
-    let clientAvailable = false;
-    if (this.config.preferClientSide) {
-      try {
-        await this.transformerModel.loadModel();
-        clientAvailable = true;
-        this.mode = 'client';
-        console.log('[HybridModel] ✅ Client-side TensorFlow.js ready');
-      } catch (error) {
-        console.warn('[HybridModel] ⚠️ Client-side TensorFlow.js not available:', error.message);
-      }
-    }
-
-    // Test backend API
-    let backendAvailable = false;
     try {
-      backendAvailable = await this.backendAPI.initialize();
-      if (!clientAvailable) {
-        this.mode = 'backend';
-        console.log('[HybridModel] ✅ Using backend API mode');
-      }
+      await this.transformerModel.loadModel();
+      this.mode = 'client';
+      console.log('[HybridModel] ✅ Client-side TensorFlow.js ready');
     } catch (error) {
-      console.warn('[HybridModel] ⚠️ Backend API not available:', error.message);
-    }
-
-    if (!clientAvailable && !backendAvailable) {
-      console.error('[HybridModel] ❌ Neither client-side nor backend mode available!');
+      console.error('[HybridModel] ❌ Client-side TensorFlow.js not available:', error.message);
       throw new Error('No behavioral DNA service available');
     }
 
@@ -90,29 +65,8 @@ export class HybridModel {
     }
 
     try {
-      let embedding;
-
-      if (this.mode === 'client') {
-        // Try client-side first
-        try {
-          embedding = await this.transformerModel.generateEmbedding(behavioralData);
-          console.log('[HybridModel] Generated embedding via client-side TensorFlow.js');
-        } catch (error) {
-          console.warn('[HybridModel] Client-side failed, trying backend:', error.message);
-          
-          if (this.config.autoFallback) {
-            embedding = await this.backendAPI.generateEmbedding(behavioralData);
-            console.log('[HybridModel] Generated embedding via backend (fallback)');
-          } else {
-            throw error;
-          }
-        }
-      } else {
-        // Backend mode
-        embedding = await this.backendAPI.generateEmbedding(behavioralData);
-        console.log('[HybridModel] Generated embedding via backend');
-      }
-
+      // Client-side only; a failure is an error, never a server fallback.
+      const embedding = await this.transformerModel.generateEmbedding(behavioralData);
       this.lastEmbedding = embedding;
       return embedding;
 
