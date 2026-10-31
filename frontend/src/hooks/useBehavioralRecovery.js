@@ -56,7 +56,9 @@ export function useBehavioralRecovery() {
     
     return {
       status: 'building',
-      message: `Building profile: ${completeness}% (${daysNeeded} days remaining)`,
+      // No countdown: behavioral recovery is retired, so no amount of
+      // profile building makes it available.
+      message: 'Behavioral recovery is retired',
       completeness,
       daysNeeded
     };
