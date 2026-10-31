@@ -137,7 +137,7 @@ packaging==25.0
 # Encoding
 cffi>=2.0.0
 pycparser>=2.22
-pyasn1==0.6.4  # GHSA-8ppf-4f7h-5ppj/GHSA-m4p7-r5rc-7g4j/GHSA-hm4w-wwcw-mr6r (CVE-2026-59884/-59885/-59886): quadratic OID/RELATIVE-OID decoding, unbounded BER long-form tag IDs, and REAL-value float conversion could each be driven into excessive CPU/memory by crafted ASN.1 input; all three fixed in 0.6.4
+pyasn1==0.6.5  # GHSA-8ppf-4f7h-5ppj/GHSA-m4p7-r5rc-7g4j/GHSA-hm4w-wwcw-mr6r (CVE-2026-59884/-59885/-59886): quadratic OID/RELATIVE-OID decoding, unbounded BER long-form tag IDs, and REAL-value float conversion could each be driven into excessive CPU/memory by crafted ASN.1 input; all three fixed in 0.6.4; + CVE-2026-119194/-119195/-119196/-119197 (GHSA-fm9c-5rcf-2q5p, GHSA-9m75-vc3g-4x39, GHSA-2qm8-x737-gmw5, GHSA-mm57-4v3p-rchx), fixed in 0.6.5
 rsa==4.9.1
 six==1.17.0
 
