@@ -11,7 +11,7 @@ PyJWT==2.15.1
 requests==2.33.0
 
 # Fixes for pyasn1 / pyasn1-modules compatibility (match service-identity / google-auth needs)
-pyasn1==0.6.4  # GHSA-8ppf-4f7h-5ppj / GHSA-m4p7-r5rc-7g4j / GHSA-hm4w-wwcw-mr6r: ASN.1 decoding DoS, fixed 0.6.4
+pyasn1==0.6.5  # GHSA-8ppf-4f7h-5ppj / GHSA-m4p7-r5rc-7g4j / GHSA-hm4w-wwcw-mr6r: ASN.1 decoding DoS, fixed 0.6.4; + CVE-2026-119194/-119195/-119196/-119197 (GHSA-fm9c-5rcf-2q5p, GHSA-9m75-vc3g-4x39, GHSA-2qm8-x737-gmw5, GHSA-mm57-4v3p-rchx), fixed in 0.6.5
 pyasn1-modules==0.4.2
 
 # Modern HTTP/2 stack (used by httpx[http2]). h2 4.4.1 requires hyperframe>=6.1
