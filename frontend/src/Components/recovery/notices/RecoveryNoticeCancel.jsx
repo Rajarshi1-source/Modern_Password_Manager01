@@ -49,7 +49,8 @@ export default function RecoveryNoticeCancel() {
             email describes. If it already completed, your account is locked
             and every session is signed out; contact support to restore access.
             Your vault stays encrypted: you open it again with your own
-            recovery key.
+            recovery key. Whoever completed a recovery may have read it, so
+            change the passwords stored there afterwards.
           </p>
           {state === 'error' ? <p role="alert">{message}</p> : null}
           <button
