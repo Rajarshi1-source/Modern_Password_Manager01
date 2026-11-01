@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
+import { ensureHybridKemReady } from '../../../services/quantum/hybridKem';
 import {
   forgetRequesterKeyPair,
   loadRequesterKeyPair,
@@ -108,7 +109,13 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
         let done;
         try {
           keyPair = await loadRequesterKeyPair(requestId);
-          if (keyPair) done = await ApiService.socialRecovery.completeRequest(requestId);
+          if (keyPair) {
+            // Start ML-KEM here, in the retryable step: if it fails inside
+            // recoverSeed, no share opens and that reads as bad shares,
+            // which abandons the request and drops the one-time key.
+            await ensureHybridKemReady();
+            done = await ApiService.socialRecovery.completeRequest(requestId);
+          }
         } catch (fetchErr) {
           const code = fetchErr?.response?.status;
           if (code >= 400 && code < 500 && code !== 429) {
@@ -119,8 +126,8 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
             setError('The server cannot complete this recovery.');
             return;
           }
-          // Storage, network, 429 or 5xx: completion is idempotent, so a
-          // later poll retries.
+          // Storage, ML-KEM start-up, network, 429 or 5xx: completion is
+          // idempotent, so a later poll retries.
           reconstructedFiredRef.current = false;
           console.warn('RecoveryProgress: fetching shares failed, will retry:', fetchErr);
           return;
