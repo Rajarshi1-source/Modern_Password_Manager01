@@ -58,6 +58,15 @@ function mlkem() {
   return mlkemPromise;
 }
 
+/**
+ * Resolves once ML-KEM has started; rejects if it cannot, and the next call
+ * retries. Lets a caller tell a local start-up failure from shares that do
+ * not open.
+ */
+export async function ensureHybridKemReady() {
+  await mlkem();
+}
+
 function concat(...parts) {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let offset = 0;
