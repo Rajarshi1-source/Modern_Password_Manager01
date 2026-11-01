@@ -12,7 +12,7 @@ asgiref==3.9.1
 asn1crypto==1.5.1
 astunparse==1.6.3
 attrs==25.4.0
-Authlib==1.6.12
+Authlib==1.9.1
 authy==2.2.6
 autobahn==26.7.1
 Automat==25.4.16
