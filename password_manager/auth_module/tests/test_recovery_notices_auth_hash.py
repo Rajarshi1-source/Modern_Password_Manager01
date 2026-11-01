@@ -654,6 +654,62 @@ class UnlockLockedAccountTests(TestCase):
         from auth_module.recovery_notice import cancel_from_notice
         self.assertTrue(cancel_from_notice(re.search(self.TOKEN, mail.outbox[-1].body).group(1)))
 
+    def _release_shares_then_lock(self, event='social_recovery_completed'):
+        from auth_module.recovery_notice import cancel_from_notice, create_notice
+        link = create_notice(self.user, event).cancel_link
+        self.assertTrue(cancel_from_notice(re.search(self.TOKEN, link).group(1)))
+
+    def _assert_released_shares_revoke_the_social_factor(self, event):
+        self._vault()
+        social = self._factor('social_mesh')
+        other = self._factor('passkey')
+        self._release_shares_then_lock(event)
+        self._unlock()
+        social.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual(social.status, 'revoked')
+        self.assertEqual(other.status, 'active')
+
+    def test_guardian_shares_revoke_the_social_factor(self):
+        self._assert_released_shares_revoke_the_social_factor('guardian_recovery_completed')
+
+    def test_voucher_shares_revoke_the_social_factor(self):
+        self._assert_released_shares_revoke_the_social_factor('social_recovery_completed')
+
+    def test_a_completion_without_shares_keeps_the_social_factor(self):
+        self._vault()
+        social = self._factor('social_mesh')
+        self._lock()
+        self._unlock()
+        social.refresh_from_db()
+        self.assertEqual(social.status, 'active')
+
+    def test_a_social_factor_replaced_after_released_shares_stays_revoked(self):
+        from auth_module.recovery_models_v2 import RecoveryWrappedDEK
+        self._vault()
+        self._factor('passkey')
+        old = self._factor('social_mesh')
+        RecoveryWrappedDEK.objects.filter(pk=old.pk).update(status='revoked', revoked_at=timezone.now())
+        attackers = self._factor('social_mesh', age=timedelta(0))
+        self._release_shares_then_lock()
+        self._unlock()
+        old.refresh_from_db()
+        attackers.refresh_from_db()
+        self.assertEqual(old.status, 'revoked')
+        self.assertEqual(attackers.status, 'revoked')
+
+    def test_a_sole_social_factor_needs_the_operator_after_released_shares(self):
+        self._vault()
+        social = self._factor('social_mesh')
+        self._release_shares_then_lock()
+        with self.assertRaises(CommandError):
+            self._unlock()
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self._unlock('--revoke-last-recovery-factor')
+        social.refresh_from_db()
+        self.assertEqual(social.status, 'revoked')
+
     def test_factors_replaced_after_the_recovery_come_back(self):
         from auth_module.recovery_models_v2 import RecoveryWrappedDEK
         self._vault()

@@ -489,6 +489,12 @@ jobs:
       packages: read
       security-events: write
 
+    # Trivy reads image layers over HTTP/1.1: a registry's HTTP/2 stream reset
+    # ("stream error: PROTOCOL_ERROR") aborted a whole scan, and the deploy jobs
+    # need this one. A scan that still cannot read the image fails the job.
+    env:
+      GODEBUG: http2client=0
+
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

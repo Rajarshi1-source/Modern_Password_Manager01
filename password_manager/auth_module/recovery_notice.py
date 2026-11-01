@@ -55,6 +55,9 @@ COMPLETED_EVENTS = {
     'guardian_recovery_completed', 'social_recovery_completed',
     'account_unlocked',
 }
+# Completions that hand out shares of a secret. They use no factor themselves,
+# but whoever holds the shares can rebuild the seed of a social_mesh factor.
+SHARES_RELEASED_EVENTS = {'guardian_recovery_completed', 'social_recovery_completed'}
 
 _DESCRIPTIONS = {
     'reset_requested': 'A password reset was requested',
@@ -225,9 +228,19 @@ def _lock_period(user):
     return period.exclude(recovery_factor=None).values('recovery_factor'), first - NOTICE_LAG
 
 
+def _shares_released_since(user, since):
+    from .models import RecoveryNotice
+
+    return RecoveryNotice.objects.filter(
+        user=user, event__in=SHARES_RELEASED_EVENTS, created_at__gte=since,
+    ).exists()
+
+
 def factors_to_revoke(user):
     """Active recovery factors whoever caused the lock may hold: each one a
-    recovery used in the lock's period, and each one enrolled since it began."""
+    recovery used in the lock's period, each one enrolled since it began, and
+    the social_mesh factor if guardians or vouchers released shares in it. The
+    server cannot tell which secret those shares rebuild, so it assumes the seed."""
     from django.db.models import Q
 
     from .recovery_models_v2 import RecoveryWrappedDEK
@@ -236,7 +249,10 @@ def factors_to_revoke(user):
     used, since = _lock_period(user)
     if since is None:
         return active.none()
-    return active.filter(Q(pk__in=used) | Q(created_at__gte=since))
+    held = Q(pk__in=used) | Q(created_at__gte=since)
+    if _shares_released_since(user, since):
+        held |= Q(factor_type=RecoveryWrappedDEK.FactorType.SOCIAL_MESH)
+    return active.filter(held)
 
 
 def factors_to_restore(user):
@@ -245,9 +261,10 @@ def factors_to_restore(user):
     lock can remove the owner's way back. Only a status changes; the server still
     never sees a factor's secret.
 
-    Leaves out a factor a recovery used, a type that keeps an active factor, and
+    Leaves out a factor a recovery used, a type that keeps an active factor,
     time-locked factors, whose server half is a separate row with its own one-shot
-    state: the owner enrolls that type again.
+    state, and social_mesh factors if shares were released, since whoever holds
+    them can rebuild the seed: the owner enrolls those types again.
     """
     from .recovery_models_v2 import RecoveryWrappedDEK, VaultWrappedDEK
 
@@ -266,6 +283,8 @@ def factors_to_restore(user):
     ).exclude(pk__in=used).exclude(
         factor_type=RecoveryWrappedDEK.FactorType.TIME_LOCKED,
     ).order_by('created_at')
+    if _shares_released_since(user, since):
+        replaced = replaced.exclude(factor_type=RecoveryWrappedDEK.FactorType.SOCIAL_MESH)
     latest = {f.factor_type: f.pk for f in replaced if f.factor_type not in kept_types}
     return list(latest.values())
 
