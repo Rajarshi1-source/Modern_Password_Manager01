@@ -129,19 +129,28 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
   const navigate = useNavigate();
   
   const [attemptId] = useState(initialAttemptId);
-  const [recoveryAttempt, setRecoveryAttempt] = useState(null);
-  const [currentChallenge, setCurrentChallenge] = useState(null);
+  // Retired: no attempt status or challenge is loaded any more.
+  const [recoveryAttempt] = useState(null);
+  const [currentChallenge] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  // The server retired behavioral recovery (410); offer the recovery key.
+  // Behavioral recovery is retired (the server answers 410); offer the recovery key.
   const [retired, setRetired] = useState(false);
-  const [completed, setCompleted] = useState(false);
+  const [completed] = useState(false);
   
+  // Behavioral recovery is retired. Raw typing and mouse data must not leave
+  // the browser, so an existing attempt loads no challenges and sends nothing.
+  const showRetired = () => {
+    setRetired(true);
+    setError('Behavioral recovery is no longer available. Use your recovery key or your guardians instead.');
+    setLoading(false);
+  };
+
   // Initialize recovery or load existing attempt
   useEffect(() => {
     if (attemptId) {
-      loadRecoveryStatus();
+      showRetired();
     } else if (email) {
       initiateRecovery();
     }
@@ -172,86 +181,10 @@ const BehavioralRecoveryFlow = ({ email, attemptId: initialAttemptId }) => {
   };
   
   /**
-   * Load recovery attempt status
+   * A challenge component finished. Never upload its raw behavioral data.
    */
-  const loadRecoveryStatus = async () => {
-    setLoading(true);
-    setError('');
-    
-    try {
-      const response = await axios.get(`${API_URL}/api/behavioral-recovery/status/${attemptId}/`);
-      
-      // success_response puts the fields at the top level
-      if (response.data.success) {
-        setRecoveryAttempt(response.data);
-        
-        // Get next challenge
-        await loadNextChallenge();
-      }
-    } catch (err) {
-      console.error('Error loading recovery status:', err);
-      setError('Failed to load recovery status');
-    } finally {
-      setLoading(false);
-    }
-  };
-  
-  /**
-   * Load next challenge
-   */
-  const loadNextChallenge = async () => {
-    try {
-      const response = await axios.get(`${API_URL}/api/behavioral-recovery/challenges/${attemptId}/next/`);
-      
-      if (response.data.success && response.data.challenge) {
-        setCurrentChallenge(response.data.challenge);
-      } else {
-        // No more challenges - recovery complete or ready for completion
-        setCurrentChallenge(null);
-      }
-    } catch (err) {
-      console.error('Error loading next challenge:', err);
-    }
-  };
-  
-  /**
-   * Handle challenge completion
-   */
-  const handleChallengeComplete = async (challengeResponse) => {
-    setLoading(true);
-    setError('');
-    
-    try {
-      // Submit challenge response
-      const response = await axios.post(`${API_URL}/api/behavioral-recovery/submit-challenge/`, {
-        attempt_id: attemptId,
-        challenge_id: currentChallenge.challenge_id,
-        behavioral_data: challengeResponse
-      });
-      
-      if (response.data.success) {
-        // The server does not return similarity scores
-        setRecoveryAttempt(prev => ({
-          ...prev,
-          challenges_completed: prev.challenges_completed + 1
-        }));
-
-        // Load next challenge
-        if (response.data.next_challenge) {
-          setCurrentChallenge(response.data.next_challenge);
-        } else {
-          // All challenges completed
-          setCurrentChallenge(null);
-          setCompleted(true);
-        }
-      }
-    } catch (err) {
-      console.error('Error submitting challenge:', err);
-      setRetired(err.response?.status === 410);
-      setError(err.response?.data?.message || 'Failed to submit challenge');
-    } finally {
-      setLoading(false);
-    }
+  const handleChallengeComplete = () => {
+    showRetired();
   };
   
   /**
