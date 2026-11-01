@@ -26,6 +26,8 @@ from auth_module.recovery_throttling import (
     RecoveryThrottle,
     RecoveryCompleteThrottle,
 )
+from auth_module.auth_hash import make_auth_hash_record
+from auth_module.recovery_notice import notify as notify_recovery
 from auth_module.models import UserSalt
 from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
 from auth_module.quantum_recovery_models import RecoveryAuditLog
@@ -219,9 +221,10 @@ class WrappedDEKRecoveryRotateView(APIView):
         # the same generic 'recovery target not found' covers both
         # 'no such user' and 'user exists but no matching factor /
         # mismatched dek_id'. An attacker probing usernames sees a
-        # uniform error.
+        # uniform error. A locked account answers the same: a recovery factor
+        # must not re-key it behind the "this wasn't me" lock.
         try:
-            user = User.objects.get(username=username)
+            user = User.objects.get(username=username, is_active=True)
         except User.DoesNotExist:
             return Response({'error': 'recovery target not found'}, status=404)
 
@@ -326,8 +329,10 @@ class WrappedDEKRecoveryRotateView(APIView):
                 update_fields=['blob', 'rotated_at', 'updated_at'],
             )
             set_login_verifier(user, login_verifier)
-            UserSalt.objects.filter(user=user).update(auth_hash=new_auth_hash)
+            UserSalt.objects.filter(user=user).update(
+                auth_hash=make_auth_hash_record(new_auth_hash))
             revoke_sessions(user)
+            notify_recovery(user, 'recovery_completed', request)
 
             RecoveryAuditLog.objects.create(
                 user=user,

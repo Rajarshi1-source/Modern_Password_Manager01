@@ -501,6 +501,7 @@ class RecoveryAuditLog(models.Model):
         ('guardian_denied', 'Guardian Denied'),
         ('canary_alert_sent', 'Canary Alert Sent'),
         ('user_cancelled_recovery', 'User Cancelled Recovery'),
+        ('account_unlocked', 'Account Unlocked By Support'),
         ('recovery_completed', 'Recovery Completed'),
         ('recovery_failed', 'Recovery Failed'),
         ('suspicious_activity', 'Suspicious Activity Detected'),

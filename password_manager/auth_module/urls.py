@@ -47,6 +47,7 @@ from .time_locked_view import (
 )
 # WebSocket auth ticket endpoint (keeps the long-lived token out of ws:// URLs)
 from . import ws_ticket_view
+from . import recovery_notice_views
 
 @api_view(['GET'])
 def auth_root(request, format=None):
@@ -191,6 +192,10 @@ urlpatterns = [
     path('passkey-recovery/backups/<int:backup_id>/revoke/', passkey_primary_recovery_views.revoke_recovery_backup, name='revoke_recovery_backup'),
     # Get overall recovery status
     path('passkey-recovery/status/', passkey_primary_recovery_views.get_recovery_status, name='get_passkey_recovery_status'),
+
+    # Recovery notices: in-app list and the "this wasn't me" link
+    path('recovery-notices/', recovery_notice_views.list_recovery_notices, name='recovery-notices'),
+    path('recovery-notices/cancel/', recovery_notice_views.cancel_recovery_notice, name='recovery-notice-cancel'),
     
     # ==================== Quantum Recovery Endpoints ====================
     path('quantum-recovery/setup_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'setup_recovery'}), name='quantum-recovery-setup'),

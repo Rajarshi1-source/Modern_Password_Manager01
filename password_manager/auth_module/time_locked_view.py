@@ -53,6 +53,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from auth_module.recovery_throttling import (
+    RecoveryNoticeCancelThrottle,
     RecoveryThrottle,
     RecoveryInitiateThrottle,
     RecoveryCompleteThrottle,
@@ -113,7 +114,7 @@ def _build_canary_email(user, recovery):
     appears in logs (see ``_send_canary``).
     """
     subject = 'Recovery initiated for your vault — was this you?'
-    base = getattr(settings, 'FRONTEND_BASE_URL', 'https://your-app.example.com')
+    base = settings.FRONTEND_URL.rstrip('/')
     cancel_url = f'{base}/recovery/time-lock/cancel?token={recovery.canary_ack_token}'
     body = (
         f"Hi {user.username},\n\n"
@@ -412,7 +413,7 @@ class TimeLockedInitiateView(APIView):
         decoy_release_after = timezone.now() + timedelta(days=delay_days)
 
         try:
-            user = User.objects.get(username=username)
+            user = User.objects.get(username=username, is_active=True)
         except User.DoesNotExist:
             return Response({
                 'success': True,
@@ -539,7 +540,7 @@ class TimeLockedReleaseView(APIView):
         decoy_release_after = timezone.now() + timedelta(days=delay_days)
 
         try:
-            user = User.objects.get(username=username)
+            user = User.objects.get(username=username, is_active=True)
         except User.DoesNotExist:
             return Response({
                 'error': 'delay not elapsed',
@@ -634,7 +635,9 @@ class TimeLockedCanaryAckView(APIView):
     canary``.
     """
     permission_classes = [AllowAny]
-    throttle_classes = [RecoveryThrottle]
+    # A stale bearer token must not turn the cancel into a 401.
+    authentication_classes = []
+    throttle_classes = [RecoveryNoticeCancelThrottle]
 
     def post(self, request):
         """Acknowledge the canary token and atomically deactivate the row."""

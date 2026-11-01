@@ -36,6 +36,7 @@ from .quantum_recovery_models import (
     BehavioralBiometrics,
     RecoveryShardType
 )
+from .recovery_notice import notify as notify_recovery
 from .recovery_throttling import RecoveryThrottle
 from .services.quantum_crypto_service import quantum_crypto_service
 from shared import sealed_shares
@@ -363,7 +364,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             User = get_user_model()
             
             try:
-                user = User.objects.get(email=email)
+                user = User.objects.get(email=email, is_active=True)
                 recovery_setup = user.passkey_recovery_setup
             except (User.DoesNotExist, PasskeyRecoverySetup.DoesNotExist):
                 # Return generic message to prevent user enumeration
@@ -412,6 +413,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 # Send canary alert to user
                 attempt.canary_alert_sent_at = timezone.now()
                 attempt.save()
+                notify_recovery(user, 'guardian_recovery_started', request)
                 
                 # Create temporal challenges (will be sent via Celery tasks)
                 # In production, trigger Celery task here
@@ -830,12 +832,23 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     'error': f'Insufficient shares: need {recovery_setup.threshold_shards}, have {len(sealed)}'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            if attempt.status != 'completed':
-                with transaction.atomic():
+            with transaction.atomic():
+                # Lock the attempt and check its status again: a cancel (from
+                # a recovery notice or the canary) that landed after the
+                # checks above must stop the completion, not be overwritten.
+                attempt = RecoveryAttempt.objects.select_for_update().get(pk=attempt.pk)
+                if attempt.status not in ['shard_collection', 'guardian_approval',
+                                          'final_verification', 'completed']:
+                    return Response({
+                        'error': 'Recovery not ready for completion'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                if attempt.status != 'completed':
                     attempt.status = 'completed'
                     attempt.recovery_successful = True
                     attempt.completed_at = timezone.now()
                     attempt.save(update_fields=['status', 'recovery_successful', 'completed_at'])
+                    notify_recovery(recovery_setup.user, 'guardian_recovery_completed', request)
 
                     RecoveryAuditLog.objects.create(
                         user=recovery_setup.user,

@@ -10,6 +10,8 @@ from django.utils import timezone
 from shared import sealed_shares
 
 from ..models import SocialRecoveryRequest, VouchAttestation, Voucher
+from auth_module.recovery_notice import notify as notify_recovery
+
 from .audit_service import record_event
 from .stake_service import slash_stake
 from .web_of_trust_service import evaluate_quorum
@@ -23,6 +25,10 @@ def complete_request(*, request: SocialRecoveryRequest) -> dict:
     recombines the seed and checks it against ``secret_check``. The server
     never sees a share or the seed, so it cannot check the result itself.
     """
+    # Lock the row and re-read it: a cancel (from a recovery notice or the
+    # owner) that committed after the caller loaded the request must win.
+    SocialRecoveryRequest.objects.select_for_update().get(pk=request.pk)
+    request.refresh_from_db()
     if request.status not in ("approved", "completed"):
         raise ValueError("request must be approved before completion")
     circle = request.circle
@@ -69,6 +75,7 @@ def complete_request(*, request: SocialRecoveryRequest) -> dict:
                 "total_stake": q.total_stake,
             },
         )
+        notify_recovery(circle.user, "social_recovery_completed")
 
     return {
         "threshold": circle.threshold,
