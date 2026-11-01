@@ -585,11 +585,89 @@ class UnlockLockedAccountTests(TestCase):
         self.user.refresh_from_db()
         self.assertFalse(self.user.is_active)
 
-    def _unlock(self):
+    def _unlock(self, *extra):
         with self.captureOnCommitCallbacks(execute=True):
             call_command('unlock_recovery_locked_account', 'owner',
-                         '--operator', 'agent-7', '--reason', 'ticket 42, identity checked')
+                         '--operator', 'agent-7', '--reason', 'ticket 42, identity checked', *extra)
         self.user.refresh_from_db()
+
+    def _factor(self, factor_type, age=timedelta(days=30)):
+        from auth_module.recovery_models_v2 import RecoveryWrappedDEK
+        from auth_module.tests.test_login_verifier import AUTH_HASH, BLOB
+        factor = RecoveryWrappedDEK.objects.create(
+            user=self.user, factor_type=factor_type, dek_id=self.dek_id, blob=BLOB, auth_hash=AUTH_HASH)
+        RecoveryWrappedDEK.objects.filter(pk=factor.pk).update(created_at=timezone.now() - age)
+        return factor
+
+    def _rotate(self):
+        from auth_module.tests.test_login_verifier import AUTH_HASH, NEW_BLOB
+        with self.captureOnCommitCallbacks(execute=True):
+            return APIClient().post('/api/auth/vault/wrapped-dek/recover-rotate/', {
+                'username': 'owner', 'factor_type': 'recovery_key', 'dek_id': str(self.dek_id),
+                'blob': NEW_BLOB, 'auth_hash': AUTH_HASH, 'login_verifier': NEW_VERIFIER,
+                'new_auth_hash': _b64(b'n' * 32)}, format='json')
+
+    def _recover_then_lock(self):
+        from auth_module.recovery_notice import cancel_from_notice
+        self.assertEqual(self._rotate().status_code, 200)
+        self.assertTrue(cancel_from_notice(re.search(self.TOKEN, mail.outbox[-1].body).group(1)))
+
+    def _vault(self):
+        import uuid
+        from auth_module.recovery_models_v2 import VaultWrappedDEK
+        from auth_module.tests.test_login_verifier import BLOB
+        self.dek_id = uuid.uuid4()
+        UserSalt.objects.create(user=self.user, salt=os.urandom(16), auth_hash=make_auth_hash_record(RAW))
+        VaultWrappedDEK.objects.create(user=self.user, blob=BLOB, dek_id=self.dek_id)
+
+    def test_the_factor_a_recovery_used_cannot_recover_again_after_unlock(self):
+        from auth_module.quantum_recovery_models import RecoveryAuditLog
+        self._vault()
+        used = self._factor('recovery_key')
+        other = self._factor('passkey')
+        self._recover_then_lock()
+        self.assertEqual(RecoveryNotice.objects.get(event='recovery_completed').recovery_factor_id, used.pk)
+        self._unlock()
+        used.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual(used.status, 'revoked')
+        self.assertIsNotNone(used.revoked_at)
+        self.assertEqual(other.status, 'active')
+        self.assertEqual(self._rotate().status_code, 404)
+        log = RecoveryAuditLog.objects.get(user=self.user, event_type='account_unlocked')
+        self.assertEqual(log.event_data['revoked_recovery_factors'], [used.pk])
+
+    def test_a_factor_enrolled_after_the_recovery_is_revoked(self):
+        self._vault()
+        self._factor('recovery_key')
+        owners = self._factor('passkey')
+        self.assertEqual(self._rotate().status_code, 200)
+        enrolled = self._factor('social_mesh', age=timedelta(0))
+        self._lock_from_last_mail()
+        self._unlock()
+        enrolled.refresh_from_db()
+        owners.refresh_from_db()
+        self.assertEqual(enrolled.status, 'revoked')
+        self.assertEqual(owners.status, 'active')
+
+    def _lock_from_last_mail(self):
+        from auth_module.recovery_notice import cancel_from_notice
+        self.assertTrue(cancel_from_notice(re.search(self.TOKEN, mail.outbox[-1].body).group(1)))
+
+    def test_an_unlock_that_would_end_vault_recovery_needs_a_decision(self):
+        self._vault()
+        only = self._factor('recovery_key')
+        self._recover_then_lock()
+        with self.assertRaises(CommandError):
+            self._unlock()
+        self.user.refresh_from_db()
+        only.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self.assertEqual(only.status, 'active')
+        self._unlock('--revoke-last-recovery-factor')
+        only.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+        self.assertEqual(only.status, 'revoked')
 
     def test_unlock_restores_the_account_without_the_lockers_credentials(self):
         from auth_module.models import UserPasskey
@@ -609,8 +687,8 @@ class UnlockLockedAccountTests(TestCase):
         backup.refresh_from_db()
         self.assertFalse(backup.is_active)
         log = RecoveryAuditLog.objects.get(user=self.user, event_type='account_unlocked')
-        self.assertEqual(log.event_data, {'operator': 'agent-7',
-                                          'reason': 'ticket 42, identity checked'})
+        self.assertEqual(log.event_data['operator'], 'agent-7')
+        self.assertEqual(log.event_data['reason'], 'ticket 42, identity checked')
 
     def test_the_owner_is_told_and_can_lock_it_again(self):
         from auth_module.recovery_notice import cancel_from_notice

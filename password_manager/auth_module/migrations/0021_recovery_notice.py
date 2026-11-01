@@ -28,6 +28,7 @@ class Migration(migrations.Migration):
                 ('user_agent', models.CharField(blank=True, default='', max_length=512)),
                 ('email_sent', models.BooleanField(default=False)),
                 ('locked_account', models.BooleanField(default=False)),
+                ('recovery_factor', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to='auth_module.recoverywrappeddek')),
                 ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='recovery_notices', to=settings.AUTH_USER_MODEL)),
             ],
             options={

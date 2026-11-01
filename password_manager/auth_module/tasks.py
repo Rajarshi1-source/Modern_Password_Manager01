@@ -73,7 +73,7 @@ def send_password_reset_email(email, ip_address, user_agent):
 
 
 @shared_task
-def send_recovery_notice(user_id, event, ip_address=None, user_agent=''):
+def send_recovery_notice(user_id, event, ip_address=None, user_agent='', recovery_factor_id=None):
     """Record a recovery notice and email its cancel link
     (auth_module/recovery_notice.py)."""
     from django.contrib.auth.models import User
@@ -83,7 +83,8 @@ def send_recovery_notice(user_id, event, ip_address=None, user_agent=''):
     user = User.objects.filter(pk=user_id).first()
     if user is None:
         return None
-    return str(create_notice(user, event, ip_address, user_agent).id)
+    return str(create_notice(user, event, ip_address, user_agent,
+                             recovery_factor_id=recovery_factor_id).id)
 
 
 @shared_task

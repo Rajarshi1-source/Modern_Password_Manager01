@@ -15,9 +15,9 @@ notify on authenticator changes). Following the link
   account (``is_active = False``). Whoever completed it can no longer sign
   in; the owner restores access through support
   (``manage.py unlock_recovery_locked_account``), which also removes the
-  credentials whoever completed it set. In a zero-knowledge vault the server
-  cannot give the vault back: the owner opens it again with their own
-  recovery factor.
+  credentials whoever completed it set or used. In a zero-knowledge vault the
+  server cannot give the vault back: the owner opens it again with a recovery
+  factor of their own.
 
 Only SHA-256 of the link's token is stored. Anonymous endpoints enqueue the
 notice through a task (``send_recovery_notice``) so neither their response
@@ -38,6 +38,10 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 CANCEL_WINDOW = timedelta(hours=72)
+
+# A notice can be recorded after the recovery it reports, by this much at most
+# in practice; factors enrolled in that gap count as enrolled after the recovery.
+NOTICE_LAG = timedelta(hours=1)
 
 # Created without threads; it starts them on first use, in the serving process.
 _fallback_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='recovery-notice')
@@ -77,7 +81,8 @@ def _cancel_effect(event):
     return 'it stops the recovery in progress'
 
 
-def create_notice(user, event, ip_address=None, user_agent='', send_email=True):
+def create_notice(user, event, ip_address=None, user_agent='', send_email=True,
+                  recovery_factor_id=None):
     """Record the notice and email the cancel link. Returns the notice, with
     the link on ``notice.cancel_link`` (not stored) for a caller that puts it
     in an email of its own (``send_email=False``)."""
@@ -88,7 +93,7 @@ def create_notice(user, event, ip_address=None, user_agent='', send_email=True):
     notice = RecoveryNotice.objects.create(
         user=user, event=event, created_at=now, cancel_until=now + CANCEL_WINDOW,
         cancel_token_hash=_token_hash(token), ip_address=ip_address or None,
-        user_agent=(user_agent or '')[:512],
+        user_agent=(user_agent or '')[:512], recovery_factor_id=recovery_factor_id,
     )
     link = f"{settings.FRONTEND_URL.rstrip('/')}/recovery/cancel?notice={token}"
     notice.cancel_link = link
@@ -114,7 +119,7 @@ def create_notice(user, event, ip_address=None, user_agent='', send_email=True):
     return notice
 
 
-def notify(user, event, request=None):
+def notify(user, event, request=None, recovery_factor_id=None):
     """Queue a notice for ``user`` once the current transaction commits."""
     from .tasks import send_recovery_notice
 
@@ -126,7 +131,8 @@ def notify(user, event, request=None):
         from shared.client_ip import get_client_ip
         ip = get_client_ip(request)
         ua = request.META.get('HTTP_USER_AGENT', '')
-    transaction.on_commit(lambda: dispatch(send_recovery_notice, user.pk, event, ip, ua))
+    transaction.on_commit(lambda: dispatch(send_recovery_notice, user.pk, event, ip, ua,
+                                           recovery_factor_id))
 
 
 def _run_task(task, args):
@@ -200,13 +206,50 @@ def _void_started_recovery(user):
     ).update(status='cancelled', completed_at=timezone.now())
 
 
+def factors_to_revoke(user):
+    """Active recovery factors whoever caused the lock may hold: each one a
+    vault recovery used while the lock's notice was open, and each one enrolled
+    since the first recovery or reset of that period."""
+    from django.db.models import Q
+
+    from .models import RecoveryNotice
+    from .recovery_models_v2 import RecoveryWrappedDEK
+
+    active = RecoveryWrappedDEK.objects.filter(user=user, status=RecoveryWrappedDEK.Status.ACTIVE)
+    locked = RecoveryNotice.objects.filter(user=user, locked_account=True).order_by('created_at').first()
+    if locked is None:
+        return active.none()
+    period = RecoveryNotice.objects.filter(
+        user=user, event__in=COMPLETED_EVENTS, created_at__gte=locked.created_at - CANCEL_WINDOW,
+    )
+    first = period.order_by('created_at').values_list('created_at', flat=True).first()
+    return active.filter(
+        Q(pk__in=period.exclude(recovery_factor=None).values('recovery_factor'))
+        | Q(created_at__gte=first - NOTICE_LAG)
+    )
+
+
+def leaves_no_recovery_factor(user):
+    """True if revoking ``factors_to_revoke`` leaves no way back into the vault:
+    the server cannot open it, so only an active factor can."""
+    from .recovery_models_v2 import RecoveryWrappedDEK
+
+    revoke = factors_to_revoke(user)
+    others = RecoveryWrappedDEK.objects.filter(
+        user=user, status=RecoveryWrappedDEK.Status.ACTIVE,
+    ).exclude(pk__in=revoke.values('pk'))
+    return revoke.exists() and not others.exists()
+
+
 def unlock_locked_account(user, operator, reason):
     """Restore an account locked by a "this wasn't me" cancel, without giving
     access back to whoever caused the lock.
 
     Whoever completed the recovery may hold the sign-in password they set, a
-    passkey they registered or a passkey recovery backup they created, so all
-    of them go, with any session and any recovery still open. The owner sets a
+    passkey they registered, a passkey recovery backup they created or the
+    recovery factors in ``factors_to_revoke``, so all of them go, with any
+    session and any recovery still open. Returns how many factors were revoked.
+    The owner sets a
     new password through "Forgot password", which goes to the account's email,
     and is told of the unlock; that notice's cancel link locks the account
     again if support was deceived.
@@ -215,7 +258,12 @@ def unlock_locked_account(user, operator, reason):
     from .models import RecoveryNotice, UserPasskey
     from .passkey_primary_recovery_models import PasskeyRecoveryBackup
     from .quantum_recovery_models import RecoveryAuditLog
+    from .recovery_models_v2 import RecoveryWrappedDEK
 
+    # Worked out first: it depends on the notices changed below.
+    revoked = list(factors_to_revoke(user).values_list('pk', flat=True))
+    RecoveryWrappedDEK.objects.filter(pk__in=revoked).update(
+        status=RecoveryWrappedDEK.Status.REVOKED, revoked_at=timezone.now())
     # Older links must not lock the restored account again; the notice below
     # brings a new one.
     now = timezone.now()
@@ -231,9 +279,10 @@ def unlock_locked_account(user, operator, reason):
     user.save(update_fields=['password', 'is_active'])
     RecoveryAuditLog.objects.create(
         user=user, event_type='account_unlocked',
-        event_data={'operator': operator, 'reason': reason},
+        event_data={'operator': operator, 'reason': reason, 'revoked_recovery_factors': revoked},
     )
     notify(user, 'account_unlocked')
+    return len(revoked)
 
 
 def _lock_account(user):
