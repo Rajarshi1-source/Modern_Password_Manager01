@@ -11,7 +11,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from auth_module.models import RecoveryNotice
-from auth_module.recovery_notice import unlock_locked_account
+from auth_module.recovery_notice import leaves_no_recovery_factor, unlock_locked_account
 
 
 class Command(BaseCommand):
@@ -21,6 +21,10 @@ class Command(BaseCommand):
         parser.add_argument('username', type=str)
         parser.add_argument('--operator', required=True, help='Who is running this (for the audit log).')
         parser.add_argument('--reason', required=True, help='Ticket and how identity was confirmed.')
+        parser.add_argument(
+            '--revoke-last-recovery-factor', action='store_true',
+            help='Unlock even though no recovery factor remains. Unless the owner still has the '
+                 'master password the vault is currently wrapped under, its items are lost.')
 
     def handle(self, *args, **opts):
         if not opts['operator'].strip() or not opts['reason'].strip():
@@ -33,8 +37,17 @@ class Command(BaseCommand):
                 raise CommandError('the account is not locked')
             if not RecoveryNotice.objects.filter(user=user, locked_account=True).exists():
                 raise CommandError('the account was not locked from a recovery notice; refusing')
-            unlock_locked_account(user, opts['operator'], opts['reason'])
+            if leaves_no_recovery_factor(user) and not opts['revoke_last_recovery_factor']:
+                raise CommandError(
+                    'whoever caused the lock may hold every recovery factor this account has. '
+                    'Revoking them leaves the owner no way into the vault, and keeping them leaves '
+                    'it open to that person. The account stays locked; to unlock anyway, pass '
+                    '--revoke-last-recovery-factor.'
+                )
+            revoked = unlock_locked_account(user, opts['operator'], opts['reason'])
         self.stdout.write(
-            f"Unlocked '{user.username}'. Its sign-in password and passkeys were removed; the owner "
-            f'was emailed at {user.email} and sets a new password with "Forgot password".'
+            f"Unlocked '{user.username}'. Its sign-in password and passkeys were removed and "
+            f'{revoked} recovery factor(s) revoked; the owner was emailed at {user.email} and sets '
+            'a new password with "Forgot password". Whoever completed a recovery may have read the '
+            'vault: tell the owner to enroll a new recovery factor and change the stored passwords.'
         )

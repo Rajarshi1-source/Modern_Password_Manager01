@@ -371,6 +371,10 @@ class RecoveryNotice(models.Model):
     email_sent = models.BooleanField(default=False)
     # Its cancel is what disabled the account, and support has not restored it.
     locked_account = models.BooleanField(default=False)
+    # The factor a vault recovery used; support's unlock revokes it, since
+    # whoever completed the recovery holds its secret.
+    recovery_factor = models.ForeignKey('RecoveryWrappedDEK', null=True, blank=True,
+                                        on_delete=models.SET_NULL, related_name='+')
 
     class Meta:
         ordering = ['-created_at']

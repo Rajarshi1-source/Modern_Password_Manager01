@@ -332,7 +332,7 @@ class WrappedDEKRecoveryRotateView(APIView):
             UserSalt.objects.filter(user=user).update(
                 auth_hash=make_auth_hash_record(new_auth_hash))
             revoke_sessions(user)
-            notify_recovery(user, 'recovery_completed', request)
+            notify_recovery(user, 'recovery_completed', request, recovery_factor_id=factor.pk)
 
             RecoveryAuditLog.objects.create(
                 user=user,
