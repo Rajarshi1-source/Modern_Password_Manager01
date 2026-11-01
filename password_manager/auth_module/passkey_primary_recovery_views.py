@@ -10,7 +10,7 @@ from rest_framework import status
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 import base64
 import logging
 import json
@@ -39,6 +39,10 @@ from shared.client_ip import get_client_ip
 from shared.log_safe import log_safe
 
 User = get_user_model()
+from .recovery_notice import cancelled_since as recovery_cancelled_since
+from .recovery_notice import dispatch as dispatch_notice
+from .recovery_notice import notify as notify_recovery
+from .tasks import notify_passkey_recovery_started
 logger = logging.getLogger(__name__)
 recovery_service = PasskeyPrimaryRecoveryService()
 
@@ -95,7 +99,13 @@ def _recovery_grant_user(request):
     grant = request.session.get(RECOVERY_REGISTRATION_GRANT_KEY)
     if not isinstance(grant, dict) or grant.get('expires_at', 0) < timezone.now().timestamp():
         return None
-    return User.objects.filter(pk=grant.get('user_id'), is_active=True).first()
+    user = User.objects.filter(pk=grant.get('user_id'), is_active=True).first()
+    # A "this wasn't me" cancel after the key was accepted also ends the grant:
+    # the attempt is already complete, so voiding attempts does not reach it.
+    if user is None or recovery_cancelled_since(
+            user.id, datetime.fromtimestamp(grant.get('issued_at', 0), tz=dt_timezone.utc)):
+        return None
+    return user
 
 
 def _begin_recovery_registration(request, user):
@@ -135,6 +145,12 @@ def _attempt_fernet():
 def _attempt_token(user_id):
     payload = struct.pack('>Q', user_id) + os.urandom(16)
     return _attempt_fernet().encrypt(payload).decode('ascii')
+
+
+def _token_issued_at(token):
+    """When ``token`` (already checked by _token_payload) was issued."""
+    seconds = _attempt_fernet().extract_timestamp(str(token).encode('ascii'))
+    return datetime.fromtimestamp(seconds, tz=dt_timezone.utc)
 
 
 def _token_payload(token):
@@ -322,11 +338,16 @@ def initiate_primary_passkey_recovery(request):
                User.objects.filter(email=username_or_email).first()
         
         # One query on every path; user id 0 never matches a backup
+        # A locked account gets a decoy: its recovery stays closed.
         has_backup = PasskeyRecoveryBackup.objects.filter(
-            user_id=user.id if user else 0, is_active=True
+            user_id=user.id if user else 0, user__is_active=True, is_active=True
         ).exists()
         if not user:
             logger.warning(log_safe(f"Recovery initiated for non-existent user: {username_or_email}"))
+        # Enqueued for every request; the task notifies only an account with
+        # a backup, so the response and its timing stay the same.
+        dispatch_notice(notify_passkey_recovery_started, user.id if has_backup else None,
+                        _get_client_ip(request), request.META.get('HTTP_USER_AGENT', ''))
 
         # The same answer, and no write, whether or not the account exists
         # or has backups; the attempt row is created by complete
@@ -387,6 +408,11 @@ def complete_primary_passkey_recovery(request):
         # the completion throttle bound the retries.
         payload = _token_payload(recovery_attempt_id)
         recovery_attempt = None
+        # A token issued before a "this wasn't me" cancel is void, even
+        # though no attempt row exists for it yet.
+        if payload and payload[0] and recovery_cancelled_since(
+                payload[0], _token_issued_at(recovery_attempt_id)):
+            payload = None
         if payload and payload[0]:
             token_user_id, nonce = payload
             recovery_attempt, _ = PasskeyRecoveryAttempt.objects.get_or_create(
@@ -446,10 +472,21 @@ def complete_primary_passkey_recovery(request):
         registration_options = None
         try:
             with transaction.atomic():
-                claimed = PasskeyRecoveryBackup.objects.filter(
+                # Lock the attempt and re-check it: a cancel from a recovery
+                # notice that committed after the check above must win.
+                open_attempt = PasskeyRecoveryAttempt.objects.select_for_update().filter(
+                    pk=recovery_attempt.pk, status__in=('initiated', 'key_invalid'),
+                ).first()
+                # The row did not exist for a cancel that landed before it was
+                # created, so that cancel did not void it: check for one here.
+                if open_attempt is not None and recovery_cancelled_since(
+                        user.id, _token_issued_at(recovery_attempt_id)):
+                    open_attempt = None
+                claimed = open_attempt is not None and PasskeyRecoveryBackup.objects.filter(
                     pk=matching_backup.pk, is_active=True
                 ).update(is_active=False, last_verified_at=timezone.now())
                 if claimed:
+                    recovery_attempt = open_attempt
                     recovery_attempt.backup = matching_backup
                     recovery_attempt.mark_complete()
                     RecoveryKeyRevocation.objects.create(
@@ -459,6 +496,7 @@ def complete_primary_passkey_recovery(request):
                     )
                     _revoke_lost_passkey(user, bytes(matching_backup.passkey_credential_id))
                     registration_options = _begin_recovery_registration(request, user)
+                    notify_recovery(user, 'passkey_recovery_completed', request)
         except Exception:
             request.session.pop(RECOVERY_REGISTRATION_STATE_KEY, None)
             raise
@@ -470,6 +508,8 @@ def complete_primary_passkey_recovery(request):
         # account within RECOVERY_REGISTRATION_TTL_SECONDS.
         request.session[RECOVERY_REGISTRATION_GRANT_KEY] = {
             'user_id': user.id,
+            # From the start of this request, so a cancel during it counts.
+            'issued_at': start_time.timestamp(),
             'expires_at': (timezone.now() + timedelta(
                 seconds=RECOVERY_REGISTRATION_TTL_SECONDS)).timestamp(),
         }

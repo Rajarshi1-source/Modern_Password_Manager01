@@ -135,16 +135,6 @@ class VaultCacheManager:
         
         logger.debug(f"Invalidated cache for user {user_id}")
     
-    def get_auth_hash(self, user_id: int) -> Optional[str]:
-        """Get cached auth hash for verification."""
-        key = f"{self.PREFIX_AUTH}{user_id}"
-        return cache.get(key)
-    
-    def set_auth_hash(self, user_id: int, auth_hash: str):
-        """Cache auth hash."""
-        key = f"{self.PREFIX_AUTH}{user_id}"
-        cache.set(key, auth_hash, self.TTL_AUTH)
-    
     def get_metrics(self) -> Dict:
         """Get cache metrics."""
         total = self._metrics['hits'] + self._metrics['misses']
@@ -362,69 +352,29 @@ class VaultCompression:
 
 class AuthHashService:
     """
-    Service for verifying client-side generated auth hashes.
-    
-    Zero-Knowledge Architecture:
-    - Client generates auth hash from master password using Argon2id
-    - Server stores hash of auth hash (double hashing)
-    - Master password never transmitted or stored
+    Verifies the client's master-password ``auth_hash``.
+
+    Checked against the authoritative ``auth_module.UserSalt`` record (an
+    Argon2id password-hasher record of the value, auth_module/auth_hash.py),
+    which change_master, reset and recovery keep current; vault.UserSalt is a
+    copy taken when the vault was first opened. Nothing is cached: a cached
+    value of what a client sent let a wrong auth_hash pass on its second try.
     """
-    
-    @staticmethod
-    def hash_auth_hash(auth_hash: str) -> str:
-        """
-        Hash the client's auth hash for storage.
-        This provides an additional layer of protection.
-        """
-        return hashlib.sha256(auth_hash.encode()).hexdigest()
-    
+
     @staticmethod
     def verify_auth_hash(user_id: int, client_auth_hash: str) -> bool:
-        """
-        Verify client's auth hash against stored value.
-        """
-        from vault.models import UserSalt
-        
-        # Check cache first
-        cached_hash = vault_cache.get_auth_hash(user_id)
-        
-        if cached_hash:
-            server_hash = AuthHashService.hash_auth_hash(client_auth_hash)
-            return server_hash == cached_hash
-        
-        # Get from database
+        import base64
+        import binascii
+
+        from auth_module.auth_hash import verify_and_upgrade
+        from auth_module.models import UserSalt as AuthSalt
+
         try:
-            user_salt = UserSalt.objects.get(user_id=user_id)
-            stored_hash = user_salt.auth_hash
-            
-            if isinstance(stored_hash, memoryview):
-                stored_hash = bytes(stored_hash).hex()
-            elif isinstance(stored_hash, bytes):
-                stored_hash = stored_hash.hex()
-            
-            # Hash client's auth hash
-            server_hash = AuthHashService.hash_auth_hash(client_auth_hash)
-            
-            # Cache for future requests
-            vault_cache.set_auth_hash(user_id, server_hash)
-            
-            # Constant-time comparison
-            return AuthHashService._constant_time_compare(server_hash, stored_hash)
-            
-        except UserSalt.DoesNotExist:
+            raw = base64.b64decode(client_auth_hash or '', validate=True)
+        except (binascii.Error, ValueError, TypeError):
             return False
-    
-    @staticmethod
-    def _constant_time_compare(a: str, b: str) -> bool:
-        """Constant-time string comparison to prevent timing attacks."""
-        if len(a) != len(b):
-            return False
-        
-        result = 0
-        for x, y in zip(a, b):
-            result |= ord(x) ^ ord(y)
-        
-        return result == 0
+        salt_obj = AuthSalt.objects.filter(user_id=user_id).first()
+        return bool(salt_obj) and verify_and_upgrade(salt_obj, raw)
 
 
 # =============================================================================

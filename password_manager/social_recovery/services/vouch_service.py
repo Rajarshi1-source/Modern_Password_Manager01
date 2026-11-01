@@ -23,6 +23,8 @@ from ..models import (
     VouchAttestation,
     Voucher,
 )
+from auth_module.recovery_notice import notify as notify_recovery
+
 from .audit_service import record_event
 from .stake_service import commit_stake
 from .web_of_trust_service import evaluate_quorum
@@ -131,7 +133,8 @@ def initiate_request(
     expires_in: Optional[timedelta] = None,
     risk_score: float = 0.0,
 ) -> SocialRecoveryRequest:
-    if circle.status != "active":
+    # A locked account (auth_module/recovery_notice.py) takes no recovery either.
+    if circle.status != "active" or not circle.user.is_active:
         raise ValueError("circle must be active to initiate recovery")
     # No guardian holds a sealed share for such a circle, so the request could
     # never complete, yet it would hold the circle in cooldown.
@@ -166,6 +169,8 @@ def initiate_request(
         risk_score=float(risk_score or 0.0),
         expires_at=timezone.now() + ttl,
     )
+
+    notify_recovery(circle.user, "social_recovery_started")
 
     record_event(
         event_type="request_initiated",

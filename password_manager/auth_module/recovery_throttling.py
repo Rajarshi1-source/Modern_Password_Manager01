@@ -54,6 +54,22 @@ class RecoveryThrottle(SimpleRateThrottle):
         return super().get_rate()
 
 
+class RecoveryNoticeCancelThrottle(SimpleRateThrottle):
+    """
+    For the "this wasn't me" links. Their tokens are too long to guess, so this
+    only bounds load, and it must not stop an owner who shares an IP address
+    with someone else from cancelling.
+    """
+    scope = 'recovery_notice_cancel'
+
+    def get_cache_key(self, request, view):
+        ident = self.get_ident(request)
+        return f'throttle_recovery_notice_cancel_{ident}'
+
+    def get_rate(self):
+        return getattr(settings, 'RECOVERY_NOTICE_CANCEL_RATE', '30/hour')
+
+
 class RecoveryInitiateThrottle(SimpleRateThrottle):
     """
     Rate limiting specifically for recovery initiation.
