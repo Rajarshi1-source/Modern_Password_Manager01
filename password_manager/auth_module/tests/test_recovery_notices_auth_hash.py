@@ -20,7 +20,7 @@ from django.core import mail
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -654,6 +654,65 @@ class UnlockLockedAccountTests(TestCase):
         from auth_module.recovery_notice import cancel_from_notice
         self.assertTrue(cancel_from_notice(re.search(self.TOKEN, mail.outbox[-1].body).group(1)))
 
+    def test_factors_replaced_after_the_recovery_come_back(self):
+        from auth_module.recovery_models_v2 import RecoveryWrappedDEK
+        self._vault()
+        used = self._factor('recovery_key')
+        old = self._factor('passkey')
+        RecoveryWrappedDEK.objects.filter(pk=old.pk).update(
+            status='revoked', revoked_at=timezone.now() - timedelta(days=20))
+        replaced = self._factor('passkey', age=timedelta(days=20))
+        self.assertEqual(self._rotate().status_code, 200)
+        time_locked = self._factor('time_locked')
+        RecoveryWrappedDEK.objects.filter(pk__in=[replaced.pk, time_locked.pk]).update(
+            status='revoked', revoked_at=timezone.now())
+        attackers = self._factor('passkey', age=timedelta(0))
+        self._lock_from_last_mail()
+        self._unlock()
+        status = dict(RecoveryWrappedDEK.objects.filter(user=self.user).values_list('pk', 'status'))
+        self.assertEqual(status[replaced.pk], 'active')
+        self.assertEqual(status[attackers.pk], 'revoked')
+        self.assertEqual(status[used.pk], 'revoked')
+        self.assertEqual(status[old.pk], 'revoked')  # replaced long before the recovery
+        self.assertEqual(status[time_locked.pk], 'revoked')
+
+    def test_a_replaced_factor_counts_as_a_way_back(self):
+        from auth_module.recovery_models_v2 import RecoveryWrappedDEK
+        self._vault()
+        self._factor('recovery_key')
+        replaced = self._factor('passkey')
+        self.assertEqual(self._rotate().status_code, 200)
+        RecoveryWrappedDEK.objects.filter(pk=replaced.pk).update(
+            status='revoked', revoked_at=timezone.now())
+        self._lock_from_last_mail()
+        self._unlock()  # no --revoke-last-recovery-factor needed
+        replaced.refresh_from_db()
+        self.assertEqual(replaced.status, 'active')
+
+    def test_a_disable_after_a_manual_reactivation_is_not_lifted(self):
+        self._lock()
+        self.user.is_active = True
+        self.user.save()
+        self.user.is_active = False
+        self.user.save()
+        with self.assertRaises(CommandError):
+            self._unlock()
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+
+    def test_a_save_that_does_not_write_is_active_keeps_the_lock_record(self):
+        self._lock()
+        stale = User.objects.get(pk=self.user.pk)
+        stale.is_active = True  # as a copy read before the lock would say
+        stale.save(update_fields=['last_login'])
+        self._unlock()
+        self.assertTrue(self.user.is_active)
+
+    def test_the_unlock_notice_tells_the_owner_the_vault_may_be_exposed(self):
+        self._lock()
+        self._unlock()
+        self.assertIn('change the passwords stored', mail.outbox[-1].body)
+
     def test_an_unlock_that_would_end_vault_recovery_needs_a_decision(self):
         self._vault()
         only = self._factor('recovery_key')
@@ -771,3 +830,37 @@ class TimeLockCanaryLinkTests(TestCase):
             SimpleNamespace(canary_ack_token='tok', release_after=timezone.now()),
         )
         self.assertIn('https://vault.example.org/recovery/time-lock/cancel?token=tok', body)
+
+
+class HashMigrationCommitTests(TransactionTestCase):
+    """Outside a transaction, as the migrations run (atomic = False)."""
+
+    def setUp(self):
+        self.users = [User.objects.create_user(f'u{i}', f'u{i}@example.com', VERIFIER) for i in range(3)]
+        for user in self.users:
+            UserSalt.objects.create(user=user, salt=os.urandom(16), auth_hash=RAW)
+
+    def test_a_stopped_run_keeps_its_rows_and_resumes(self):
+        from importlib import import_module
+        migration = import_module('auth_module.migrations.0022_hash_auth_hash')
+        self.assertFalse(migration.Migration.atomic)
+        self.assertFalse(import_module('vault.migrations.0016_hash_auth_hash').Migration.atomic)
+        real = make_auth_hash_record
+        calls = []
+
+        def stop_on_second(raw):
+            calls.append(raw)
+            if len(calls) == 2:
+                raise OSError('interrupted')
+            return real(raw)
+
+        with patch('auth_module.auth_hash.make_auth_hash_record', stop_on_second), \
+                self.assertRaises(OSError):
+            migration.hash_model_rows(UserSalt)
+        stored = [bytes(s.auth_hash) for s in UserSalt.objects.all()]
+        self.assertEqual(sum(is_hashed_record(s) for s in stored), 1)
+
+        migration.hash_model_rows(UserSalt)
+        for salt in UserSalt.objects.all():
+            self.assertTrue(is_hashed_record(salt.auth_hash))
+            self.assertTrue(check_auth_hash(salt.auth_hash, RAW))

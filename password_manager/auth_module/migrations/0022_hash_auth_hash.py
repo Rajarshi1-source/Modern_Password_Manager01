@@ -30,6 +30,11 @@ def hash_rows(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    # Each row costs an Argon2id hash: commit them one by one, so sign-ins and
+    # password changes do not wait on locks for the whole run. A run that stops
+    # resumes where it was, because hashed rows are skipped, and check_auth_hash
+    # accepts both forms in the meantime.
+    atomic = False
 
     dependencies = [
         ('auth_module', '0021_recovery_notice'),

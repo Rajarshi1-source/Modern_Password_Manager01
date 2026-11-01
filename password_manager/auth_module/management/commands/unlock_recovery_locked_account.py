@@ -44,10 +44,11 @@ class Command(BaseCommand):
                     'it open to that person. The account stays locked; to unlock anyway, pass '
                     '--revoke-last-recovery-factor.'
                 )
-            revoked = unlock_locked_account(user, opts['operator'], opts['reason'])
+            revoked, restored = unlock_locked_account(user, opts['operator'], opts['reason'])
         self.stdout.write(
             f"Unlocked '{user.username}'. Its sign-in password and passkeys were removed and "
-            f'{revoked} recovery factor(s) revoked; the owner was emailed at {user.email} and sets '
-            'a new password with "Forgot password". Whoever completed a recovery may have read the '
-            'vault: tell the owner to enroll a new recovery factor and change the stored passwords.'
+            f'{revoked} recovery factor(s) revoked and {restored} restored; the owner was emailed at '
+            f'{user.email} and sets a new password with "Forgot password". The email also tells them '
+            'to enroll a new recovery factor and change the stored passwords, since whoever '
+            'completed a recovery may have read the vault.'
         )

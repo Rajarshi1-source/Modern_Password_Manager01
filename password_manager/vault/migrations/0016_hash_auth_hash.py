@@ -12,6 +12,8 @@ def hash_rows(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    # As auth_module 0022: rows commit one by one, and a stopped run resumes.
+    atomic = False
 
     dependencies = [
         ('vault', '0015_auditlog_action_choices'),

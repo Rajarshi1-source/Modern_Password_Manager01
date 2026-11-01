@@ -107,6 +107,9 @@ def create_notice(user, event, ip_address=None, user_agent='', send_email=True,
         f"If this was NOT you, open this link within {hours} hours: {link}\n"
         f"Following it, {_cancel_effect(event)}."
     )
+    if event == 'account_unlocked':
+        body += ('\n\nWhoever caused the lock may have read your vault. After you sign in, '
+                 'enroll a new recovery factor and change the passwords stored in it.')
     sent = 0
     if user.email:
         sent = send_mail(f'Security notice: {_DESCRIPTIONS[event]}', body, None,
@@ -206,27 +209,65 @@ def _void_started_recovery(user):
     ).update(status='cancelled', completed_at=timezone.now())
 
 
-def factors_to_revoke(user):
-    """Active recovery factors whoever caused the lock may hold: each one a
-    vault recovery used while the lock's notice was open, and each one enrolled
-    since the first recovery or reset of that period."""
-    from django.db.models import Q
-
+def _lock_period(user):
+    """For the account's lock: the factors vault recoveries used while its
+    notice was open, and when the first recovery or reset of that period began.
+    (None, None) if a notice's cancel did not lock it."""
     from .models import RecoveryNotice
-    from .recovery_models_v2 import RecoveryWrappedDEK
 
-    active = RecoveryWrappedDEK.objects.filter(user=user, status=RecoveryWrappedDEK.Status.ACTIVE)
     locked = RecoveryNotice.objects.filter(user=user, locked_account=True).order_by('created_at').first()
     if locked is None:
-        return active.none()
+        return None, None
     period = RecoveryNotice.objects.filter(
         user=user, event__in=COMPLETED_EVENTS, created_at__gte=locked.created_at - CANCEL_WINDOW,
     )
     first = period.order_by('created_at').values_list('created_at', flat=True).first()
-    return active.filter(
-        Q(pk__in=period.exclude(recovery_factor=None).values('recovery_factor'))
-        | Q(created_at__gte=first - NOTICE_LAG)
+    return period.exclude(recovery_factor=None).values('recovery_factor'), first - NOTICE_LAG
+
+
+def factors_to_revoke(user):
+    """Active recovery factors whoever caused the lock may hold: each one a
+    recovery used in the lock's period, and each one enrolled since it began."""
+    from django.db.models import Q
+
+    from .recovery_models_v2 import RecoveryWrappedDEK
+
+    active = RecoveryWrappedDEK.objects.filter(user=user, status=RecoveryWrappedDEK.Status.ACTIVE)
+    used, since = _lock_period(user)
+    if since is None:
+        return active.none()
+    return active.filter(Q(pk__in=used) | Q(created_at__gte=since))
+
+
+def factors_to_restore(user):
+    """Ids of the owner's factors that were replaced in the lock's period:
+    enrolling a factor revokes the active one of its type, so whoever caused the
+    lock can remove the owner's way back. Only a status changes; the server still
+    never sees a factor's secret.
+
+    Leaves out a factor a recovery used, a type that keeps an active factor, and
+    time-locked factors, whose server half is a separate row with its own one-shot
+    state: the owner enrolls that type again.
+    """
+    from .recovery_models_v2 import RecoveryWrappedDEK, VaultWrappedDEK
+
+    used, since = _lock_period(user)
+    if since is None:
+        return []
+    kept_types = set(
+        RecoveryWrappedDEK.objects.filter(user=user, status=RecoveryWrappedDEK.Status.ACTIVE)
+        .exclude(pk__in=factors_to_revoke(user).values('pk'))
+        .values_list('factor_type', flat=True)
     )
+    replaced = RecoveryWrappedDEK.objects.filter(
+        user=user, status=RecoveryWrappedDEK.Status.REVOKED,
+        created_at__lt=since, revoked_at__gte=since,
+        dek_id__in=VaultWrappedDEK.objects.filter(user=user).values('dek_id'),
+    ).exclude(pk__in=used).exclude(
+        factor_type=RecoveryWrappedDEK.FactorType.TIME_LOCKED,
+    ).order_by('created_at')
+    latest = {f.factor_type: f.pk for f in replaced if f.factor_type not in kept_types}
+    return list(latest.values())
 
 
 def leaves_no_recovery_factor(user):
@@ -238,7 +279,7 @@ def leaves_no_recovery_factor(user):
     others = RecoveryWrappedDEK.objects.filter(
         user=user, status=RecoveryWrappedDEK.Status.ACTIVE,
     ).exclude(pk__in=revoke.values('pk'))
-    return revoke.exists() and not others.exists()
+    return revoke.exists() and not others.exists() and not factors_to_restore(user)
 
 
 def unlock_locked_account(user, operator, reason):
@@ -248,8 +289,8 @@ def unlock_locked_account(user, operator, reason):
     Whoever completed the recovery may hold the sign-in password they set, a
     passkey they registered, a passkey recovery backup they created or the
     recovery factors in ``factors_to_revoke``, so all of them go, with any
-    session and any recovery still open. Returns how many factors were revoked.
-    The owner sets a
+    session and any recovery still open, and ``factors_to_restore`` come back.
+    Returns how many factors were revoked and restored. The owner sets a
     new password through "Forgot password", which goes to the account's email,
     and is told of the unlock; that notice's cancel link locks the account
     again if support was deceived.
@@ -262,8 +303,12 @@ def unlock_locked_account(user, operator, reason):
 
     # Worked out first: it depends on the notices changed below.
     revoked = list(factors_to_revoke(user).values_list('pk', flat=True))
+    restored = factors_to_restore(user)
+    # In this order: a type allows one active factor at a time.
     RecoveryWrappedDEK.objects.filter(pk__in=revoked).update(
         status=RecoveryWrappedDEK.Status.REVOKED, revoked_at=timezone.now())
+    RecoveryWrappedDEK.objects.filter(pk__in=restored).update(
+        status=RecoveryWrappedDEK.Status.ACTIVE, revoked_at=None)
     # Older links must not lock the restored account again; the notice below
     # brings a new one.
     now = timezone.now()
@@ -279,10 +324,24 @@ def unlock_locked_account(user, operator, reason):
     user.save(update_fields=['password', 'is_active'])
     RecoveryAuditLog.objects.create(
         user=user, event_type='account_unlocked',
-        event_data={'operator': operator, 'reason': reason, 'revoked_recovery_factors': revoked},
+        event_data={'operator': operator, 'reason': reason, 'revoked_recovery_factors': revoked,
+                    'restored_recovery_factors': restored},
     )
     notify(user, 'account_unlocked')
-    return len(revoked)
+    return len(revoked), len(restored)
+
+
+def clear_stale_lock(sender, instance, created=False, raw=False, update_fields=None, **kwargs):
+    """post_save on the user: an account saved as active has no lock standing,
+    so a later disable (Django admin, say) is not support's to lift. A save that
+    does not write ``is_active`` says nothing, even from a stale copy."""
+    from .models import RecoveryNotice
+
+    if created or raw or not instance.is_active:
+        return
+    if update_fields is not None and 'is_active' not in update_fields:
+        return
+    RecoveryNotice.objects.filter(user=instance, locked_account=True).update(locked_account=False)
 
 
 def _lock_account(user):
