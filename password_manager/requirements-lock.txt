@@ -296,7 +296,7 @@ sentencepiece==0.2.1
 sentry-sdk==2.47.0
 service-identity==24.2.0
 # Deliberately above the image's setuptools<82: this lock is what Grype/Trivy scan, and 83.0.0 fixes PYSEC-2026-3447 (with neurokit2 0.2.12, which has no cap). The image keeps <82 because neurokit2 0.2.13 declares setuptools<82; the advisory only affects building sdists (see requirements-constraints.txt).
-setuptools==83.0.0
+setuptools==84.1.0
 shellingham==1.5.4
 six==1.17.0
 smart_open==7.5.0
