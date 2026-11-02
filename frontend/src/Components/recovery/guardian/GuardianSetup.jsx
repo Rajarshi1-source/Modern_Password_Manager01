@@ -117,7 +117,7 @@ export default function GuardianSetup() {
           {invitations.map((s) => (
             <li key={s.invitation_token}>
               {s.guardian_email}:{' '}
-              <code>{`${window.location.origin}/recovery/guardian-invite/${s.invitation_token}`}</code>
+              <code>{`${window.location.origin}/recovery/guardian-invite#${s.invitation_token}`}</code>
             </li>
           ))}
         </ul>

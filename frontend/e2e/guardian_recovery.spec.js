@@ -79,7 +79,7 @@ test('a user who lost their master password recovers with guardians', async ({ b
 
   // Each guardian accepts its invitation, proving it can open its share.
   const links = await owner.locator('code').allTextContents();
-  const invitePaths = links.filter((l) => l.includes('/recovery/guardian-invite/'));
+  const invitePaths = links.filter((l) => l.includes('/recovery/guardian-invite#'));
   expect(invitePaths).toHaveLength(3);
   for (let i = 0; i < 3; i++) {
     await guardians[i].page.goto(invitePaths[i]);
@@ -114,13 +114,14 @@ test('a user who lost their master password recovers with guardians', async ({ b
 
   // A wrong code keeps the share sealed; the right one releases it.
   const first = guardians[0].page;
-  await first.goto(`${BASE_URL}/recovery/guardian-approve/${tokens[guardians[0].email]}`);
+  await first.goto(`${BASE_URL}/recovery/guardian-approve#${tokens[guardians[0].email]}`);
   await first.getByTestId('guardian-approve-code').fill('0000-0000-0000-0000-0000');
+  expect(first.url()).toBe(`${BASE_URL}/recovery/guardian-approve`);
   await first.getByTestId('guardian-approve-submit').click();
   await expect(first.getByRole('alert')).toContainText('does not match');
   for (let i = 0; i < 2; i++) {
     const page = guardians[i].page;
-    await page.goto(`${BASE_URL}/recovery/guardian-approve/${tokens[guardians[i].email]}`);
+    await page.goto(`${BASE_URL}/recovery/guardian-approve#${tokens[guardians[i].email]}`);
     await page.getByTestId('guardian-approve-code').fill(code);
     await page.getByTestId('guardian-approve-submit').click();
     await expect(page.getByTestId('guardian-approve-result')).toContainText('approved', { timeout: 30000 });

@@ -76,7 +76,7 @@ class NotificationService:
             context = {
                 'guardian_email': guardian_email,
                 'user_email': user.email,
-                'approval_url': f"{settings.FRONTEND_URL}/recovery/guardian-approve/{approval.approval_token}",
+                'approval_url': f"{settings.FRONTEND_URL}/recovery/guardian-approve#{approval.approval_token}",
                 'expires_at': approval.approval_window_end,
                 'requires_video': guardian.requires_video_verification
             }

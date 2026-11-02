@@ -1,17 +1,17 @@
 import React, { useState } from 'react';
-import { useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
 import { ensureHybridKemReady } from '../../../services/quantum/hybridKem';
 import { loadGuardianKeyPair } from '../../../services/recovery/holderKeyStore';
+import { linkToken } from '../../../services/recovery/linkToken';
 import { proveShareHolding } from '../../../services/recovery/sealedShareRecovery';
 
 /**
- * Guardian: accept an invitation (/recovery/guardian-invite/:token). Opening
+ * Guardian: accept an invitation (/recovery/guardian-invite#token). Opening
  * the sealed share here proves this browser holds the key it was sealed to, so
  * nobody becomes a guardian with a share they could never open.
  */
 export default function GuardianInvite() {
-  const { token } = useParams();
+  const token = linkToken();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [accepted, setAccepted] = useState(false);
@@ -54,6 +54,17 @@ export default function GuardianInvite() {
           If this person ever needs to recover their account, we will email you.
           Approve from this browser, and keep its data: your key is stored only
           here.
+        </p>
+      </section>
+    );
+  }
+
+  if (!token) {
+    return (
+      <section data-testid="guardian-invite">
+        <h1>Become a recovery guardian</h1>
+        <p role="alert">
+          Open your invitation from its link again. For your safety the page does not keep it.
         </p>
       </section>
     );

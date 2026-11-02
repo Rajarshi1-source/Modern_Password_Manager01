@@ -1,27 +1,29 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
 import { ensureHybridKemReady } from '../../../services/quantum/hybridKem';
 import { loadGuardianKeyPair } from '../../../services/recovery/holderKeyStore';
+import { linkToken } from '../../../services/recovery/linkToken';
 import { resealShareForRequester } from '../../../services/recovery/sealedShareRecovery';
 
 /**
- * Guardian: answer a recovery request (/recovery/guardian-approve/:token).
+ * Guardian: answer a recovery request (/recovery/guardian-approve#token).
  *
  * The share is opened and re-sealed to the requester's one-time key here. The
  * server relays that key, so the code read out by the requester over another
  * channel is what stops a substituted key getting the share.
  */
 export default function GuardianApprove() {
-  const { token } = useParams();
+  const token = linkToken();
   const [request, setRequest] = useState(null);
-  const [loadError, setLoadError] = useState('');
+  const [loadError, setLoadError] = useState(
+    token ? '' : 'Open this request from the link in your email again. For your safety the page does not keep it.');
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [answer, setAnswer] = useState('');
 
   useEffect(() => {
+    if (!token) return;
     ApiService.quantumRecovery.getGuardianShare(token)
       .then(({ data }) => setRequest(data))
       .catch((err) => setLoadError(ApiService.handleError(err).error || 'This request cannot be opened.'));

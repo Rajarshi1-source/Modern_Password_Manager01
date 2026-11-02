@@ -31,8 +31,11 @@ vi.mock('../../../services/sessionVaultCryptoV3', () => ({ default: vault }));
 vi.mock('../../../services/quantum/hybridKem', () => ({ ensureHybridKemReady: vi.fn() }));
 vi.mock('../../../services/recovery/sealedShareRecovery', () => crypto);
 vi.mock('../../../services/recovery/holderKeyStore', () => keys);
+const link = vi.hoisted(() => ({ linkToken: vi.fn(() => 'tok') }));
+vi.mock('../../../services/recovery/linkToken', () => link);
 
 import GuardianApprove from './GuardianApprove';
+import GuardianInvite from './GuardianInvite';
 import GuardianRecoveryStart from './GuardianRecoveryStart';
 import GuardianSetup from './GuardianSetup';
 
@@ -42,10 +45,19 @@ beforeEach(() => {
   vault.hasSessionKey.mockReturnValue(true);
 });
 
+describe('GuardianInvite', () => {
+  it('asks for the link again after a reload', () => {
+    link.linkToken.mockReturnValueOnce('');
+    render(<GuardianInvite />);
+    expect(screen.getByRole('alert').textContent).toMatch(/from its link/);
+    expect(screen.queryByTestId('guardian-invite-accept')).toBeNull();
+  });
+});
+
 describe('GuardianApprove', () => {
   const open = () => render(
-    <MemoryRouter initialEntries={['/recovery/guardian-approve/tok']}>
-      <Routes><Route path="/recovery/guardian-approve/:token" element={<GuardianApprove />} /></Routes>
+    <MemoryRouter initialEntries={['/recovery/guardian-approve']}>
+      <Routes><Route path="/recovery/guardian-approve" element={<GuardianApprove />} /></Routes>
     </MemoryRouter>,
   );
 
@@ -54,6 +66,13 @@ describe('GuardianApprove', () => {
       data: { sealed_share: 'sealed', requester_public_key: 'requester' },
     });
     keys.loadGuardianKeyPair.mockResolvedValue({ publicKey: 'g', secretKey: 's' });
+  });
+
+  it('asks for the link again after a reload, and sends nothing', async () => {
+    link.linkToken.mockReturnValueOnce('');
+    open();
+    expect((await screen.findByRole('alert')).textContent).toMatch(/link in your email/);
+    expect(api.getGuardianShare).not.toHaveBeenCalled();
   });
 
   it('sends nothing when the code does not match', async () => {
