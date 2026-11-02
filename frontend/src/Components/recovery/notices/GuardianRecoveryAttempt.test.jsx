@@ -17,7 +17,9 @@ vi.mock('../../../services/api', () => ({
   },
 }));
 vi.mock('../../../services/recovery/holderKeyStore', () => keys);
-const vault = vi.hoisted(() => ({ unlockWithRecoveryFactor: vi.fn() }));
+const vault = vi.hoisted(() => ({
+  unlockWithRecoveryFactor: vi.fn(), rewrapMasterPasswordFromRecovery: vi.fn(),
+}));
 const factors = vi.hoisted(() => ({ lookupRecoveryFactor: vi.fn() }));
 const recoverSeed = vi.hoisted(() => vi.fn());
 vi.mock('../../../services/sessionVaultCryptoV3', () => ({ default: vault }));
@@ -184,6 +186,21 @@ describe('GuardianRecoveryAttempt', () => {
 
       await screen.findByTestId('guardian-recovery-new-password');
       expect(api.completeRecovery).toHaveBeenCalledTimes(2);
+    });
+
+    it('proves the finished recovery when it sets the new password', async () => {
+      vault.rewrapMasterPasswordFromRecovery.mockResolvedValue({ dekId: 'd' });
+      renderAt(LINK);
+      await screen.findByTestId('guardian-recovery-recover');
+      await submit('owner');
+      fireEvent.change(await screen.findByTestId('guardian-recovery-new-password'), { target: { value: 'new-password' } });
+      fireEvent.change(screen.getByTestId('guardian-recovery-confirm-password'), { target: { value: 'new-password' } });
+      fireEvent.click(screen.getByTestId('guardian-recovery-set-password'));
+      await screen.findByTestId('guardian-recovery-done');
+      expect(vault.rewrapMasterPasswordFromRecovery).toHaveBeenCalledWith(expect.objectContaining({
+        factorType: 'social_mesh',
+        recoveryAttempt: { attempt_id: ATTEMPT_ID, requester_token: requesterToken(keyPair) },
+      }));
     });
   });
 

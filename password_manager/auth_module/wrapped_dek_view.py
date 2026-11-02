@@ -15,6 +15,8 @@ PUT semantics:
     `RecoveryWrappedDEK` references the same `dek_id`) from being
     silently orphaned.
 """
+import uuid
+
 from django.contrib.auth.models import User
 from django.db import transaction
 from django.utils import timezone
@@ -30,12 +32,13 @@ from auth_module.auth_hash import make_auth_hash_record
 from auth_module.recovery_notice import notify as notify_recovery
 from auth_module.models import UserSalt
 from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
-from auth_module.quantum_recovery_models import RecoveryAuditLog
+from auth_module.quantum_recovery_models import RecoveryAttempt, RecoveryAuditLog
 from auth_module.login_verifier import (
     is_login_verifier,
     revoke_sessions,
     set_login_verifier,
 )
+from shared import sealed_shares
 from shared.client_ip import get_client_ip
 
 
@@ -72,6 +75,26 @@ def _decode_master_auth_hash(value):
     except (binascii.Error, ValueError):
         return None
     return raw if len(raw) == 32 else None
+
+
+def _finished_guardian_attempt(user, request):
+    """The user's finished guardian recovery named in the request, locked, if
+    the device that asked for it is calling and it has not set a password yet."""
+    try:
+        attempt_id = uuid.UUID(str(request.data.get('attempt_id')))
+    except ValueError:
+        return None
+    attempt = RecoveryAttempt.objects.select_for_update(of=('self',)).filter(
+        id=attempt_id,
+        recovery_setup__user=user,
+        status='completed',
+        password_rotated_at__isnull=True,
+        expires_at__gt=timezone.now(),
+    ).first()
+    if attempt is None or not sealed_shares.share_proof_matches(
+            request.data.get('requester_token'), attempt.requester_token_hash):
+        return None
+    return attempt
 
 
 class VaultWrappedDEKView(APIView):
@@ -167,6 +190,11 @@ class WrappedDEKRecoveryRotateView(APIView):
         which actually exists for the user.
       - The throttle (``RecoveryCompleteThrottle``) and the audit log
         cover abuse.
+      - A ``social_mesh`` rotation also needs ``attempt_id`` and
+        ``requester_token`` of a finished recovery, used once. Guardians who
+        pool the shares they opened when accepting know the seed, and so
+        ``auth_hash``; this keeps them behind the owner's emailed link and
+        wait, which only the attempt goes through.
 
     Trade-off: an attacker who knows ``username`` AND can call lookup
     AND has gotten a real (not decoy) blob can submit a malformed
@@ -324,11 +352,26 @@ class WrappedDEKRecoveryRotateView(APIView):
                     status=404,
                 )
 
+            # After auth_hash, so only a holder of the secret sees this answer.
+            attempt = None
+            if factor_type == RecoveryWrappedDEK.FactorType.SOCIAL_MESH:
+                attempt = _finished_guardian_attempt(user, request)
+                if attempt is None:
+                    return Response(
+                        {'error': 'This recovery cannot set a master password: it has '
+                                  'not finished, or it already set one. Try signing in '
+                                  'with the new one, or start recovery again.'},
+                        status=403,
+                    )
+
             wrapped_row.blob = blob
             wrapped_row.rotated_at = timezone.now()
             wrapped_row.save(
                 update_fields=['blob', 'rotated_at', 'updated_at'],
             )
+            if attempt is not None:
+                attempt.password_rotated_at = wrapped_row.rotated_at
+                attempt.save(update_fields=['password_rotated_at'])
             set_login_verifier(user, login_verifier)
             UserSalt.objects.filter(user=user).update(
                 auth_hash=make_auth_hash_record(new_auth_hash))

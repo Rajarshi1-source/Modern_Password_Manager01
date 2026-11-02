@@ -348,6 +348,8 @@ export async function unlockWithRecoveryFactor(blob, secret, dekId) {
  * @param {('recovery_key'|'social_mesh'|'time_locked'|'passkey')} args.factorType
  *   The factor used to unwrap (lets the server confirm a real factor
  *   of this type exists and audit the rotation against it).
+ * @param {{attempt_id: string, requester_token: string}} [args.recoveryAttempt]
+ *   The finished guardian recovery, which a 'social_mesh' rotation needs.
  * @returns {Promise<{dekId: string}>}
  */
 export async function rewrapMasterPasswordFromRecovery({
@@ -357,6 +359,7 @@ export async function rewrapMasterPasswordFromRecovery({
   dekId,
   username,
   factorType,
+  recoveryAttempt,
 }) {
   if (!factorBlob || !recoverySecret || !newPassword || !dekId || !username || !factorType) {
     throw new Error(
@@ -394,6 +397,7 @@ export async function rewrapMasterPasswordFromRecovery({
       auth_hash: authHash,
       login_verifier: loginVerifier,
       new_auth_hash: newAuthHash,
+      ...recoveryAttempt,
     });
   } catch (err) {
     // The server returns 409 with `re_enroll_required: true` for

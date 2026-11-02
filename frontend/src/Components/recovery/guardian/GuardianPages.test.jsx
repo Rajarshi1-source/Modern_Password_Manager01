@@ -138,6 +138,19 @@ describe('GuardianSetup', () => {
     expect(screen.queryByTestId('guardian-setup-submit')).toBeNull();
   });
 
+  it('refuses a threshold that is not a whole number before sealing anything', async () => {
+    api.getRecoveryStatus.mockResolvedValue({ data: { recovery_configured: false } });
+    render(<GuardianSetup />);
+    await fillGuardians();
+    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByTestId(`guardian-setup-fingerprint-checked-${i}`));
+    const threshold = screen.getByTestId('guardian-setup-threshold');
+    fireEvent.change(threshold, { target: { value: '2.5' } });
+    expect(threshold.validity.stepMismatch).toBe(true); // the browser stops a click on submit first
+    fireEvent.submit(threshold.closest('form'));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/Choose between 2 and 3/));
+    expect(crypto.sealSeedForGuardians).not.toHaveBeenCalled();
+  });
+
   it('wraps the vault key first, and a wrong password stops the setup', async () => {
     api.getRecoveryStatus.mockResolvedValue({ data: { recovery_configured: false } });
     crypto.sealSeedForGuardians.mockResolvedValue({ secretCheck: 'check', shares: [] });

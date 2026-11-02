@@ -54,7 +54,7 @@ export default function GuardianSetup() {
     if (guardians.some((g) => !g.fingerprintChecked)) {
       return 'Check every fingerprint with its guardian by phone or in person.';
     }
-    if (threshold < 2 || threshold > guardians.length) {
+    if (!Number.isInteger(threshold) || threshold < 2 || threshold > guardians.length) {
       return `Choose between 2 and ${guardians.length} guardians to approve a recovery.`;
     }
     if (!masterPassword) return 'Enter your master password.';

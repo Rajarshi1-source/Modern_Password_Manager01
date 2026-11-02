@@ -25,6 +25,7 @@ from auth_module.quantum_recovery_models import (
     RecoveryAuditLog,
     RecoveryGuardian,
 )
+from auth_module.recovery_models_v2 import VaultWrappedDEK
 from auth_module.quantum_recovery_tasks import (
     request_guardian_approvals,
     send_guardian_approval_request,
@@ -597,3 +598,66 @@ class StaleTokenTests(GuardianFlowBase):
         self.anon.credentials(HTTP_AUTHORIZATION='Bearer stale')
         self.assertEqual(self._post('quantum-recovery-setup'), 401)
         self.assertEqual(self.anon.get(reverse('quantum-recovery-get-status')).status_code, 401)
+
+
+class RotationNeedsAFinishedRecoveryTests(GuardianFlowBase):
+    """Guardians who pool the shares they opened when accepting know the seed,
+    so the seed alone must not set a new master password."""
+
+    _approved = ProgressAndReleaseTests._approved
+    _complete = ProgressAndReleaseTests._complete
+
+    def _rotate(self, **extra):
+        cache.clear()
+        factor = self.setup_body['recovery_factor']
+        return self.anon.post(reverse('vault-wrapped-dek-recover-rotate'), {
+            'username': 'owner', 'factor_type': 'social_mesh', 'dek_id': factor['dek_id'],
+            'blob': dict(factor['blob'], wrapped=fx.b64(b'n' * 48)),
+            'auth_hash': extra.pop('auth_hash', factor['auth_hash']),
+            'login_verifier': fx.b64(b'v' * 32), 'new_auth_hash': fx.b64(b'm' * 32),
+            **extra}, format='json')
+
+    def _finished(self):
+        attempt, token = self._approved()
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(
+            canary_alert_sent_at=timezone.now() - timedelta(hours=49))
+        self.assertEqual(self._complete(attempt, token).status_code, 200)
+        return {'attempt_id': str(attempt.id), 'requester_token': token}
+
+    def _assert_vault_key_unchanged(self):
+        self.assertEqual(VaultWrappedDEK.objects.get(user=self.user).blob,
+                         self.setup_body['recovery_factor']['blob'])
+
+    def test_the_seed_alone_does_not_rotate(self):
+        self.assertEqual(self._rotate().status_code, 403)
+        self._assert_vault_key_unchanged()
+
+    def test_a_wrong_secret_learns_nothing_about_the_attempt_check(self):
+        self.assertEqual(self._rotate(auth_hash='b' * 64).status_code, 404)
+
+    def test_a_recovery_still_in_its_wait_does_not_rotate(self):
+        attempt, token = self._approved()
+        r = self._rotate(attempt_id=str(attempt.id), requester_token=token)
+        self.assertEqual(r.status_code, 403)
+        self._assert_vault_key_unchanged()
+
+    def test_a_finished_recovery_needs_its_own_token(self):
+        proof = self._finished()
+        for bad in ({**proof, 'requester_token': fx.requester_token()[0]},
+                    {**proof, 'attempt_id': 'not-a-uuid'},
+                    {'attempt_id': proof['attempt_id']}):
+            self.assertEqual(self._rotate(**bad).status_code, 403, bad)
+        self._assert_vault_key_unchanged()
+
+    def test_a_finished_recovery_sets_one_new_password(self):
+        proof = self._finished()
+        self.assertEqual(self._rotate(**proof).status_code, 200)
+        self.assertNotEqual(VaultWrappedDEK.objects.get(user=self.user).blob,
+                            self.setup_body['recovery_factor']['blob'])
+        self.assertEqual(self._rotate(**proof).status_code, 403)
+
+    def test_an_expired_recovery_does_not_rotate(self):
+        proof = self._finished()
+        RecoveryAttempt.objects.filter(pk=proof['attempt_id']).update(
+            expires_at=timezone.now() - timedelta(minutes=1))
+        self.assertEqual(self._rotate(**proof).status_code, 403)
