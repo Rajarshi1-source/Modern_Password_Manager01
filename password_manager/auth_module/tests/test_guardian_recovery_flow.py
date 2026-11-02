@@ -230,7 +230,9 @@ class MonthlyLimitTests(GuardianFlowBase):
             recovery_setup=self.setup, status='guardian_approval', initiated_from_ip='127.0.0.1',
             shards_required=2, guardian_approvals_required=3,
             expires_at=timezone.now() + timedelta(days=1))
-        self.assertEqual(self._confirm(other, other_token).status_code, 429)
+        limited = self._confirm(other, other_token)
+        self.assertEqual(limited.status_code, 429)
+        self.assertNotIn('code', limited.json())
         self.assertFalse(other.guardian_approvals.exists())
 
 
@@ -254,6 +256,19 @@ class ProgressAndReleaseTests(GuardianFlowBase):
         cache.clear()
         return self.anon.post(reverse('quantum-recovery-complete'), {
             'attempt_id': str(attempt.id), 'requester_token': token}, format='json')
+
+    @override_settings(RECOVERY_THROTTLE_RATE='3/hour')
+    def test_repeated_confirms_leave_the_tries_for_complete(self):
+        attempt, token = self._approved()
+        cache.clear()
+        confirm = lambda: self.anon.post(reverse('quantum-recovery-confirm'), {
+            'attempt_id': str(attempt.id), 'requester_token': token}, format='json')
+        self.assertEqual([confirm().status_code for _ in range(3)], [200, 200, 200])
+        limited = confirm()
+        self.assertEqual((limited.status_code, limited.json()['code']), (429, 'throttled'))
+        r = self.anon.post(reverse('quantum-recovery-complete'), {
+            'attempt_id': str(attempt.id), 'requester_token': token}, format='json')
+        self.assertEqual(r.status_code, 400, r.content)
 
     def test_shares_wait_for_the_owners_window_even_with_enough_approvals(self):
         attempt, token = self._approved()

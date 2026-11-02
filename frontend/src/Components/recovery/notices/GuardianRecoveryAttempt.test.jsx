@@ -197,8 +197,20 @@ describe('GuardianRecoveryAttempt', () => {
   it('explains a rate limit on a check', async () => {
     renderAt(LINK);
     const check = await screen.findByTestId('guardian-recovery-check');
-    api.recoveryProgress.mockRejectedValue({ response: { status: 429 } });
+    api.recoveryProgress.mockRejectedValue({
+      response: { status: 429, data: { error: 'Too many requests', code: 'throttled' } },
+    });
     fireEvent.click(check);
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/Too many tries/));
+  });
+
+  it('gives the monthly limit its own reason', async () => {
+    renderAt(LINK);
+    const check = await screen.findByTestId('guardian-recovery-check');
+    api.recoveryProgress.mockRejectedValue({
+      response: { status: 429, data: { error: 'Too many recoveries this month; try again later' } },
+    });
+    fireEvent.click(check);
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/this month/));
   });
 });

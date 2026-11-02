@@ -1,6 +1,7 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 const socialRecovery = vi.hoisted(() => ({ listCircles: vi.fn(), createCircle: vi.fn() }));
 
@@ -24,7 +25,7 @@ describe('CircleSetup', () => {
   });
 
   it('offers no new circle and points at guardian recovery', async () => {
-    render(<CircleSetup />);
+    render(<MemoryRouter><CircleSetup /></MemoryRouter>);
     const notice = await screen.findByTestId('circle-setup-unavailable');
     expect(notice.querySelector('a').getAttribute('href')).toBe('/recovery/guardian/setup');
     expect(screen.queryByRole('button', { name: /new circle/i })).toBeNull();
@@ -40,7 +41,7 @@ describe('CircleSetup', () => {
         threshold: 2, total_vouchers: 3, vouchers: [],
       }],
     });
-    render(<CircleSetup />);
+    render(<MemoryRouter><CircleSetup /></MemoryRouter>);
     await screen.findByText(/3f2b8c1e/);
     expect(screen.getByTestId('circle-setup-unavailable').textContent).toMatch(/cannot\s+recover/);
   });

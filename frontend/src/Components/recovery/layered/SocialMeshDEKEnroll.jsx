@@ -20,6 +20,7 @@
  * sent. The server only ever sees opaque ciphertext.
  */
 import React, { lazy, Suspense, useState } from 'react';
+import { Link } from 'react-router-dom';
 import sessionVaultCryptoV3 from '../../../services/sessionVaultCryptoV3';
 import recoveryFactorService from '../../../services/recoveryFactorService';
 import { bytesToHex } from '../../../utils/hex';
@@ -206,7 +207,7 @@ export default function SocialMeshDEKEnroll() {
           <h1>Set up Social-Mesh Recovery</h1>
           <p role="alert" data-testid="sm-enroll-unavailable">
             This enrollment is not available. To let trusted people help you
-            recover, use <a href="/recovery/guardian/setup">guardian recovery</a>.
+            recover, use <Link to="/recovery/guardian/setup">guardian recovery</Link>.
           </p>
         </section>
       );

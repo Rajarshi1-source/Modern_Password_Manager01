@@ -10,7 +10,7 @@ const api = vi.hoisted(() => ({
   getGuardianShare: vi.fn(),
   approveRecovery: vi.fn(),
 }));
-const vault = vi.hoisted(() => ({ buildRecoveryFactorEnvelope: vi.fn() }));
+const vault = vi.hoisted(() => ({ buildRecoveryFactorEnvelope: vi.fn(), hasSessionKey: vi.fn() }));
 const crypto = vi.hoisted(() => ({
   sealSeedForGuardians: vi.fn(),
   resealShareForRequester: vi.fn(),
@@ -39,6 +39,7 @@ import GuardianSetup from './GuardianSetup';
 beforeEach(() => {
   vi.clearAllMocks();
   crypto.keyFingerprint.mockImplementation((key) => `FP-${key}`);
+  vault.hasSessionKey.mockReturnValue(true);
 });
 
 describe('GuardianApprove', () => {
@@ -127,6 +128,14 @@ describe('GuardianSetup', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/fingerprint/));
     expect(crypto.sealSeedForGuardians).not.toHaveBeenCalled();
     expect(api.setupRecovery).not.toHaveBeenCalled();
+  });
+
+  it('says the vault is locked instead of showing a form that cannot finish', async () => {
+    api.getRecoveryStatus.mockResolvedValue({ data: { recovery_configured: false } });
+    vault.hasSessionKey.mockReturnValue(false);
+    render(<GuardianSetup />);
+    expect((await screen.findByTestId('guardian-setup-locked')).textContent).toMatch(/Sign\s+out, sign in again/);
+    expect(screen.queryByTestId('guardian-setup-submit')).toBeNull();
   });
 
   it('wraps the vault key first, and a wrong password stops the setup', async () => {

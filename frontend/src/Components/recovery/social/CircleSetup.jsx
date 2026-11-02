@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import ApiService from '../../../services/api';
 import { HYBRID_PUBLIC_KEY_SIZE } from '../../../services/quantum/hybridKem';
 import {
@@ -270,7 +271,7 @@ const CircleSetup = ({ secretHex, secretType, onComplete, allowNewCircles = fals
         <p role="alert" data-testid="circle-setup-unavailable">
           Recovery circles are not available, and any circle listed here cannot
           recover your account. To let trusted people help you recover, use{' '}
-          <a href="/recovery/guardian/setup">guardian recovery</a>.
+          <Link to="/recovery/guardian/setup">guardian recovery</Link>.
         </p>
       )}
 

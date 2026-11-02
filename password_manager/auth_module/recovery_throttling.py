@@ -42,8 +42,12 @@ class RecoveryThrottle(SimpleRateThrottle):
             ident = str(request.user.id)
         else:
             ident = self.get_ident(request)
-        
-        return f'throttle_recovery_{view.__class__.__name__}_{ident}'
+
+        # Per action on a ViewSet: repeating confirm_recovery must not use up
+        # the tries for complete_recovery, which only opens days later. An
+        # APIView has no action and keeps one bucket.
+        action = getattr(view, 'action', '') or ''
+        return f'throttle_recovery_{view.__class__.__name__}_{action}_{ident}'
     
     def get_rate(self):
         """Get rate from settings or use default."""
