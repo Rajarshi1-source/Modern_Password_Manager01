@@ -36,8 +36,11 @@ export default function RecoveryNotices() {
         </ul>
       )}
       <p>
-        Did not do one of these? Use the link in its email to stop it while
-        the link is valid, then change your master password.
+        Did not do one of these? Use the link in its email while the link is
+        valid. If it is still in progress, the link stops it. If it already
+        completed, the link locks your account and signs out every session:
+        contact support to restore access, then change the passwords stored
+        in your vault.
       </p>
     </section>
   );
