@@ -134,7 +134,7 @@ def confirmed_guardian_attempts(recovery_setup):
 
 @shared_task
 def start_guardian_recovery(email, requester_public_key, device_fingerprint, ip_address, user_agent,
-                            requester_token_hash=''):
+                            requester_token_hash):
     """
     The account-dependent half of POST /api/auth/quantum-recovery/initiate_recovery/.
 
@@ -168,7 +168,7 @@ def start_guardian_recovery(email, requester_public_key, device_fingerprint, ip_
 
 
 def _start_guardian_attempt(setup_id, requester_public_key, device_fingerprint, ip_address, user_agent,
-                            requester_token_hash=''):
+                            requester_token_hash):
     """One account's attempt and email for start_guardian_recovery. Returns
     whether the account has a live attempt for this request."""
     import base64
@@ -203,9 +203,11 @@ def _start_guardian_attempt(setup_id, requester_public_key, device_fingerprint, 
         # The requester key is one-time, so it identifies the request. Workers
         # acknowledge after a task returns, and one lost mid-task gets this task
         # redelivered: that must not spend another monthly slot, and if the
-        # email did not go out, it still has to.
+        # email did not go out, it still has to. The same goes for one confirmed
+        # meanwhile, whose shares stay locked until the alert is on record.
         attempt = usable.filter(requester_public_key=public_key).first()
-        if attempt is not None and (attempt.canary_alert_sent_at or attempt.status != 'initiated'):
+        if attempt is not None and (attempt.canary_alert_sent_at or attempt.is_expired()
+                                    or attempt.status not in ('initiated', 'guardian_approval')):
             return True
         if attempt is None:
             # Anyone can start an attempt for this email, so an unconfirmed one
@@ -270,7 +272,7 @@ def _start_guardian_attempt(setup_id, requester_public_key, device_fingerprint, 
         notice.email_sent = True
         notice.save(update_fields=['email_sent'])
     else:
-        RecoveryAttempt.objects.filter(pk=attempt.pk).update(
+        RecoveryAttempt.objects.filter(pk=attempt.pk, status='initiated').update(
             status='failed', failure_reason=GUARDIAN_EMAIL_NOT_DELIVERED)
         logger.warning('Guardian recovery email not delivered for attempt %s', attempt.id)
     return bool(sent)

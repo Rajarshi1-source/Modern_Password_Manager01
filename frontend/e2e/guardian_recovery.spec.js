@@ -38,7 +38,7 @@ const navigateInApp = (page, to) => page.evaluate((target) => {
 }, to);
 
 test('a user who lost their master password recovers with guardians', async ({ browser }) => {
-  test.setTimeout(240000);
+  test.setTimeout(300000);
   const password = 'TestPassword123!';
   const newPassword = 'AnotherPassword456!';
 
@@ -72,7 +72,8 @@ test('a user who lost their master password recovers with guardians', async ({ b
   await expect(owner.getByTestId('guardian-setup-done')).toBeVisible({ timeout: 60000 });
 
   expect(Object.keys(setupBodies[0]).sort()).toEqual(
-    ['guardians', 'secret_check', 'secret_type', 'threshold_shards']);
+    ['guardians', 'recovery_factor', 'secret_check', 'secret_type', 'threshold_shards']);
+  expect(Object.keys(setupBodies[0].recovery_factor).sort()).toEqual(['auth_hash', 'blob', 'dek_id']);
   expect(Object.keys(setupBodies[0].guardians[0]).sort()).toEqual(
     ['email', 'public_key', 'requires_video', 'sealed_share', 'share_index', 'share_proof_hash']);
 
@@ -147,4 +148,17 @@ test('a user who lost their master password recovers with guardians', async ({ b
   await fresh.fill('#login-password', newPassword);
   await fresh.getByRole('button', { name: 'Login to Vault' }).click();
   await fresh.getByTestId('login-success-status').waitFor({ timeout: 30000 });
+
+  // Sign-in alone does not open the vault key. Enrolling another factor unwraps
+  // the real key with the new password and sends its dek_id for the server to
+  // check. Retried because the login's own unlock finishes after the marker.
+  await navigateInApp(fresh, '/recovery/key/enroll-v2');
+  await fresh.getByTestId('rk-enroll-master-password').fill(newPassword);
+  await fresh.getByTestId('rk-enroll-start').click();
+  await fresh.getByTestId('rk-confirm-phrase').fill('I have saved this key');
+  const save = fresh.getByTestId('rk-enroll-save');
+  await expect(async () => {
+    if (await save.isVisible()) await save.click({ timeout: 5000 });
+    await expect(fresh.getByTestId('rk-enroll-success')).toBeVisible({ timeout: 15000 });
+  }).toPass({ timeout: 60000 });
 });

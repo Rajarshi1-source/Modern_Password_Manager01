@@ -1,4 +1,5 @@
 // @ts-check
+import { randomBytes } from 'crypto';
 
 /**
  * Sign up a fresh user, then log in as that user.
@@ -33,7 +34,7 @@
 export async function signupAndLogin(page, options) {
   const { baseUrl, emailPrefix = 'e2e', password = 'TestPassword123!' } = options;
   const email =
-    options.email ?? `${emailPrefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.com`;
+    options.email ?? `${emailPrefix}-${Date.now()}-${randomBytes(4).toString('hex')}@test.com`;
 
   await page.goto(`${baseUrl}/signup`);
   await page.getByRole('button', { name: 'Sign Up', exact: true }).click();

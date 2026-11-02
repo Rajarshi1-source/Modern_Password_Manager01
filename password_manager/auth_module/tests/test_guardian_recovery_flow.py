@@ -60,6 +60,7 @@ class GuardianFlowBase(TestCase):
                 'sealed_share': fx.sealed_share(), 'share_proof_hash': proof_hash})
         self.owner = owner
         self.setup_body = {'threshold_shards': 2, 'guardians': guardians,
+                           'recovery_factor': fx.recovery_factor(self.user),
                            'secret_check': fx.seed_check()}
         with patch.object(send_guardian_invitation, 'delay'):
             r = owner.post(reverse('quantum-recovery-setup'), self.setup_body, format='json')
@@ -308,6 +309,20 @@ class ProgressAndReleaseTests(GuardianFlowBase):
             'approval_token': approval.approval_token, 'approved': False}, format='json')
         self.assertEqual(self._progress(attempt, token).json()['denials'], 1)
 
+    def test_a_recovery_past_its_time_shows_as_expired(self):
+        attempt, token = self._approved()
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(
+            canary_alert_sent_at=timezone.now() - timedelta(hours=49),
+            expires_at=timezone.now() - timedelta(minutes=1))
+        body = self._progress(attempt, token).json()
+        self.assertEqual((body['status'], body['ready'], body['ask_again']), ('expired', False, False))
+
+    def test_a_finished_recovery_stays_finished_past_its_time(self):
+        attempt, token = self._approved()
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(
+            status='completed', expires_at=timezone.now() - timedelta(minutes=1))
+        self.assertEqual(self._progress(attempt, token).json()['status'], 'completed')
+
 
 class GuardianWindowTests(GuardianFlowBase):
     def setUp(self):
@@ -410,12 +425,86 @@ class GuardianEmailTests(GuardianFlowBase):
         self.assertFalse(RecoveryAuditLog.objects.filter(
             event_type='guardian_approval_requested').exists())
 
+    def test_no_email_after_the_guardians_window_closed(self):
+        GuardianApproval.objects.filter(pk=self.approval.pk).update(
+            approval_window_end=timezone.now() - timedelta(minutes=1))
+        send_guardian_approval_request.apply(args=[str(self.approval.id)])
+        self.assertEqual(mail.outbox, [])
+        self.assertFalse(RecoveryAuditLog.objects.filter(
+            event_type='guardian_approval_requested').exists())
+
+
+class LostDeliveryTests(GuardianFlowBase):
+    def _progress(self, attempt, token):
+        return self.anon.post(reverse('quantum-recovery-progress'), {
+            'attempt_id': str(attempt.id), 'requester_token': token}, format='json').json()
+
+    def test_an_approval_email_that_never_queued_can_be_asked_for_again(self):
+        attempt, token = self._start()
+        self._confirm(attempt, token)  # its publishes go nowhere
+        # A window that has not opened is not late yet.
+        attempt.guardian_approvals.update(
+            approval_window_start=timezone.now() + timedelta(hours=1),
+            approval_window_end=timezone.now() + timedelta(hours=25))
+        self.assertFalse(self._progress(attempt, token)['ask_again'])
+        self._open_windows(attempt)
+        self.assertTrue(self._progress(attempt, token)['ask_again'])
+
+        self._confirm(attempt, token)
+        self.assertEqual(self.queued.call_count, 3)
+        mail.outbox.clear()
+        for approval in attempt.guardian_approvals.all():
+            send_guardian_approval_request.apply(args=[str(approval.id)])
+        self.assertEqual(len(mail.outbox), 3)
+        self.assertFalse(self._progress(attempt, token)['ask_again'])
+
+        # Everyone has been asked, so another confirm queues nothing.
+        self._confirm(attempt, token)
+        self.queued.assert_not_called()
+
+    def _redeliver(self, attempt, token_hash):
+        return start_guardian_recovery.apply(args=(
+            'owner@example.com', sealed_shares.b64(bytes(attempt.requester_public_key)),
+            '', '127.0.0.1', '', token_hash)).get()
+
+    def _confirmed_with_a_lost_alert(self):
+        attempt, token = self._start()
+        self._confirm(attempt, token)
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(canary_alert_sent_at=None)
+        mail.outbox.clear()
+        return attempt, token
+
+    def test_a_redelivered_task_sends_the_alert_a_confirmed_attempt_lost(self):
+        attempt, token = self._confirmed_with_a_lost_alert()
+        self.assertIsNone(self._progress(attempt, token)['release_after'])
+        self.assertEqual(self._redeliver(attempt, fx.requester_token()[1]), 1)
+        self.assertEqual([m.to for m in mail.outbox], [['owner@example.com']])
+        self.assertIsNotNone(self._progress(attempt, token)['release_after'])
+
+    def test_a_resend_that_fails_does_not_fail_a_confirmed_attempt(self):
+        attempt, _ = self._confirmed_with_a_lost_alert()
+        with patch('django.core.mail.send_mail', return_value=0):
+            self._redeliver(attempt, fx.requester_token()[1])
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, 'guardian_approval')
+        self.assertIsNone(attempt.canary_alert_sent_at)
+
+    def test_a_redelivered_task_does_not_alert_for_a_closed_attempt(self):
+        attempt, _ = self._confirmed_with_a_lost_alert()
+        for change in ({'status': 'cancelled'},
+                       {'status': 'guardian_approval',
+                        'expires_at': timezone.now() - timedelta(minutes=1)}):
+            RecoveryAttempt.objects.filter(pk=attempt.pk).update(**change)
+            self._redeliver(attempt, fx.requester_token()[1])
+        self.assertEqual(mail.outbox, [])
+
 
 class InvitationTests(GuardianFlowBase):
     def _second_owner(self):
         user = User.objects.create_user('owner2', 'owner2@example.com', 'Owner-Pass-1!')
         client = APIClient()
         client.force_authenticate(user)
+        self.setup_body = {**self.setup_body, 'recovery_factor': fx.recovery_factor(user)}
         return user, client
 
     def test_setup_emails_each_guardian_its_invitation(self):

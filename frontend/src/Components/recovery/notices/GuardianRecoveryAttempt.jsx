@@ -71,18 +71,20 @@ export default function GuardianRecoveryAttempt() {
     if (!validLink) return undefined;
     let current = true;
     (async () => {
-      let keyPair = null;
+      let value = '';
       try {
-        keyPair = await loadRequesterKeyPair(fingerprint);
+        const keyPair = await loadRequesterKeyPair(fingerprint);
+        if (keyPair && keyFingerprint(keyPair.publicKey) === fingerprint) {
+          value = requesterToken(keyPair);
+        }
       } catch {
-        // A key this browser can no longer unwrap is as good as none
+        // A key this browser can no longer unwrap or read is as good as none
       }
       if (!current) return;
-      if (!keyPair || keyFingerprint(keyPair.publicKey) !== fingerprint) {
+      if (!value) {
         setKeyMissing(true);
         return;
       }
-      const value = requesterToken(keyPair);
       setToken(value);
       try {
         await refresh(value);
@@ -253,7 +255,7 @@ export default function GuardianRecoveryAttempt() {
         {progress.approvals_received} of {progress.threshold} approvals received
         {progress.denials ? `, ${progress.denials} denied` : ''}.
       </p>
-      {progress.guardians_asked === 0 ? (
+      {progress.ask_again ? (
         <button type="button" onClick={confirm} disabled={busy}>Ask my guardians again</button>
       ) : null}
       {progress.ready ? (
@@ -272,9 +274,13 @@ export default function GuardianRecoveryAttempt() {
       ) : (
         <>
           <p data-testid="guardian-recovery-wait">
-            For your protection, recovery cannot finish before{' '}
-            {new Date(progress.release_after).toLocaleString()}, so you have time to
-            stop anything you did not start.
+            {progress.release_after ? (
+              <>
+                For your protection, recovery cannot finish before{' '}
+                {new Date(progress.release_after).toLocaleString()}, so you have time to
+                stop anything you did not start.
+              </>
+            ) : 'Recovery cannot finish yet: the alert to your account’s email is not on record. Check again later.'}
           </p>
           {errorLine}
           <button type="button" onClick={check} disabled={busy} data-testid="guardian-recovery-check">

@@ -10,7 +10,7 @@ const api = vi.hoisted(() => ({
   getGuardianShare: vi.fn(),
   approveRecovery: vi.fn(),
 }));
-const vault = vi.hoisted(() => ({ enrollRecoveryFactor: vi.fn() }));
+const vault = vi.hoisted(() => ({ buildRecoveryFactorEnvelope: vi.fn() }));
 const crypto = vi.hoisted(() => ({
   sealSeedForGuardians: vi.fn(),
   resealShareForRequester: vi.fn(),
@@ -132,7 +132,7 @@ describe('GuardianSetup', () => {
   it('wraps the vault key first, and a wrong password stops the setup', async () => {
     api.getRecoveryStatus.mockResolvedValue({ data: { recovery_configured: false } });
     crypto.sealSeedForGuardians.mockResolvedValue({ secretCheck: 'check', shares: [] });
-    vault.enrollRecoveryFactor.mockRejectedValue(new Error('Wrong master password'));
+    vault.buildRecoveryFactorEnvelope.mockRejectedValue(new Error('Wrong master password'));
     render(<GuardianSetup />);
     await fillGuardians();
     for (let i = 0; i < 3; i++) fireEvent.click(screen.getByTestId(`guardian-setup-fingerprint-checked-${i}`));
@@ -141,13 +141,13 @@ describe('GuardianSetup', () => {
     expect(api.setupRecovery).not.toHaveBeenCalled();
   });
 
-  it('sends the server sealed values, not the seed', async () => {
+  it('sends the wrapped key and sealed values in one request, not the seed', async () => {
     api.getRecoveryStatus.mockResolvedValue({ data: { recovery_configured: false } });
     crypto.sealSeedForGuardians.mockResolvedValue({
       secretCheck: 'check',
       shares: [0, 1, 2].map((i) => ({ shareIndex: i + 1, sealedShare: `sealed${i}`, shareProofHash: `hash${i}` })),
     });
-    vault.enrollRecoveryFactor.mockResolvedValue();
+    vault.buildRecoveryFactorEnvelope.mockResolvedValue({ blob: { v: 'wdek-1' }, dekId: 'dek', authHash: 'proof' });
     api.setupRecovery.mockResolvedValue({ data: { shards_created: [] } });
     render(<GuardianSetup />);
     await fillGuardians();
@@ -155,7 +155,9 @@ describe('GuardianSetup', () => {
     fireEvent.click(screen.getByTestId('guardian-setup-submit'));
     await screen.findByTestId('guardian-setup-done');
     const body = api.setupRecovery.mock.calls[0][0];
-    expect(Object.keys(body).sort()).toEqual(['guardians', 'secret_check', 'secret_type', 'threshold_shards']);
+    expect(Object.keys(body).sort()).toEqual(
+      ['guardians', 'recovery_factor', 'secret_check', 'secret_type', 'threshold_shards']);
+    expect(body.recovery_factor).toEqual({ dek_id: 'dek', blob: { v: 'wdek-1' }, auth_hash: 'proof' });
     expect(body.guardians[1]).toEqual({
       email: 'g1@x.test', requires_video: false, public_key: 'key1',
       share_index: 2, sealed_share: 'sealed1', share_proof_hash: 'hash1',

@@ -49,3 +49,13 @@ def requester_token():
 
 def seed_check():
     return b64(os.urandom(32))
+
+
+def recovery_factor(user):
+    """setup_recovery's wrapped vault key, for an account given a vault key here."""
+    from auth_module.recovery_models_v2 import VaultWrappedDEK
+
+    envelope = {'v': 'wdek-1', 'kdf': 'argon2id', 'kdf_params': {},
+                'salt': b64(os.urandom(16)), 'iv': b64(os.urandom(12)), 'wrapped': b64(os.urandom(48))}
+    dek, _ = VaultWrappedDEK.objects.get_or_create(user=user, defaults={'blob': envelope})
+    return {'dek_id': str(dek.dek_id), 'blob': envelope, 'auth_hash': secrets.token_hex(32)}
