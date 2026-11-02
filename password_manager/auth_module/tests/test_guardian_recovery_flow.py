@@ -6,13 +6,17 @@ cancel, and only that device can fetch the re-sealed shares.
 The whole path with real client crypto is in frontend/e2e/guardian_recovery.spec.js.
 """
 import base64
+import json
 import re
 from datetime import timedelta
+from io import StringIO
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.core import mail
 from django.core.cache import cache
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -661,3 +665,22 @@ class RotationNeedsAFinishedRecoveryTests(GuardianFlowBase):
         RecoveryAttempt.objects.filter(pk=proof['attempt_id']).update(
             expires_at=timezone.now() - timedelta(minutes=1))
         self.assertEqual(self._rotate(**proof).status_code, 403)
+
+
+class E2EHelperTests(GuardianFlowBase):
+    def test_ending_the_wait_needs_an_alert_on_record(self):
+        attempt, _ = self._start()
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(canary_alert_sent_at=None)
+        with self.assertRaises(CommandError):
+            call_command('guardian_recovery_e2e', 'owner', '--end-wait', stdout=StringIO())
+        attempt.refresh_from_db()
+        self.assertIsNone(attempt.canary_alert_sent_at)
+
+    def test_ending_the_wait_moves_the_alert_back(self):
+        attempt, _ = self._start()
+        out = StringIO()
+        call_command('guardian_recovery_e2e', 'owner', '--end-wait', stdout=out)
+        self.assertTrue(json.loads(out.getvalue())['alert_sent'])
+        attempt.refresh_from_db()
+        self.assertLess(attempt.canary_alert_sent_at, timezone.now() - timedelta(
+            hours=self.setup.canary_alert_window_hours))

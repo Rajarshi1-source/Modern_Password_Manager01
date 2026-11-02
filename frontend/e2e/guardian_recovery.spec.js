@@ -132,6 +132,7 @@ test('a user who lost their master password recovers with guardians', async ({ b
   await expect(requester.getByTestId('guardian-recovery-wait')).toBeVisible();
   await expect(requester.getByTestId('guardian-recovery-recover')).toHaveCount(0);
 
+  expect(backend(email).alert_sent).toBe(true);
   backend(email, '--end-wait');
   await requester.getByTestId('guardian-recovery-check').click();
   await requester.getByTestId('guardian-recovery-username').fill(email);

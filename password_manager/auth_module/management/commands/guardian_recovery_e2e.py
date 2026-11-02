@@ -41,6 +41,10 @@ class Command(BaseCommand):
                 approval_window_start=now - timedelta(minutes=1),
                 approval_window_end=now + timedelta(hours=1))
         if opts['end_wait']:
+            # Moves the alert back, and must not stand in for one never sent:
+            # nothing is released without it.
+            if attempt.canary_alert_sent_at is None:
+                raise CommandError('no owner alert on record for this attempt')
             hours = attempt.recovery_setup.canary_alert_window_hours
             RecoveryAttempt.objects.filter(pk=attempt.pk).update(
                 canary_alert_sent_at=now - timedelta(hours=hours, minutes=1))
@@ -48,6 +52,7 @@ class Command(BaseCommand):
         self.stdout.write(json.dumps({
             'attempt_path': (f'/recovery/guardian-attempt?attempt={attempt.id}&key='
                              f'{sealed_shares.key_fingerprint(bytes(attempt.requester_public_key))}'),
+            'alert_sent': attempt.canary_alert_sent_at is not None,
             # By guardian email: a guardian's browser opens only its own share
             'approval_tokens': {
                 a.guardian.encrypted_guardian_info.decode('utf-8'): a.approval_token
