@@ -320,7 +320,7 @@ Request:
 
 Response (the same for every email):
 {
-  "message": "If guardian recovery is available for this account, a link to continue has been sent to its email address."
+  "message": "If guardian recovery is available for this account, an email about it has been sent to its address."
 }
 ```
 

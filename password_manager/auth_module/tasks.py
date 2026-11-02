@@ -104,6 +104,11 @@ def notify_passkey_recovery_started(user_id, ip_address=None, user_agent=''):
     return str(create_notice(user, 'passkey_recovery_started', ip_address, user_agent).id)
 
 
+# failure_reason of an attempt whose link never reached the account. Nobody can
+# use such an attempt, so it does not count toward the monthly limit.
+GUARDIAN_EMAIL_NOT_DELIVERED = 'Recovery email not delivered'
+
+
 @shared_task
 def start_guardian_recovery(email, requester_public_key, device_fingerprint, ip_address, user_agent):
     """
@@ -116,7 +121,30 @@ def start_guardian_recovery(email, requester_public_key, device_fingerprint, ip_
     email, the link to it. A travel lock or a used-up monthly limit ends it
     quietly: one email per request would let anyone flood the account's inbox.
     ``requester_public_key`` is base64; the view has checked it.
+
+    Django does not make User.email unique and the request names no account,
+    so each account on the email is handled on its own: one with no setup, a
+    lock or a used-up limit does not stop another.
+
+    Returns how many accounts have an attempt, never its ID: Celery writes a
+    task's return value to the worker log and the result backend, and the ID
+    belongs in the account's email alone.
     """
+    from .quantum_recovery_models import PasskeyRecoverySetup
+
+    setup_ids = PasskeyRecoverySetup.objects.filter(
+        user__email=email, user__is_active=True, is_active=True,
+    ).order_by('pk').values_list('pk', flat=True)
+    return sum(
+        _start_guardian_attempt(setup_id, requester_public_key, device_fingerprint,
+                                ip_address, user_agent)
+        for setup_id in list(setup_ids)
+    )
+
+
+def _start_guardian_attempt(setup_id, requester_public_key, device_fingerprint, ip_address, user_agent):
+    """One account's attempt and email for start_guardian_recovery. Returns
+    whether the account has a live attempt for this request."""
     import base64
     import hashlib
     import time
@@ -130,55 +158,68 @@ def start_guardian_recovery(email, requester_public_key, device_fingerprint, ip_
     from .quantum_recovery_models import PasskeyRecoverySetup, RecoveryAttempt, RecoveryAuditLog
     from .recovery_notice import create_notice
 
+    public_key = base64.b64decode(requester_public_key)
     with transaction.atomic():
-        # Locked so concurrent requests cannot pass the monthly limit together.
-        # By setup, not user: Django does not make User.email unique, and an
-        # account without a setup must not hide one with it.
+        # Locked so concurrent requests cannot pass the monthly limit together,
+        # or create two attempts for one requester key.
         recovery_setup = PasskeyRecoverySetup.objects.select_for_update(of=('self',)).select_related(
             'user'
-        ).filter(user__email=email, user__is_active=True, is_active=True).first()
-        if recovery_setup is None or recovery_setup.is_travel_locked():
-            return None
-        recent_attempts = RecoveryAttempt.objects.filter(
-            recovery_setup=recovery_setup,
-            initiated_at__gte=timezone.now() - timedelta(days=30),
-        ).count()
-        if recent_attempts >= recovery_setup.max_recovery_attempts_per_month:
-            return None
-
+        ).filter(pk=setup_id, user__is_active=True, is_active=True).first()
+        # A setup with no secret_check cannot complete (complete_recovery: 410)
+        if (recovery_setup is None or not bytes(recovery_setup.secret_check)
+                or recovery_setup.is_travel_locked()):
+            return False
         user = recovery_setup.user
-        attempt = RecoveryAttempt.objects.create(
-            recovery_setup=recovery_setup,
-            initiated_from_ip=ip_address,
-            initiated_from_device_fingerprint=device_fingerprint,
-            requester_public_key=base64.b64decode(requester_public_key),
-            shards_required=recovery_setup.threshold_shards,
-            # Every active guardian is asked: completion needs
-            # threshold_shards re-sealed shares, and asking more than
-            # the threshold lets recovery finish if one does not answer.
-            guardian_approvals_required=recovery_setup.guardians.filter(status='active').count(),
-            expires_at=timezone.now() + timedelta(days=recovery_setup.decay_window_days),
-        )
-        RecoveryAuditLog.objects.create(
-            user=user,
-            event_type='recovery_initiated',
-            recovery_attempt_id=attempt.id,
-            event_data={'attempt_id': str(attempt.id)},
-            ip_address=ip_address,
-            user_agent=user_agent,
-            cryptographic_hash=hashlib.sha256(f"{user.id}:{time.time()}".encode()).hexdigest(),
-        )
+        usable = RecoveryAttempt.objects.filter(recovery_setup=recovery_setup).exclude(
+            status='failed', failure_reason=GUARDIAN_EMAIL_NOT_DELIVERED)
+
+        # The requester key is one-time, so it identifies the request. Workers
+        # acknowledge after a task returns, and one lost mid-task gets this task
+        # redelivered: that must not spend another monthly slot, and if the
+        # email did not go out, it still has to.
+        attempt = usable.filter(requester_public_key=public_key).first()
+        if attempt is not None and (attempt.canary_alert_sent_at or attempt.status != 'initiated'):
+            return True
+        if attempt is None:
+            recent_attempts = usable.filter(
+                initiated_at__gte=timezone.now() - timedelta(days=30),
+            ).count()
+            if recent_attempts >= recovery_setup.max_recovery_attempts_per_month:
+                return False
+
+            attempt = RecoveryAttempt.objects.create(
+                recovery_setup=recovery_setup,
+                initiated_from_ip=ip_address,
+                initiated_from_device_fingerprint=device_fingerprint,
+                requester_public_key=public_key,
+                shards_required=recovery_setup.threshold_shards,
+                # Every active guardian is asked: completion needs
+                # threshold_shards re-sealed shares, and asking more than
+                # the threshold lets recovery finish if one does not answer.
+                guardian_approvals_required=recovery_setup.guardians.filter(status='active').count(),
+                expires_at=timezone.now() + timedelta(days=recovery_setup.decay_window_days),
+            )
+            RecoveryAuditLog.objects.create(
+                user=user,
+                event_type='recovery_initiated',
+                recovery_attempt_id=attempt.id,
+                event_data={'attempt_id': str(attempt.id)},
+                ip_address=ip_address,
+                user_agent=user_agent,
+                cryptographic_hash=hashlib.sha256(f"{user.id}:{time.time()}".encode()).hexdigest(),
+            )
 
     # The link opens the frontend, which may be on another origin than the API.
     # The notice's cancel link cancels this attempt (recovery_notice.py).
     link = f"{settings.FRONTEND_URL.rstrip('/')}/recovery/guardian-attempt?attempt={attempt.id}"
     notice = create_notice(user, 'guardian_recovery_started', ip_address, user_agent, send_email=False)
+    # The username tells apart the emails of accounts that share this address
     sent = send_mail(
         'Guardian recovery',
-        f'Someone started guardian recovery for your account from {ip_address}. '
+        f'Someone started guardian recovery for your account {user.username} from {ip_address}. '
         f'If it was you, this link identifies the recovery: {link} '
-        'Finish it on the device that started it, which holds the one-time key '
-        "that opens your guardians' shares. "
+        "Only the client that started it holds the one-time key that opens your "
+        "guardians' shares, so it cannot be finished anywhere else. "
         f'If it was not you, open this link to cancel it: {notice.cancel_link}',
         None,
         [user.email],
@@ -190,5 +231,7 @@ def start_guardian_recovery(email, requester_public_key, device_fingerprint, ip_
         notice.email_sent = True
         notice.save(update_fields=['email_sent'])
     else:
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(
+            status='failed', failure_reason=GUARDIAN_EMAIL_NOT_DELIVERED)
         logger.warning('Guardian recovery email not delivered for attempt %s', attempt.id)
-    return str(attempt.id)
+    return bool(sent)
