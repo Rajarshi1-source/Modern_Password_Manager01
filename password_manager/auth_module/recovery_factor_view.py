@@ -31,7 +31,7 @@ from rest_framework.views import APIView
 
 from auth_module.recovery_throttling import RecoveryThrottle
 from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
-from auth_module.quantum_recovery_models import RecoveryAuditLog
+from auth_module.quantum_recovery_models import PasskeyRecoverySetup, RecoveryAuditLog
 from shared.client_ip import get_client_ip
 
 
@@ -147,6 +147,25 @@ class RecoveryFactorListCreateView(APIView):
         # DRF's default 500 handler — we never echo str(exc) back.
         try:
             with transaction.atomic():
+                if ftype == RecoveryWrappedDEK.FactorType.SOCIAL_MESH:
+                    # Guardians' shares rebuild the seed that opens the active
+                    # factor, so replacing it alone would leave them opening
+                    # nothing: setup_recovery writes the two together. dek_id
+                    # is no bar here, as a signed-in session can read it. Same
+                    # lock as setup_recovery, so neither can pass the other.
+                    User.objects.select_for_update().get(pk=request.user.pk)
+                    setup = PasskeyRecoverySetup.objects.filter(user=request.user).first()
+                    if setup is not None and not setup.is_replaceable():
+                        return Response(
+                            {
+                                'error': 'use /api/auth/quantum-recovery/setup_recovery/',
+                                'detail': (
+                                    'this factor belongs to your guardian recovery '
+                                    'and changes only with it'
+                                ),
+                            },
+                            status=409,
+                        )
                 if ftype != RecoveryWrappedDEK.FactorType.RECOVERY_KEY:
                     revoke_qs = (
                         RecoveryWrappedDEK.objects

@@ -107,15 +107,6 @@ def _recovery_factor_problem(factor):
     return None
 
 
-def _setup_replaceable(setup):
-    """Whether setup_recovery replaces this setup instead of refusing. One from
-    before client-side sealing holds no recoverable secret (it cannot complete),
-    and one with an invitation that ran out can never activate."""
-    return not bytes(setup.secret_check or b'') or (
-        not setup.is_active and setup.guardians.filter(
-            status='pending', invitation_expires_at__lt=timezone.now()).exists())
-
-
 class QuantumRecoveryViewSet(viewsets.ViewSet):
     """
     ViewSet for Quantum-Resilient Recovery System
@@ -238,7 +229,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 # A pending setup (guardians not yet accepted) counts too: the
                 # user has one setup at most.
                 current = PasskeyRecoverySetup.objects.filter(user=user).first()
-                if current is not None and not _setup_replaceable(current):
+                if current is not None and not current.is_replaceable():
                     return Response({
                         'error': 'Recovery system already configured'
                         if current.is_active
@@ -404,7 +395,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             return Response({
                 'recovery_configured': True,
                 'is_active': recovery_setup.is_active,
-                'can_replace': _setup_replaceable(recovery_setup),
+                'can_replace': recovery_setup.is_replaceable(),
                 'total_shards': recovery_setup.total_shards,
                 'threshold_shards': recovery_setup.threshold_shards,
                 'guardians': [{
