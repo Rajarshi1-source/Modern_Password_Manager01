@@ -174,6 +174,7 @@ export default function GuardianRecoveryAttempt() {
         dekId: factor.dek_id,
         username: username.trim(),
         factorType: 'social_mesh',
+        recoveryAttempt: { attempt_id: attemptId, requester_token: token },
       });
       forgetRequesterKeyPair(fingerprint);
       setSeedHex('');

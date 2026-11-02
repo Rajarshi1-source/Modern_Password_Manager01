@@ -2363,7 +2363,6 @@ frontend/src/
 │   │   ├── 📄 PasswordRecovery.jsx         # Password recovery (636 lines)
 │   │   ├── 📄 PasskeyPrimaryRecoverySetup.jsx # Primary recovery (451 lines)
 │   │   ├── 📄 PasskeyPrimaryRecoveryInitiate.jsx # Recovery start (517 lines)
-│   │   ├── 📄 recovery/guardian/GuardianSetup.jsx  # Guardian recovery setup
 │   │   ├── 📄 OAuthCallback.jsx            # OAuth callback (334 lines)
 │   │   └── 📄 SocialLoginButtons.jsx       # Social login (98 lines)
 │   │
@@ -2391,6 +2390,8 @@ frontend/src/
 │   │   ├── 📁 behavioral/
 │   │   │   ├── 📄 BehavioralRecoveryFlow.jsx
 │   │   │   └── 📄 ChallengeDisplay.jsx
+│   │   ├── 📁 guardian/
+│   │   │   └── 📄 GuardianSetup.jsx        # Guardian recovery setup
 │   │   └── 📁 social/
 │   │       └── 📄 SocialMeshRecovery.jsx
 │   │

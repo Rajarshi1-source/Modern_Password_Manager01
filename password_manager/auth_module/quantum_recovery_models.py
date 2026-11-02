@@ -313,7 +313,9 @@ class RecoveryAttempt(models.Model):
     initiated_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     completed_at = models.DateTimeField(null=True, blank=True)
-    
+    # A finished recovery sets one new master password (WrappedDEKRecoveryRotateView)
+    password_rotated_at = models.DateTimeField(null=True, blank=True)
+
     # Result
     recovery_successful = models.BooleanField(default=False)
     failure_reason = models.TextField(blank=True)
