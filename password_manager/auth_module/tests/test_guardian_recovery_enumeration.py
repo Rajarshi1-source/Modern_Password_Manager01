@@ -304,6 +304,37 @@ class InitiateTaskTests(AccountFixtureMixin, TestCase):
         self._post('active@example.com')
         self.assertEqual(mail.outbox, [])
 
+    def test_one_cancel_link_frees_the_slots_a_stranger_used_up(self):
+        setup = PasskeyRecoverySetup.objects.get(user__email='active@example.com')
+        limit = setup.max_recovery_attempts_per_month
+        for _ in range(limit + 1):
+            cache.clear()
+            self._post('active@example.com', requester_public_key=fx.hybrid_public_key())
+        self.assertEqual(setup.recovery_attempts.count(), limit)  # the owner is locked out
+
+        token = re.search(r'/recovery/cancel\?notice=([A-Za-z0-9_\-]+)', mail.outbox[0].body).group(1)
+        r = self.anon.post(reverse('recovery-notice-cancel'), {'token': token}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
+        mail.outbox.clear()
+
+        cache.clear()
+        owners_key = fx.hybrid_public_key()
+        self._post('active@example.com', requester_public_key=owners_key)
+        self.assertEqual(len(mail.outbox), 1)
+        attempt = setup.recovery_attempts.get(status='initiated')
+        self.assertEqual(bytes(attempt.requester_public_key), base64.b64decode(owners_key))
+
+    def test_a_cancelled_requester_key_cannot_start_again(self):
+        # A replay of the key must not bring back a recovery the owner stopped
+        self._post('active@example.com')
+        setup = PasskeyRecoverySetup.objects.get(user__email='active@example.com')
+        setup.recovery_attempts.update(status='cancelled')
+        mail.outbox.clear()
+        cache.clear()
+        self._post('active@example.com')
+        self.assertEqual(setup.recovery_attempts.count(), 1)
+        self.assertEqual(mail.outbox, [])
+
     def test_a_broker_outage_gives_the_same_answer(self):
         from auth_module.tasks import start_guardian_recovery
         baseline = self._post('nobody@example.com')
