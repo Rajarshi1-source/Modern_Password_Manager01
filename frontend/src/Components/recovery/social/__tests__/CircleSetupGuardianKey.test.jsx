@@ -19,7 +19,7 @@ import GuardianKey from '../GuardianKey';
 
 describe('CircleSetup', () => {
   it('refuses an odd-length hex secret with the validation message', async () => {
-    const { container } = render(<CircleSetup />);
+    const { container } = render(<CircleSetup allowNewCircles />);
     await waitFor(() => expect(ApiService.socialRecovery.listCircles).toHaveBeenCalled());
     fireEvent.click(screen.getByText('+ New Circle'));
     fireEvent.change(screen.getByPlaceholderText(/64\+ hex chars/), { target: { value: 'a'.repeat(33) } });
@@ -29,7 +29,7 @@ describe('CircleSetup', () => {
   });
 
   it('reports a malformed or reused guardian key as an input error', async () => {
-    const { container } = render(<CircleSetup />);
+    const { container } = render(<CircleSetup allowNewCircles />);
     await waitFor(() => expect(ApiService.socialRecovery.listCircles).toHaveBeenCalled());
     fireEvent.click(screen.getByText('+ New Circle'));
     fireEvent.change(screen.getByPlaceholderText(/64\+ hex chars/), { target: { value: 'ab'.repeat(32) } });
@@ -52,7 +52,7 @@ describe('CircleSetup', () => {
 
   it('sends each guardian key in canonical base64, as it was sealed to', async () => {
     ApiService.socialRecovery.createCircle.mockResolvedValueOnce({ data: {} });
-    const { container } = render(<CircleSetup />);
+    const { container } = render(<CircleSetup allowNewCircles />);
     await waitFor(() => expect(ApiService.socialRecovery.listCircles).toHaveBeenCalled());
     fireEvent.click(screen.getByText('+ New Circle'));
     fireEvent.change(screen.getByPlaceholderText(/64\+ hex chars/), { target: { value: 'ab'.repeat(32) } });

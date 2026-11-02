@@ -125,8 +125,9 @@ def _build_equality_proof(voucher_public_key: str, circle_id) -> tuple[bytes, by
     voucher at attestation time.
 
     The stored blinding factor ``r1`` is deterministically derived from the
-    ``salt`` now persisted on the :class:`RelationshipCommitment` row, exactly
-    how a real voucher would reconstruct it from their invitation payload.
+    ``salt`` persisted on the :class:`RelationshipCommitment` row. This reads
+    it from the database: no API gives it to a real voucher, so only a test
+    can build this proof.
     """
     m_bytes = f"{voucher_public_key}|{circle_id}".encode("utf-8")
     m_scalar = _scalar_from_bytes(m_bytes)
