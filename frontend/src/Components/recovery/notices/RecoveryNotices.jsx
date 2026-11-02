@@ -12,7 +12,10 @@ export default function RecoveryNotices() {
   useEffect(() => {
     ApiService.recoveryNotices.list()
       .then((resp) => setNotices(resp.data?.notices || []))
-      .catch((err) => setError(ApiService.handleError(err).error || 'Could not load notices.'));
+      .catch((err) => {
+        const data = ApiService.handleError(err) || {};
+        setError(data.error || data.detail || 'Could not load notices.');
+      });
   }, []);
 
   if (error) return <p role="alert">{error}</p>;
