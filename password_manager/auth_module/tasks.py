@@ -181,7 +181,10 @@ def _start_guardian_attempt(setup_id, requester_public_key, device_fingerprint, 
         if attempt is not None and (attempt.canary_alert_sent_at or attempt.status != 'initiated'):
             return True
         if attempt is None:
-            recent_attempts = usable.filter(
+            # Anyone can start an attempt for this email. Cancelled ones do not
+            # count, so the owner's one cancel link, which stops every open
+            # attempt, also frees the slots a stranger used up.
+            recent_attempts = usable.exclude(status='cancelled').filter(
                 initiated_at__gte=timezone.now() - timedelta(days=30),
             ).count()
             if recent_attempts >= recovery_setup.max_recovery_attempts_per_month:
