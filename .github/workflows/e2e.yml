@@ -243,6 +243,26 @@ jobs:
         working-directory: ./frontend
         run: npx playwright install --with-deps chromium
 
+      # Before the main run, which stops at --max-failures=40 and has yet to
+      # reach this spec. Its own --output and reporter, as the main run clears
+      # test-results/ and rewrites e2e-report/.
+      - name: Run guardian recovery E2E test
+        id: guardian
+        working-directory: ./frontend
+        run: >-
+          npx playwright test e2e/guardian_recovery.spec.js
+          --project=chromium --retries=0 --trace=retain-on-failure
+          --reporter=list --output=guardian-test-results
+        continue-on-error: true
+
+      # The job's tick stays green either way (continue-on-error above).
+      - name: Note the guardian recovery result
+        if: always() && steps.guardian.outcome != 'skipped'
+        env:
+          GUARDIAN_OUTCOME: ${{ steps.guardian.outcome }}
+        run: |
+          echo "## Guardian recovery E2E test: $GUARDIAN_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run Playwright E2E tests
         id: playwright
         working-directory: ./frontend
@@ -261,7 +281,7 @@ jobs:
         # empty/useless playwright-report artifact. This flag records a
         # trace directly on failure regardless of retry count, without
         # re-enabling retries.
-        run: npm run test:e2e:ci -- --trace=retain-on-failure
+        run: npm run test:e2e:ci -- --trace=retain-on-failure --grep-invert "recovers with guardians"
         continue-on-error: true
 
       - name: Note when Playwright never ran
@@ -282,5 +302,6 @@ jobs:
           path: |
             frontend/e2e-report/
             frontend/test-results/
+            frontend/guardian-test-results/
           if-no-files-found: warn
           retention-days: 14
