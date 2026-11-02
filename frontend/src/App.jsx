@@ -2071,6 +2071,7 @@ function App() {
               <Link to="/security/zk-verify" className="nav-link">ZK Verify</Link>
               <Link to="/security/zk-sessions" className="nav-link">ZK Sessions</Link>
               <Link to="/security/recovery-notices" className="nav-link">Recovery Activity</Link>
+              <Link to="/recovery/guardian/setup" className="nav-link">Guardian Recovery</Link>
               <Link to="/security/reputation" className="nav-link">Reputation</Link>
               <Link to="/security/ambient" className="nav-link">Ambient</Link>
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>

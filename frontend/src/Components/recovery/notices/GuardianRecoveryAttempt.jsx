@@ -59,9 +59,13 @@ export default function GuardianRecoveryAttempt() {
 
   const validLink = ATTEMPT_ID.test(attemptId) && KEY_FINGERPRINT.test(fingerprint);
 
-  const describe = (err, fallback) => (err?.response?.status === 429
-    ? 'Too many tries from this network. Wait a while and try again.'
-    : ApiService.handleError(err).error || fallback);
+  const describe = (err, fallback) => {
+    if (err?.response?.status !== 429) return ApiService.handleError(err).error || fallback;
+    // A throttle's answer has a code and says only "Too many requests"; the
+    // monthly limit's has no code and gives its own reason.
+    const { code, error } = err.response.data || {};
+    return (!code && error) || 'Too many tries from this network. Wait a while and try again.';
+  };
 
   const refresh = useCallback(async (requesterTokenValue) => {
     const { data } = await ApiService.quantumRecovery.recoveryProgress({

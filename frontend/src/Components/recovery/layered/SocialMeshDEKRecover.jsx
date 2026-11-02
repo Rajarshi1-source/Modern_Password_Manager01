@@ -38,6 +38,7 @@
  * behavior change.
  */
 import React, { lazy, Suspense, useCallback, useState } from 'react';
+import { Link } from 'react-router-dom';
 import sessionVaultCryptoV3 from '../../../services/sessionVaultCryptoV3';
 import recoveryFactorService from '../../../services/recoveryFactorService';
 import { bytesToHex } from '../../../utils/hex';
@@ -199,7 +200,7 @@ export default function SocialMeshDEKRecover() {
           <h1>Recover with Social-Mesh</h1>
           <p role="alert" data-testid="sm-recover-unavailable">
             This recovery is not available. If you set up guardians, use{' '}
-            <a href="/recovery/guardian/start">guardian recovery</a>.
+            <Link to="/recovery/guardian/start">guardian recovery</Link>.
           </p>
         </section>
       );

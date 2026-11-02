@@ -140,6 +140,20 @@ export default function GuardianSetup() {
     );
   }
 
+  // The vault key lives only in this page's memory, so a reload or a typed
+  // address drops it, and the form below could only fail once it was filled in.
+  if (!sessionVaultCryptoV3.hasSessionKey()) {
+    return (
+      <section data-testid="guardian-setup">
+        <h1>Choose your guardians</h1>
+        <p role="alert" data-testid="guardian-setup-locked">
+          Your vault is locked on this page, which happens after a reload. Sign
+          out, sign in again, and open Guardian Recovery from the menu.
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section data-testid="guardian-setup">
       <h1>Choose your guardians</h1>

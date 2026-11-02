@@ -253,9 +253,9 @@ jobs:
           npx playwright test e2e/guardian_recovery.spec.js
           --project=chromium --retries=0 --trace=retain-on-failure
           --reporter=list --output=guardian-test-results
-        continue-on-error: true
 
-      # The job's tick stays green either way (continue-on-error above).
+      # A failure shows on the step above; the job-level continue-on-error
+      # keeps it from blocking a merge.
       - name: Note the guardian recovery result
         if: always() && steps.guardian.outcome != 'skipped'
         env:
@@ -265,6 +265,9 @@ jobs:
 
       - name: Run Playwright E2E tests
         id: playwright
+        # Runs after a failed guardian spec, but not after a failed setup step,
+        # which skips the guardian step too ("Note when Playwright never ran").
+        if: ${{ !cancelled() && (steps.guardian.outcome == 'success' || steps.guardian.outcome == 'failure') }}
         working-directory: ./frontend
         # playwright.config.js's `webServer` block boots `npm run dev` on
         # :5173 itself (reuseExistingServer is false on CI), so no manual
