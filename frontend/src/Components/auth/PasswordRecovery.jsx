@@ -365,6 +365,10 @@ const PasswordRecovery = () => {
                 Use Recovery Key
               </Button>
 
+              <SecondaryButton type="button" onClick={() => navigate('/recovery/guardian/start')} style={{ marginTop: '12px' }}>
+                Recover with Guardians
+              </SecondaryButton>
+
               <SecondaryButton type="button" onClick={() => navigate('/')} style={{ marginTop: '12px' }}>
                 Back to Login
               </SecondaryButton>

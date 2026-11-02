@@ -198,6 +198,9 @@ const ApiService = {
     // The same { message } for every email; the attempt link goes to the account's email.
     initiateRecovery: (data) => api.post('/auth/quantum-recovery/initiate_recovery/', data),
     submitChallengeResponse: (data) => api.post('/auth/quantum-recovery/respond_to_challenge/', data),
+    // These three take { attempt_id, requester_token } (sealedShareRecovery.js).
+    confirmRecovery: (data) => api.post('/auth/quantum-recovery/confirm_recovery/', data),
+    recoveryProgress: (data) => api.post('/auth/quantum-recovery/recovery_progress/', data),
     completeRecovery: (data) => api.post('/auth/quantum-recovery/complete_recovery/', data),
     approveRecovery: (data) => api.post('/auth/quantum-recovery/approve_recovery/', data),
     // Guardian side: fetch the sealed share for an invitation or approval,

@@ -9,6 +9,9 @@ Handles:
 """
 
 from celery import shared_task
+from django.conf import settings
+from django.core.mail import send_mail
+from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
 import hashlib
@@ -17,6 +20,7 @@ import time as _time
 import logging
 
 from .quantum_recovery_models import (
+    RecoveryGuardian,
     RecoveryAttempt,
     TemporalChallenge,
     GuardianApproval,
@@ -140,119 +144,127 @@ def send_temporal_challenge(challenge_id):
 @shared_task
 def request_guardian_approvals(attempt_id):
     """
-    Request approvals from guardians with randomized windows
-    to prevent collusion attacks
+    Ask each guardian to approve a confirmed attempt, in a randomized window so
+    guardians cannot coordinate. Workers acknowledge late and a repeated confirm
+    can queue this again, so a guardian already asked keeps its approval.
     """
-    try:
-        attempt = RecoveryAttempt.objects.get(id=attempt_id)
-        recovery_setup = attempt.recovery_setup
-        
-        # Get active guardians
-        guardians = recovery_setup.guardians.filter(status='active')
-        
-        if guardians.count() == 0:
+    with transaction.atomic():
+        attempt = RecoveryAttempt.objects.select_for_update().filter(id=attempt_id).first()
+        if (attempt is None or attempt.is_expired()
+                or attempt.status not in ('initiated', 'guardian_approval')):
+            return 0
+
+        guardians = attempt.recovery_setup.guardians.filter(status='active').order_by('pk')
+        if not guardians.exists():
             logger.warning(f"No active guardians for attempt {attempt_id}")
-            return
-        
-        # Calculate how many guardian approvals needed
-        approvals_needed = attempt.guardian_approvals_required
-        selected_guardians = list(guardians[:approvals_needed])
-        
-        # Create approval requests with randomized windows
+            return 0
+
+        asked = set(attempt.guardian_approvals.values_list('guardian_id', flat=True))
         base_time = timezone.now()
-        
-        for i, guardian in enumerate(selected_guardians):
+        for guardian in guardians[:attempt.guardian_approvals_required]:
+            if guardian.pk in asked:
+                continue
             # Randomize approval window start (prevents coordinated attack)
-            window_start_offset = random.uniform(0, 12)  # 0-12 hours
-            window_start = base_time + timedelta(hours=window_start_offset)
-            window_end = window_start + timedelta(hours=24)  # 24-hour window
-            
-            # Generate secure approval token
-            approval_token = secrets.token_urlsafe(32)
-            
-            # Create approval request
-            approval = GuardianApproval.objects.create(
+            window_start = base_time + timedelta(hours=random.uniform(0, 12))  # nosec B311
+            GuardianApproval.objects.create(
                 recovery_attempt=attempt,
                 guardian=guardian,
-                approval_token=approval_token,
+                approval_token=secrets.token_urlsafe(32),
                 approval_window_start=window_start,
-                approval_window_end=window_end
+                approval_window_end=window_start + timedelta(hours=24),
             )
-            
-            # Schedule approval request notification
-            send_guardian_approval_request.apply_async(
-                args=[str(approval.id)],
-                eta=window_start
-            )
-        
-        # Update attempt status
+
         attempt.status = 'guardian_approval'
-        attempt.save()
-        
-        logger.info(f"Created {len(selected_guardians)} guardian approval requests for attempt {attempt_id}")
-        
-    except Exception as e:
-        logger.error(f"Error requesting guardian approvals: {str(e)}")
+        attempt.save(update_fields=['status'])
+        approvals = list(attempt.guardian_approvals.filter(status='pending'))
+
+    # The email goes out when the guardian's window opens.
+    for approval in approvals:
+        send_guardian_approval_request.apply_async(
+            args=[str(approval.id)], eta=approval.approval_window_start)
+    logger.info(f"Requested {len(approvals)} guardian approvals for attempt {attempt_id}")
+    return len(approvals)
 
 
-@shared_task
-def send_guardian_approval_request(approval_id):
+@shared_task(bind=True, max_retries=3, default_retry_delay=600)
+def send_guardian_approval_request(self, approval_id):
     """
-    Send approval request to a guardian
+    Email a guardian its approval link, unless the attempt has closed since the
+    window was picked. A task with a far-off ETA can be delivered more than once
+    (the broker's visibility timeout), and the audit entry below stops a repeat.
     """
-    try:
-        approval = GuardianApproval.objects.get(id=approval_id)
-        guardian = approval.guardian
+    with transaction.atomic():
+        approval = GuardianApproval.objects.select_for_update(of=('self',)).select_related(
+            'guardian', 'recovery_attempt__recovery_setup__user',
+        ).filter(id=approval_id, status='pending').first()
+        if approval is None:
+            return False
         attempt = approval.recovery_attempt
+        if attempt.status != 'guardian_approval' or attempt.is_expired():
+            return False
+        if RecoveryAuditLog.objects.filter(
+                event_type='guardian_approval_requested', recovery_attempt_id=attempt.id,
+                event_data__approval_id=str(approval_id)).exists():
+            return False
+
         user = attempt.recovery_setup.user
-        
-        # Decrypt guardian contact info (simplified here)
-        guardian_email = guardian.encrypted_guardian_info.decode('utf-8')
-        
-        # Prepare approval request message
-        approval_url = f"https://securevault.com/recovery/guardian-approve/{approval.approval_token}"
-        
-        message = f"""
-        Recovery Approval Request
-        
-        A user you're protecting has initiated account recovery.
-        
-        If you recognize this request, please approve it:
-        {approval_url}
-        
-        This request expires at: {approval.approval_window_end}
-        
-        If you don't recognize this request, please report it immediately.
-        """
-        
-        # Send email (using Django email backend)
-        from django.core.mail import send_mail
-        send_mail(
-            subject='Recovery Approval Needed - SecureVault',
-            message=message,
-            from_email='noreply@securevault.com',
-            recipient_list=[guardian_email],
-            fail_silently=False
-        )
-        
-        # Log audit event
+        approval_url = (f"{settings.FRONTEND_URL.rstrip('/')}/recovery/guardian-approve/"
+                        f"{approval.approval_token}")
+        try:
+            send_mail(
+                'Recovery approval needed',
+                f'Someone started account recovery for {user.username}, who chose you as a guardian.\n\n'
+                'Contact them by phone or in person before you do anything. If they did not '
+                'start this, deny it. If they did, ask them to read you the code on their '
+                'recovery page, and enter it here, in the browser that holds your guardian key:\n'
+                f'{approval_url}\n\n'
+                f'This request closes at {approval.approval_window_end:%Y-%m-%d %H:%M} UTC.',
+                None,
+                [approval.guardian.encrypted_guardian_info.decode('utf-8')],
+            )
+        except Exception as exc:
+            raise self.retry(exc=exc)
+
         RecoveryAuditLog.objects.create(
             user=user,
             event_type='guardian_approval_requested',
             recovery_attempt_id=attempt.id,
             event_data={
-                'guardian_id': str(guardian.id),
-                'approval_id': str(approval_id)
+                'guardian_id': str(approval.guardian_id),
+                'approval_id': str(approval_id),
             },
             cryptographic_hash=hashlib.sha256(
                 f"{user.id}:{_time.time()}".encode()
             ).hexdigest(),
         )
-        
-        logger.info(f"Sent guardian approval request {approval_id}")
-        
-    except Exception as e:
-        logger.error(f"Error sending guardian approval request {approval_id}: {str(e)}")
+    logger.info(f"Sent guardian approval request {approval_id}")
+    return True
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=600)
+def send_guardian_invitation(self, guardian_id):
+    """Email a guardian its invitation link. The owner's setup page also shows
+    the link, so a failed send does not strand the setup."""
+    guardian = RecoveryGuardian.objects.select_related('recovery_setup__user').filter(
+        id=guardian_id, status='pending').first()
+    if guardian is None or not guardian.is_invitation_valid():
+        return False
+    invitation_url = (f"{settings.FRONTEND_URL.rstrip('/')}/recovery/guardian-invite/"
+                      f"{guardian.invitation_token}")
+    try:
+        send_mail(
+            'You have been asked to be a recovery guardian',
+            f'{guardian.recovery_setup.user.username} chose you as a recovery guardian. '
+            'If you do not know them or did not give them your guardian key, ignore this email.\n\n'
+            'To accept, open this link in the browser that holds your guardian key:\n'
+            f'{invitation_url}\n\n'
+            f'The invitation closes at {guardian.invitation_expires_at:%Y-%m-%d %H:%M} UTC.',
+            None,
+            [guardian.encrypted_guardian_info.decode('utf-8')],
+        )
+    except Exception as exc:
+        raise self.retry(exc=exc)
+    return True
 
 
 @shared_task

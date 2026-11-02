@@ -65,7 +65,7 @@ class TestRecoveryInitiation(TestCase):
                           side_effect=lambda *a: start_guardian_recovery.apply(args=a)):
             response = self.client.post('/api/auth/quantum-recovery/initiate_recovery/', {
                 'email': 'test@example.com',
-                'requester_public_key': fx.hybrid_public_key(),
+                'requester_public_key': fx.hybrid_public_key(), 'requester_token_hash': fx.requester_token()[1],
                 'device_fingerprint': 'test_fp_' + ('a' * 64)
             }, content_type='application/json')
         
@@ -82,7 +82,7 @@ class TestRecoveryInitiation(TestCase):
         """Test recovery initiation with non-existent email"""
         response = self.client.post('/api/auth/quantum-recovery/initiate_recovery/', {
             'email': 'nonexistent@example.com',
-            'requester_public_key': fx.hybrid_public_key(),
+            'requester_public_key': fx.hybrid_public_key(), 'requester_token_hash': fx.requester_token()[1],
             'device_fingerprint': 'test_fp'
         }, content_type='application/json')
         
@@ -97,7 +97,7 @@ class TestRecoveryInitiation(TestCase):
         
         response = self.client.post('/api/auth/quantum-recovery/initiate_recovery/', {
             'email': 'test@example.com',
-            'requester_public_key': fx.hybrid_public_key(),
+            'requester_public_key': fx.hybrid_public_key(), 'requester_token_hash': fx.requester_token()[1],
             'device_fingerprint': 'test_fp'
         }, content_type='application/json')
         
@@ -359,7 +359,7 @@ class TestRateLimiting(TestCase):
         # 4th attempt should be blocked (if rate limiting is implemented)
         response = self.client.post('/api/auth/quantum-recovery/initiate_recovery/', {
             'email': 'test@example.com',
-            'requester_public_key': fx.hybrid_public_key(),
+            'requester_public_key': fx.hybrid_public_key(), 'requester_token_hash': fx.requester_token()[1],
             'device_fingerprint': 'test_fp_4'
         }, content_type='application/json')
         

@@ -2363,7 +2363,7 @@ frontend/src/
 │   │   ├── 📄 PasswordRecovery.jsx         # Password recovery (636 lines)
 │   │   ├── 📄 PasskeyPrimaryRecoverySetup.jsx # Primary recovery (451 lines)
 │   │   ├── 📄 PasskeyPrimaryRecoveryInitiate.jsx # Recovery start (517 lines)
-│   │   ├── 📄 QuantumRecoverySetup.jsx     # Quantum recovery UI (696 lines)
+│   │   ├── 📄 recovery/guardian/GuardianSetup.jsx  # Guardian recovery setup
 │   │   ├── 📄 OAuthCallback.jsx            # OAuth callback (334 lines)
 │   │   └── 📄 SocialLoginButtons.jsx       # Social login (98 lines)
 │   │
@@ -5675,7 +5675,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) includes:
 | `Components/auth/PasswordRecovery.jsx` | Password recovery (636 lines) |
 | `Components/auth/PasskeyPrimaryRecoverySetup.jsx` | Primary recovery setup (451 lines) |
 | `Components/auth/PasskeyPrimaryRecoveryInitiate.jsx` | Recovery initiation (517 lines) |
-| `Components/auth/QuantumRecoverySetup.jsx` | Quantum recovery UI (696 lines) |
+| `Components/recovery/guardian/GuardianSetup.jsx` | Guardian recovery setup |
 | `Components/auth/OAuthCallback.jsx` | OAuth callback handler (334 lines) |
 | `Components/auth/SocialLoginButtons.jsx` | Social login UI (98 lines) |
 | `Components/sharedfolders/SharedFoldersDashboard.jsx` | Shared folders UI (376 lines) |

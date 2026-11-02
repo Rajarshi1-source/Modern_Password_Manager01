@@ -26,6 +26,8 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 
 # Load task modules from all registered Django apps.
 app.autodiscover_tasks()
+# Guardian recovery's tasks are not in a module named tasks.py.
+app.autodiscover_tasks(['auth_module'], related_name='quantum_recovery_tasks')
 
 # Configure Celery settings
 app.conf.update(

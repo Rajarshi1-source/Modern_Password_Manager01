@@ -205,9 +205,8 @@ export default function SocialMeshDEKEnroll() {
         <section data-testid="social-mesh-dek-enroll">
           <h1>Set up Social-Mesh Recovery</h1>
           <p role="alert" data-testid="sm-enroll-unavailable">
-            Social-Mesh enrollment is not yet available. It depends on the
-            client-side Shamir + Kyber pipeline, which is on the roadmap.
-            Until then, please use Recovery Key or Time-Locked recovery.
+            This enrollment is not available. To let trusted people help you
+            recover, use <a href="/recovery/guardian/setup">guardian recovery</a>.
           </p>
         </section>
       );

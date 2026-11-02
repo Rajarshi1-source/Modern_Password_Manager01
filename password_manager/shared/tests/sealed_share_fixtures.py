@@ -42,5 +42,10 @@ def share_proof():
     return b64(proof), b64(hashlib.sha256(proof).digest())
 
 
+def requester_token():
+    """Return ``(token_b64, token_hash_b64)``."""
+    return share_proof()
+
+
 def seed_check():
     return b64(os.urandom(32))

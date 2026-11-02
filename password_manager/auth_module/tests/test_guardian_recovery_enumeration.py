@@ -72,6 +72,7 @@ class AccountFixtureMixin:
     def _post(self, email, **extra):
         return self.anon.post(self.url, {
             'email': email, 'requester_public_key': self.key,
+            'requester_token_hash': fx.requester_token()[1],
             'device_fingerprint': 'fp', **extra,
         }, format='json')
 
@@ -125,7 +126,8 @@ class InitiateAnswersEveryEmailAlikeTests(AccountFixtureMixin, TestCase):
                     self.assertEqual(self._observe(email, device_fingerprint=fingerprint), baseline)
 
     def test_bad_input_is_refused_the_same_way_for_every_email(self):
-        for bad in ({'requester_public_key': 'nope'}, {'requester_public_key': None}):
+        for bad in ({'requester_public_key': 'nope'}, {'requester_public_key': None},
+                    {'requester_token_hash': 'nope'}, {'requester_token_hash': None}):
             answers = {self._observe(email, **bad) for email in self.EMAILS}
             self.assertEqual(len(answers), 1, answers)
             self.assertEqual(answers.pop()[0], 400)

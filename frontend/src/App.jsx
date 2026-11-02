@@ -51,6 +51,10 @@ const SocialMeshDEKRecover = lazy(() => import('./Components/recovery/layered/So
 const TimeLockedEnroll = lazy(() => import('./Components/recovery/layered/TimeLockedEnroll'));
 const TimeLockedRecover = lazy(() => import('./Components/recovery/layered/TimeLockedRecover'));
 const RecoveryNoticeCancel = lazy(() => import('./Components/recovery/notices/RecoveryNoticeCancel'));
+const GuardianSetup = lazy(() => import('./Components/recovery/guardian/GuardianSetup'));
+const GuardianInvite = lazy(() => import('./Components/recovery/guardian/GuardianInvite'));
+const GuardianApprove = lazy(() => import('./Components/recovery/guardian/GuardianApprove'));
+const GuardianRecoveryStart = lazy(() => import('./Components/recovery/guardian/GuardianRecoveryStart'));
 const GuardianRecoveryAttempt = lazy(() => import('./Components/recovery/notices/GuardianRecoveryAttempt'));
 const RecoveryNotices = lazy(() => import('./Components/recovery/notices/RecoveryNotices'));
 const TimeLockCancel = lazy(() => import('./Components/recovery/notices/TimeLockCancel'));
@@ -2303,6 +2307,16 @@ function App() {
                 {/* The link in the guardian recovery email; the attempt ID
                     reaches only the account's email. */}
                 <Route path="/recovery/guardian-attempt" element={<GuardianRecoveryAttempt />} />
+                <Route path="/recovery/guardian/setup" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load guardian setup">
+                      <GuardianSetup />
+                    </ErrorBoundary>
+                  )
+                } />
+                <Route path="/recovery/guardian/start" element={<GuardianRecoveryStart />} />
+                <Route path="/recovery/guardian-invite/:token" element={<GuardianInvite />} />
+                <Route path="/recovery/guardian-approve/:token" element={<GuardianApprove />} />
                 <Route path="/recovery/time-lock/cancel" element={<TimeLockCancel />} />
                 <Route path="/security/recovery-notices" element={
                   !isAuthenticated ? <Navigate to="/" /> : <RecoveryNotices />

@@ -264,6 +264,11 @@ class RecoveryAttempt(models.Model):
     # One-time hybrid public key of the requester's device; guardians re-seal
     # their shares to it.
     requester_public_key = models.BinaryField(default=bytes, blank=True)
+    # SHA-256 of a token only the requesting device can derive from its
+    # one-time secret key. The attempt ID comes by email; both are needed to
+    # act on the attempt, and a copy of this table holds neither the token nor
+    # anything that opens a share.
+    requester_token_hash = models.BinaryField(default=bytes, blank=True)
     
     # Temporal Proof-of-Identity tracking
     challenges_sent = models.IntegerField(default=0)
