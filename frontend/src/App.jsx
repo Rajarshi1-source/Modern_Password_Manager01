@@ -51,6 +51,7 @@ const SocialMeshDEKRecover = lazy(() => import('./Components/recovery/layered/So
 const TimeLockedEnroll = lazy(() => import('./Components/recovery/layered/TimeLockedEnroll'));
 const TimeLockedRecover = lazy(() => import('./Components/recovery/layered/TimeLockedRecover'));
 const RecoveryNoticeCancel = lazy(() => import('./Components/recovery/notices/RecoveryNoticeCancel'));
+const GuardianRecoveryAttempt = lazy(() => import('./Components/recovery/notices/GuardianRecoveryAttempt'));
 const RecoveryNotices = lazy(() => import('./Components/recovery/notices/RecoveryNotices'));
 const TimeLockCancel = lazy(() => import('./Components/recovery/notices/TimeLockCancel'));
 const PasskeyManagement = lazy(() => import('./Components/auth/PasskeyManagement'));
@@ -2299,6 +2300,9 @@ function App() {
                 {/* "This wasn't me" link from recovery notice emails; it
                     works signed in or not. */}
                 <Route path="/recovery/cancel" element={<RecoveryNoticeCancel />} />
+                {/* The link in the guardian recovery email; the attempt ID
+                    reaches only the account's email. */}
+                <Route path="/recovery/guardian-attempt" element={<GuardianRecoveryAttempt />} />
                 <Route path="/recovery/time-lock/cancel" element={<TimeLockCancel />} />
                 <Route path="/security/recovery-notices" element={
                   !isAuthenticated ? <Navigate to="/" /> : <RecoveryNotices />

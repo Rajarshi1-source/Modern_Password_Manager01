@@ -36,12 +36,19 @@ from .quantum_recovery_models import (
     BehavioralBiometrics,
     RecoveryShardType
 )
-from .recovery_notice import notify as notify_recovery
-from .recovery_throttling import RecoveryThrottle
+from .recovery_notice import dispatch as dispatch_task, notify as notify_recovery
+from .recovery_throttling import RecoveryInitiateThrottle, RecoveryThrottle
 from .services.quantum_crypto_service import quantum_crypto_service
+from .tasks import start_guardian_recovery
 from shared import sealed_shares
+from shared.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
+
+GUARDIAN_RECOVERY_MESSAGE = (
+    'If guardian recovery is available for this account, a link to continue '
+    'has been sent to its email address.'
+)
 
 
 def _parse_sealed_guardian(g):
@@ -99,6 +106,10 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
     RECOVERY_THROTTLED_ACTIONS = {'complete_recovery'}
 
     def get_throttles(self):
+        # Per client, not per account: each initiate queues a task, and the
+        # account's own monthly limit cannot show in the answer.
+        if getattr(self, 'action', None) == 'initiate_recovery':
+            return [RecoveryInitiateThrottle()]
         if getattr(self, 'action', None) in self.RECOVERY_THROTTLED_ACTIONS:
             return [RecoveryThrottle()]
         return super().get_throttles()
@@ -332,10 +343,10 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def initiate_recovery(self, request):
         """
-        Initiate passkey recovery process
-        
+        Start guardian recovery. Anonymous: says nothing about the account.
+
         POST /api/auth/quantum-recovery/initiate_recovery/
-        
+
         Request body:
         {
             "email": "user@example.com",
@@ -345,10 +356,16 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
 
         Guardians re-seal their shares to requester_public_key; the private
         key stays on the requesting device.
+
+        Every email gets the same synchronous work (validate, enqueue) and the
+        same answer. The account lookup, the attempt and the email with its
+        link happen in tasks.start_guardian_recovery, so neither the response
+        nor its timing says whether the email has an account, or whether its
+        recovery is set up, travel-locked or at its monthly limit.
         """
         try:
             email = request.data.get('email')
-            if not email:
+            if not email or not isinstance(email, str):
                 return Response({
                     'error': 'Email required'
                 }, status=status.HTTP_400_BAD_REQUEST)
@@ -359,94 +376,24 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     'error': f"'requester_public_key' {sealed_shares.INVALID_HYBRID_PUBLIC_KEY}"
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Find user and recovery setup
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            
-            try:
-                user = User.objects.get(email=email, is_active=True)
-                recovery_setup = user.passkey_recovery_setup
-            except (User.DoesNotExist, PasskeyRecoverySetup.DoesNotExist):
-                # Return generic message to prevent user enumeration
-                return Response({
-                    'message': 'If recovery is configured, you will receive instructions shortly.'
-                })
-            
-            # Check if recovery is active
-            if not recovery_setup.is_active:
-                return Response({
-                    'error': 'Recovery system not fully configured'
-                }, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Check travel lock
-            if recovery_setup.is_travel_locked():
-                return Response({
-                    'error': f'Recovery is locked until {recovery_setup.travel_lock_until}'
-                }, status=status.HTTP_403_FORBIDDEN)
-            
-            # Check recent recovery attempts
-            recent_attempts = RecoveryAttempt.objects.filter(
-                recovery_setup=recovery_setup,
-                initiated_at__gte=timezone.now() - timedelta(days=30)
-            ).count()
-            
-            if recent_attempts >= recovery_setup.max_recovery_attempts_per_month:
-                return Response({
-                    'error': 'Maximum recovery attempts reached. Please wait.'
-                }, status=status.HTTP_429_TOO_MANY_REQUESTS)
-            
-            with transaction.atomic():
-                # Create recovery attempt
-                attempt = RecoveryAttempt.objects.create(
-                    recovery_setup=recovery_setup,
-                    initiated_from_ip=request.META.get('REMOTE_ADDR', ''),
-                    initiated_from_device_fingerprint=request.data.get('device_fingerprint', ''),
-                    requester_public_key=requester_public_key,
-                    shards_required=recovery_setup.threshold_shards,
-                    # Every active guardian is asked: completion needs
-                    # threshold_shards re-sealed shares, and asking more than
-                    # the threshold lets recovery finish if one does not answer.
-                    guardian_approvals_required=recovery_setup.guardians.filter(status='active').count(),
-                    expires_at=timezone.now() + timedelta(days=recovery_setup.decay_window_days)
-                )
-                
-                # Send canary alert to user
-                attempt.canary_alert_sent_at = timezone.now()
-                attempt.save()
-                notify_recovery(user, 'guardian_recovery_started', request)
-                
-                # Create temporal challenges (will be sent via Celery tasks)
-                # In production, trigger Celery task here
-                
-                # Log audit event
-                RecoveryAuditLog.objects.create(
-                    user=user,
-                    event_type='recovery_initiated',
-                    recovery_attempt_id=attempt.id,
-                    event_data={
-                        'attempt_id': str(attempt.id)
-                    },
-                    ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
-                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                    cryptographic_hash=hashlib.sha256(
-                        f"{user.id}:{time.time()}".encode()
-                    ).hexdigest(),
-                )
-            
-            return Response({
-                'success': True,
-                'attempt_id': str(attempt.id),
-                'message': 'Recovery initiated. Check your email for challenges.',
-                'expires_at': attempt.expires_at,
-                'canary_alert_sent': True
-            })
-            
+            # Cut down here: the task must store whatever this request sent
+            fingerprint = request.data.get('device_fingerprint')
+            dispatch_task(
+                start_guardian_recovery,
+                email,
+                sealed_shares.b64(requester_public_key),
+                fingerprint[:255] if isinstance(fingerprint, str) else '',
+                get_client_ip(request, default='127.0.0.1'),  # nosec B104
+                request.META.get('HTTP_USER_AGENT', ''),
+            )
+            return Response({'message': GUARDIAN_RECOVERY_MESSAGE})
+
         except Exception as e:
             logger.error(f"Error initiating recovery: {str(e)}")
             return Response({
                 'error': 'Failed to initiate recovery'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+
     @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def respond_to_challenge(self, request):
         """
