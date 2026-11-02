@@ -29,6 +29,7 @@ from auth_module.quantum_recovery_models import (
     RecoveryShard,
     RecoveryShardType,
 )
+from auth_module.recovery_models_v2 import RecoveryWrappedDEK
 from auth_module.services.quantum_crypto_service import quantum_crypto_service
 from shared.tests import sealed_share_fixtures as fx
 
@@ -50,11 +51,61 @@ class GuardianRecoverySetupTests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(self.user)
         self.url = reverse('quantum-recovery-setup')
+        self.factor = fx.recovery_factor(self.user)
 
     def _setup(self, guardians, **extra):
         body = {'threshold_shards': 2, 'guardians': guardians,
-                'secret_check': fx.seed_check(), **extra}
+                'secret_check': fx.seed_check(), 'recovery_factor': self.factor, **extra}
         return self.client.post(self.url, body, format='json')
+
+    def _active_factors(self):
+        return RecoveryWrappedDEK.objects.filter(
+            user=self.user, factor_type='social_mesh', status='active')
+
+    def test_the_wrapped_key_is_written_with_the_setup(self):
+        r = self._setup([_guardian(i)[0] for i in (1, 2, 3)])
+        self.assertEqual(r.status_code, 201, r.content)
+        factor = self._active_factors().get()
+        self.assertEqual(factor.blob, self.factor['blob'])
+        self.assertEqual(factor.auth_hash, self.factor['auth_hash'])
+        self.assertEqual(str(factor.dek_id), self.factor['dek_id'])
+        self.assertEqual(factor.factor_meta, {'secret_type': 'vault_dek_seed'})
+
+    def test_a_setup_needs_a_wrapped_key_for_this_vault_key(self):
+        guardians = [_guardian(i)[0] for i in (1, 2, 3)]
+        for bad in (None, 'x', {**self.factor, 'blob': {'v': 'other'}},
+                    {**self.factor, 'auth_hash': 'AB' * 32}):
+            self.assertEqual(self._setup(guardians, recovery_factor=bad).status_code, 400, bad)
+        wrong = {**self.factor, 'dek_id': '3f2b8c1e-7a4d-4e9b-8c21-5d6f7a8b9c0d'}
+        self.assertEqual(self._setup(guardians, recovery_factor=wrong).status_code, 409)
+        self.assertFalse(PasskeyRecoverySetup.objects.filter(user=self.user).exists())
+        self.assertFalse(self._active_factors().exists())
+
+    def test_a_refused_setup_keeps_the_key_that_opens_the_guardians_shares(self):
+        guardians = [_guardian(i)[0] for i in (1, 2, 3)]
+        self.assertEqual(self._setup(guardians).status_code, 201)
+        kept = self._active_factors().get()
+        second = fx.recovery_factor(self.user)
+        self.assertEqual(self._setup(guardians, recovery_factor=second).status_code, 400)
+        self.assertEqual(self._active_factors().get().pk, kept.pk)
+
+    def test_a_failed_setup_leaves_the_earlier_key_active(self):
+        guardians = [_guardian(i)[0] for i in (1, 2, 3)]
+        earlier = RecoveryWrappedDEK.objects.create(
+            user=self.user, factor_type='social_mesh', dek_id=self.factor['dek_id'],
+            blob=self.factor['blob'], auth_hash=self.factor['auth_hash'])
+        with patch.object(RecoveryShard.objects, 'create', side_effect=RuntimeError('db')):
+            self.assertEqual(self._setup(guardians).status_code, 500)
+        self.assertEqual(self._active_factors().get().pk, earlier.pk)
+        self.assertFalse(PasskeyRecoverySetup.objects.filter(user=self.user).exists())
+
+    def test_status_offers_replacing_a_setup_from_before_client_sealing(self):
+        PasskeyRecoverySetup.objects.create(
+            user=self.user, total_shards=3, threshold_shards=2, is_active=True,
+            kyber_public_key=b'old', kyber_private_key_encrypted=b'old')
+        r = self.client.get(reverse('quantum-recovery-get-status'))
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertTrue(r.json()['can_replace'])
 
     def test_sealed_shares_are_stored_exactly_as_sent_and_no_key_is_made(self):
         guardians = [_guardian(i)[0] for i in (1, 2, 3)]
@@ -149,6 +200,7 @@ class GuardianInvitationTests(TestCase):
         self.proofs = [p for _, p in made]
         r = owner.post(reverse('quantum-recovery-setup'), {
             'threshold_shards': 2, 'guardians': self.guardians,
+            'recovery_factor': fx.recovery_factor(self.user),
             'secret_check': fx.seed_check()}, format='json')
         self.assertEqual(r.status_code, 201, r.content)
         self.tokens = [s['invitation_token'] for s in r.json()['shards_created']]
@@ -197,6 +249,7 @@ class GuardianRecoveryFlowTests(TestCase):
         self.secret_check = fx.seed_check()
         r = owner.post(reverse('quantum-recovery-setup'), {
             'threshold_shards': 2, 'guardians': [g for g, _ in made],
+            'recovery_factor': fx.recovery_factor(self.user),
             'secret_check': self.secret_check}, format='json')
         self.assertEqual(r.status_code, 201, r.content)
         self.anon = APIClient()

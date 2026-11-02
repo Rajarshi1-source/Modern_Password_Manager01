@@ -74,18 +74,18 @@ export default function GuardianSetup() {
       const sealed = await sealSeedForGuardians({
         seed, threshold, guardianPublicKeys: guardians.map((g) => g.publicKey.trim()),
       });
-      // Before the setup: a wrong master password stops here, with nothing sent.
-      await sessionVaultCryptoV3.enrollRecoveryFactor({
-        factorType: 'social_mesh',
+      // A wrong master password stops here, with nothing sent. The server writes
+      // the wrapped key and the shares together, or neither.
+      const factor = await sessionVaultCryptoV3.buildRecoveryFactorEnvelope({
         secret: bytesToHex(seed),
         masterPassword,
-        meta: { secret_type: 'vault_dek_seed' },
       });
       setMasterPassword('');
       const { data } = await ApiService.quantumRecovery.setupRecovery({
         threshold_shards: threshold,
         secret_type: 'vault_dek_seed',
         secret_check: sealed.secretCheck,
+        recovery_factor: { dek_id: factor.dekId, blob: factor.blob, auth_hash: factor.authHash },
         guardians: guardians.map((g, i) => ({
           email: g.email.trim(),
           requires_video: false,

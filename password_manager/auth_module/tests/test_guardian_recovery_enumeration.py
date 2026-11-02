@@ -240,7 +240,7 @@ class InitiateTaskTests(AccountFixtureMixin, TestCase):
     def _redeliver(self):
         from auth_module.tasks import start_guardian_recovery
         return start_guardian_recovery.apply(args=(
-            'active@example.com', self.key, 'fp', '127.0.0.1', '')).get()
+            'active@example.com', self.key, 'fp', '127.0.0.1', '', fx.requester_token()[1])).get()
 
     def test_a_redelivered_task_spends_no_slot_and_sends_no_second_email(self):
         self._post('active@example.com')

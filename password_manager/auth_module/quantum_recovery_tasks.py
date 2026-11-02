@@ -186,11 +186,28 @@ def request_guardian_approvals(attempt_id):
     return len(approvals)
 
 
+def guardians_left_unasked(attempt):
+    """Whether request_guardian_approvals should run again: it never asked
+    anyone, or a guardian's window is open with no email on record because
+    queueing or sending it failed. Repeating it emails nobody twice
+    (send_guardian_approval_request)."""
+    if not attempt.guardian_approvals.exists():
+        return True
+    now = timezone.now()
+    open_ids = attempt.guardian_approvals.filter(
+        status='pending', approval_window_start__lte=now, approval_window_end__gte=now,
+    ).values_list('id', flat=True)
+    emailed = set(RecoveryAuditLog.objects.filter(
+        event_type='guardian_approval_requested', recovery_attempt_id=attempt.id,
+    ).values_list('event_data__approval_id', flat=True))
+    return any(str(approval_id) not in emailed for approval_id in open_ids)
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=600)
 def send_guardian_approval_request(self, approval_id):
     """
-    Email a guardian its approval link, unless the attempt has closed since the
-    window was picked. A task with a far-off ETA can be delivered more than once
+    Email a guardian its approval link, unless the attempt or the guardian's
+    window has closed since the window was picked. A task with a far-off ETA can be delivered more than once
     (the broker's visibility timeout), and the audit entry below stops a repeat.
     """
     with transaction.atomic():
@@ -200,7 +217,8 @@ def send_guardian_approval_request(self, approval_id):
         if approval is None:
             return False
         attempt = approval.recovery_attempt
-        if attempt.status != 'guardian_approval' or attempt.is_expired():
+        if (attempt.status != 'guardian_approval' or attempt.is_expired()
+                or timezone.now() > approval.approval_window_end):
             return False
         if RecoveryAuditLog.objects.filter(
                 event_type='guardian_approval_requested', recovery_attempt_id=attempt.id,

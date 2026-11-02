@@ -15,10 +15,12 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from auth_module.authentication import RevocableJWTAuthentication as JWTAuthentication
+from django.contrib.auth.models import User
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import transaction
 from datetime import timedelta
+import re
 import uuid
 import secrets
 import hashlib
@@ -36,10 +38,16 @@ from .quantum_recovery_models import (
     BehavioralBiometrics,
     RecoveryShardType
 )
+from .recovery_factor_view import _valid_envelope
+from .recovery_models_v2 import RecoveryWrappedDEK, VaultWrappedDEK
 from .recovery_notice import dispatch as dispatch_task, notify as notify_recovery
 from .recovery_throttling import RecoveryInitiateThrottle, RecoveryThrottle
 from .services.quantum_crypto_service import quantum_crypto_service
-from .quantum_recovery_tasks import request_guardian_approvals, send_guardian_invitation
+from .quantum_recovery_tasks import (
+    guardians_left_unasked,
+    request_guardian_approvals,
+    send_guardian_invitation,
+)
 from .tasks import (
     GUARDIAN_UNCONFIRMED_WINDOW_HOURS,
     confirmed_guardian_attempts,
@@ -88,6 +96,26 @@ def _parse_sealed_guardian(g):
     return guardian, None
 
 
+def _recovery_factor_problem(factor):
+    """The error message for setup_recovery's wrapped vault key, or None. The
+    server checks its shape and cannot open it (recovery_factor_view.py)."""
+    if not isinstance(factor, dict) or not _valid_envelope(factor.get('blob')):
+        return "'recovery_factor' needs the vault key wrapped under the recovery seed"
+    if not isinstance(factor.get('auth_hash'), str) \
+            or not re.fullmatch(r'[0-9a-f]{64}', factor['auth_hash']):
+        return "'recovery_factor' needs a valid 'auth_hash'"
+    return None
+
+
+def _setup_replaceable(setup):
+    """Whether setup_recovery replaces this setup instead of refusing. One from
+    before client-side sealing holds no recoverable secret (it cannot complete),
+    and one with an invitation that ran out can never activate."""
+    return not bytes(setup.secret_check or b'') or (
+        not setup.is_active and setup.guardians.filter(
+            status='pending', invitation_expires_at__lt=timezone.now()).exists())
+
+
 class QuantumRecoveryViewSet(viewsets.ViewSet):
     """
     ViewSet for Quantum-Resilient Recovery System
@@ -109,7 +137,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
 
     # auth_module/urls.py binds each action with as_view(), which ignores
     # @action(throttle_classes=...), so the recovery limit is applied here.
-    RECOVERY_THROTTLED_ACTIONS = {'complete_recovery'}
+    RECOVERY_THROTTLED_ACTIONS = {'confirm_recovery', 'complete_recovery'}
 
     def get_throttles(self):
         # Per client, not per account: each initiate queues a task, and the
@@ -133,6 +161,9 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             "threshold_shards": 2,
             "secret_type": "vault_dek_seed",
             "secret_check": "<base64 SHA-256 seed check>",
+            "recovery_factor": {"dek_id": "<uuid of the vault key>",
+                                "blob": {<vault key wrapped under the seed>},
+                                "auth_hash": "<hex rotation proof>"},
             "guardians": [
                 {"email": "guardian1@example.com", "requires_video": false,
                  "public_key": "<base64 X25519 + ML-KEM-768 public key>",
@@ -143,30 +174,12 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
         }
 
         The server never sees the seed or a share: it stores the sealed shares
-        and relays them, and holds no key that opens them.
+        and relays them, and holds no key that opens them. The shares and the
+        vault key wrapped under the same seed are written together: an active
+        factor is replaced only by a setup that was accepted.
         """
         try:
             user = request.user
-
-            # Check if recovery already setup. A pending setup (guardians not
-            # yet accepted) counts too: the user has one setup at most. A
-            # setup from before client-side sealing holds no recoverable
-            # secret (it cannot complete), and one with an invitation that ran
-            # out can never activate, so each is replaced once the new request
-            # is valid.
-            legacy_setup = None
-            if hasattr(user, 'passkey_recovery_setup'):
-                current = user.passkey_recovery_setup
-                if (not bytes(current.secret_check or b'')
-                        or (not current.is_active and current.guardians.filter(
-                            status='pending', invitation_expires_at__lt=timezone.now()).exists())):
-                    legacy_setup = current
-            if hasattr(user, 'passkey_recovery_setup') and legacy_setup is None:
-                return Response({
-                    'error': 'Recovery system already configured'
-                    if user.passkey_recovery_setup.is_active
-                    else 'Recovery system already set up; waiting for guardians to accept'
-                }, status=status.HTTP_400_BAD_REQUEST)
 
             if any(k in request.data for k in ('secret', 'secret_hex', 'master_secret_hex')):
                 return Response({
@@ -209,10 +222,67 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             if len({g['public_key'] for g in guardians}) != len(guardians):
                 return Response({'error': 'Each guardian needs their own key'},
                                 status=status.HTTP_400_BAD_REQUEST)
+            # A seed for the vault is no use without the vault key wrapped under it.
+            factor = None
+            if secret_type == RecoveryShard.SecretType.VAULT_DEK_SEED:
+                factor = request.data.get('recovery_factor')
+                problem = _recovery_factor_problem(factor)
+                if problem:
+                    return Response({'error': problem}, status=status.HTTP_400_BAD_REQUEST)
 
             with transaction.atomic():
-                if legacy_setup is not None:
-                    legacy_setup.delete()
+                # One setup at a time per owner, including a first setup, which
+                # has no row of its own to lock yet.
+                User.objects.select_for_update().get(pk=user.pk)
+
+                # A pending setup (guardians not yet accepted) counts too: the
+                # user has one setup at most.
+                current = PasskeyRecoverySetup.objects.filter(user=user).first()
+                if current is not None and not _setup_replaceable(current):
+                    return Response({
+                        'error': 'Recovery system already configured'
+                        if current.is_active
+                        else 'Recovery system already set up; waiting for guardians to accept'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                if factor is not None:
+                    # The current dek_id is the proof of holding the vault key
+                    # (recovery_factor_view.py). Locked against a rotation.
+                    wrapped = VaultWrappedDEK.objects.select_for_update().filter(user=user).first()
+                    if wrapped is None:
+                        return Response({'error': 'no DEK enrolled'},
+                                        status=status.HTTP_400_BAD_REQUEST)
+                    if str(wrapped.dek_id) != str(factor.get('dek_id') or ''):
+                        return Response({'error': 'dek_id mismatch'},
+                                        status=status.HTTP_409_CONFLICT)
+                    RecoveryWrappedDEK.objects.filter(
+                        user=user,
+                        factor_type=RecoveryWrappedDEK.FactorType.SOCIAL_MESH,
+                        status=RecoveryWrappedDEK.Status.ACTIVE,
+                    ).update(status=RecoveryWrappedDEK.Status.REVOKED, revoked_at=timezone.now())
+                    enrolled = RecoveryWrappedDEK.objects.create(
+                        user=user,
+                        factor_type=RecoveryWrappedDEK.FactorType.SOCIAL_MESH,
+                        dek_id=wrapped.dek_id,
+                        blob=factor['blob'],
+                        factor_meta={'secret_type': secret_type},
+                        auth_hash=factor['auth_hash'],
+                    )
+                    RecoveryAuditLog.objects.create(
+                        user=user,
+                        event_type='setup_created',
+                        event_data={
+                            'subsystem': 'recovery_factor',
+                            'factor_type': enrolled.factor_type,
+                            'factor_id': enrolled.id,
+                            'dek_id': str(wrapped.dek_id),
+                        },
+                        ip_address=get_client_ip(request),
+                        user_agent=request.META.get('HTTP_USER_AGENT', '')[:1024],
+                    )
+
+                if current is not None:
+                    current.delete()
                 recovery_setup = PasskeyRecoverySetup.objects.create(
                     user=user,
                     total_shards=len(guardians),
@@ -334,9 +404,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             return Response({
                 'recovery_configured': True,
                 'is_active': recovery_setup.is_active,
-                # setup_recovery replaces such a setup instead of refusing
-                'can_replace': not recovery_setup.is_active and guardians.filter(
-                    status='pending', invitation_expires_at__lt=timezone.now()).exists(),
+                'can_replace': _setup_replaceable(recovery_setup),
                 'total_shards': recovery_setup.total_shards,
                 'threshold_shards': recovery_setup.threshold_shards,
                 'guardians': [{
@@ -790,8 +858,8 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                                     status=status.HTTP_429_TOO_MANY_REQUESTS)
                 attempt.status = 'guardian_approval'
                 attempt.save(update_fields=['status'])
-        # Also repeats a job that was lost before it asked anyone.
-        if attempt.status == 'guardian_approval' and not attempt.guardian_approvals.exists():
+        # Also repeats a job or an email that was lost before it asked anyone.
+        if attempt.status == 'guardian_approval' and guardians_left_unasked(attempt):
             if not dispatch_task(request_guardian_approvals, str(attempt.id)):
                 return Response({'error': 'Recovery is temporarily unavailable. Try again later.'},
                                 status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -956,10 +1024,14 @@ def _recovery_progress(attempt):
     threshold = attempt.recovery_setup.threshold_shards
     approvals_received = len(_released_shares(attempt))
     release_after = _release_after(attempt)
+    # No periodic job moves an attempt to 'expired', and it can do nothing now.
+    expired = attempt.status in ('initiated', 'guardian_approval') and attempt.is_expired()
     return {
-        'status': attempt.status,
+        'status': 'expired' if expired else attempt.status,
         'threshold': threshold,
         'guardians_asked': attempt.guardian_approvals.count(),
+        'ask_again': (attempt.status == 'guardian_approval' and not expired
+                      and guardians_left_unasked(attempt)),
         'approvals_received': approvals_received,
         'denials': attempt.guardian_approvals.filter(status='denied').count(),
         'release_after': release_after,

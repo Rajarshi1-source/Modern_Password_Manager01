@@ -140,6 +140,11 @@ jobs:
       DATABASE_URL: postgresql://test_user:test_password@127.0.0.1:5432/test_db
       REDIS_URL: redis://127.0.0.1:6379/0
       ALLOWED_HOSTS: '*'
+      # No SMTP server here, and a guardian recovery attempt fails if its email does.
+      EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+      # guardian_recovery.spec.js does in minutes what takes days, and 3/hour
+      # on the wrapped-key endpoint would stop its last unlock.
+      RECOVERY_THROTTLE_RATE: 1000/hour
 
     services:
       postgres:

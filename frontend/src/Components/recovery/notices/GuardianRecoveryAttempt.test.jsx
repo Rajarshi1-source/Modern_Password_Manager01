@@ -81,6 +81,30 @@ describe('GuardianRecoveryAttempt', () => {
     expect(api.recoveryProgress).not.toHaveBeenCalled();
   });
 
+  it('treats a stored key it cannot read as no key', async () => {
+    keys.loadRequesterKeyPair.mockResolvedValue({ ...keyPair, publicKey: '%%not base64%%' });
+    renderAt(LINK);
+    await screen.findByTestId('guardian-recovery-other-device');
+    expect(api.recoveryProgress).not.toHaveBeenCalled();
+  });
+
+  it('gives no date while the wait has no start', async () => {
+    api.recoveryProgress.mockResolvedValue(progress({ release_after: null }));
+    renderAt(LINK);
+    const wait = await screen.findByTestId('guardian-recovery-wait');
+    expect(wait.textContent).toMatch(/not on record/);
+    expect(wait.textContent).not.toMatch(/1970|1969/);
+  });
+
+  it('offers to ask again only when the server says guardians were left unasked', async () => {
+    renderAt(LINK);
+    await screen.findByTestId('guardian-recovery-code');
+    expect(screen.queryByRole('button', { name: /ask my guardians again/i })).toBeNull();
+    api.recoveryProgress.mockResolvedValue(progress({ ask_again: true }));
+    fireEvent.click(screen.getByTestId('guardian-recovery-check'));
+    await screen.findByRole('button', { name: /ask my guardians again/i });
+  });
+
   it('sends the device token, and asks guardians only when the person says so', async () => {
     api.recoveryProgress.mockResolvedValue(progress({ status: 'initiated', guardians_asked: 0 }));
     api.confirmRecovery.mockResolvedValue(progress());
