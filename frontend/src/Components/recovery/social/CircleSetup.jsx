@@ -81,8 +81,14 @@ const statusBadge = (status) => {
  *   factor_meta so recovery-side code can locate the setup. When
  *   absent, the legacy flow just refreshes the local circle list
  *   and re-renders.
+ * @param {boolean} [props.allowNewCircles]
+ *   Off by default, as no circle can complete a recovery: approving needs a
+ *   proof against a stored commitment that no API hands to the voucher
+ *   (vouch_service.submit_attestation). An owner must not be left believing
+ *   they are covered. Only SocialMeshDEKEnroll passes it, behind
+ *   TIER2_ENROLL_BLOCKED.
  */
-const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
+const CircleSetup = ({ secretHex, secretType, onComplete, allowNewCircles = false } = {}) => {
   const [circles, setCircles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -249,14 +255,24 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
             attest before your secret can be reconstructed.
           </p>
         </div>
-        <button
-          className="btn-primary"
-          onClick={() => setShowForm((s) => !s)}
-          disabled={submitting}
-        >
-          {showForm ? 'Cancel' : '+ New Circle'}
-        </button>
+        {allowNewCircles && (
+          <button
+            className="btn-primary"
+            onClick={() => setShowForm((s) => !s)}
+            disabled={submitting}
+          >
+            {showForm ? 'Cancel' : '+ New Circle'}
+          </button>
+        )}
       </div>
+
+      {!allowNewCircles && (
+        <p role="alert" data-testid="circle-setup-unavailable">
+          Recovery circles are not available, and any circle listed here cannot
+          recover your account. To let trusted people help you recover, use{' '}
+          <a href="/recovery/guardian/setup">guardian recovery</a>.
+        </p>
+      )}
 
       {error && <div className="error-banner">❌ {error}</div>}
 
@@ -473,7 +489,7 @@ const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
       ) : circles.length === 0 ? (
         <div className="placeholder empty">
           <h3>No recovery circles yet</h3>
-          <p>Start by creating one and inviting trusted guardians.</p>
+          {allowNewCircles && <p>Start by creating one and inviting trusted guardians.</p>}
         </div>
       ) : (
         <div className="circle-grid">

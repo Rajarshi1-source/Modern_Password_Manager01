@@ -46,8 +46,8 @@ const RecoveryInitiation = lazy(() => import('../social/RecoveryInitiation'));
 const RecoveryProgress = lazy(() => import('../social/RecoveryProgress'));
 
 // Mirror of TIER2_ENROLL_BLOCKED on the enroll page. These pages drive
-// social-recovery circles, whose accept and attest pages still need a
-// hand-made Ed25519 signature and ZK proof, so no user can finish them.
+// social-recovery circles, which no voucher can approve even by hand: the
+// attestation needs a proof against a stored commitment that no API returns.
 // /recovery/guardian/* is the working path for the `social_mesh` factor.
 const TIER2_RECOVER_BLOCKED = true;
 

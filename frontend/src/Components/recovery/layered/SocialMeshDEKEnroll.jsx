@@ -260,6 +260,7 @@ export default function SocialMeshDEKEnroll() {
               onto the wdek factor row's factor_meta so the recovery
               side can locate the setup. */}
           <CircleSetup
+            allowNewCircles
             secretType="vault_dek_seed"
             secretHex={recoverySeedHex}
             onComplete={handleCircleComplete}
