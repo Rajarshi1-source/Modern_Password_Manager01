@@ -23,7 +23,8 @@ export default function TimeLockCancel() {
       await ApiService.recoveryNotices.cancelTimeLock(token);
       setState('done');
     } catch (err) {
-      setMessage(ApiService.handleError(err).error || 'Could not reach the server. Try again.');
+      const data = ApiService.handleError(err) || {};
+      setMessage(data.error || data.detail || 'Could not reach the server. Try again.');
       setState('error');
     }
   }
