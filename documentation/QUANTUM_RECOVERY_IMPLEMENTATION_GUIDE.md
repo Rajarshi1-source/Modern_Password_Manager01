@@ -314,18 +314,18 @@ POST /api/auth/quantum-recovery/initiate_recovery/
 Request:
 {
   "email": "user@example.com",
-  "device_fingerprint": "xyz789..."
+  "device_fingerprint": "xyz789...",
+  "requester_public_key": "<base64 one-time X25519 + ML-KEM-768 public key>"
 }
 
-Response:
+Response (the same for every email):
 {
-  "success": true,
-  "attempt_id": "uuid",
-  "message": "Recovery initiated. Check your email for challenges.",
-  "expires_at": "2025-11-01T12:00:00Z",
-  "canary_alert_sent": true
+  "message": "If guardian recovery is available for this account, a link to continue has been sent to its email address."
 }
 ```
+
+The attempt ID reaches only the account's email, in a link to
+`/recovery/guardian-attempt?attempt=<id>`.
 
 ### Respond to Challenge
 

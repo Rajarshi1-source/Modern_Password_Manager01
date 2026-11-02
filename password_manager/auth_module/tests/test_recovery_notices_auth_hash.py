@@ -31,6 +31,7 @@ from auth_module.tasks import (
     notify_passkey_recovery_started,
     send_password_reset_email,
     send_recovery_notice,
+    start_guardian_recovery,
 )
 
 VERIFIER = base64.b64encode(b'v' * 32).decode()
@@ -43,7 +44,8 @@ def _b64(raw):
 
 
 def _run_tasks_in_process(test):
-    for task in (send_password_reset_email, send_recovery_notice, notify_passkey_recovery_started):
+    for task in (send_password_reset_email, send_recovery_notice, notify_passkey_recovery_started,
+                 start_guardian_recovery):
         patcher = patch.object(task, 'delay', side_effect=lambda *a, _t=task: _t.apply(args=a))
         patcher.start()
         test.addCleanup(patcher.stop)

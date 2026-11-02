@@ -195,6 +195,7 @@ const ApiService = {
   quantumRecovery: {
     setupRecovery: (data) => api.post('/auth/quantum-recovery/setup_recovery/', data),
     getRecoveryStatus: () => api.get('/auth/quantum-recovery/get_recovery_status/'),
+    // The same { message } for every email; the attempt link goes to the account's email.
     initiateRecovery: (data) => api.post('/auth/quantum-recovery/initiate_recovery/', data),
     submitChallengeResponse: (data) => api.post('/auth/quantum-recovery/respond_to_challenge/', data),
     completeRecovery: (data) => api.post('/auth/quantum-recovery/complete_recovery/', data),

@@ -102,3 +102,93 @@ def notify_passkey_recovery_started(user_id, ip_address=None, user_agent=''):
     if user is None:
         return None
     return str(create_notice(user, 'passkey_recovery_started', ip_address, user_agent).id)
+
+
+@shared_task
+def start_guardian_recovery(email, requester_public_key, device_fingerprint, ip_address, user_agent):
+    """
+    The account-dependent half of POST /api/auth/quantum-recovery/initiate_recovery/.
+
+    The view answers every email the same way and does the same synchronous
+    work for each (validate, enqueue this task), so neither the response nor
+    its timing says whether the email has an account or what state its recovery
+    is in. Here, an account whose recovery can start gets an attempt and, by
+    email, the link to it. A travel lock or a used-up monthly limit ends it
+    quietly: one email per request would let anyone flood the account's inbox.
+    ``requester_public_key`` is base64; the view has checked it.
+    """
+    import base64
+    import hashlib
+    import time
+    from datetime import timedelta
+
+    from django.conf import settings
+    from django.core.mail import send_mail
+    from django.db import transaction
+    from django.utils import timezone
+
+    from .quantum_recovery_models import PasskeyRecoverySetup, RecoveryAttempt, RecoveryAuditLog
+    from .recovery_notice import create_notice
+
+    with transaction.atomic():
+        # Locked so concurrent requests cannot pass the monthly limit together.
+        # By setup, not user: Django does not make User.email unique, and an
+        # account without a setup must not hide one with it.
+        recovery_setup = PasskeyRecoverySetup.objects.select_for_update(of=('self',)).select_related(
+            'user'
+        ).filter(user__email=email, user__is_active=True, is_active=True).first()
+        if recovery_setup is None or recovery_setup.is_travel_locked():
+            return None
+        recent_attempts = RecoveryAttempt.objects.filter(
+            recovery_setup=recovery_setup,
+            initiated_at__gte=timezone.now() - timedelta(days=30),
+        ).count()
+        if recent_attempts >= recovery_setup.max_recovery_attempts_per_month:
+            return None
+
+        user = recovery_setup.user
+        attempt = RecoveryAttempt.objects.create(
+            recovery_setup=recovery_setup,
+            initiated_from_ip=ip_address,
+            initiated_from_device_fingerprint=device_fingerprint,
+            requester_public_key=base64.b64decode(requester_public_key),
+            shards_required=recovery_setup.threshold_shards,
+            # Every active guardian is asked: completion needs
+            # threshold_shards re-sealed shares, and asking more than
+            # the threshold lets recovery finish if one does not answer.
+            guardian_approvals_required=recovery_setup.guardians.filter(status='active').count(),
+            expires_at=timezone.now() + timedelta(days=recovery_setup.decay_window_days),
+        )
+        RecoveryAuditLog.objects.create(
+            user=user,
+            event_type='recovery_initiated',
+            recovery_attempt_id=attempt.id,
+            event_data={'attempt_id': str(attempt.id)},
+            ip_address=ip_address,
+            user_agent=user_agent,
+            cryptographic_hash=hashlib.sha256(f"{user.id}:{time.time()}".encode()).hexdigest(),
+        )
+
+    # The link opens the frontend, which may be on another origin than the API.
+    # The notice's cancel link cancels this attempt (recovery_notice.py).
+    link = f"{settings.FRONTEND_URL.rstrip('/')}/recovery/guardian-attempt?attempt={attempt.id}"
+    notice = create_notice(user, 'guardian_recovery_started', ip_address, user_agent, send_email=False)
+    sent = send_mail(
+        'Guardian recovery',
+        f'Someone started guardian recovery for your account from {ip_address}. '
+        f'If it was you, this link identifies the recovery: {link} '
+        'Finish it on the device that started it, which holds the one-time key '
+        "that opens your guardians' shares. "
+        f'If it was not you, open this link to cancel it: {notice.cancel_link}',
+        None,
+        [user.email],
+        fail_silently=True,
+    )
+    if sent:
+        now = timezone.now()
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(canary_alert_sent_at=now)
+        notice.email_sent = True
+        notice.save(update_fields=['email_sent'])
+    else:
+        logger.warning('Guardian recovery email not delivered for attempt %s', attempt.id)
+    return str(attempt.id)

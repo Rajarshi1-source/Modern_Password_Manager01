@@ -15,6 +15,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.urls import reverse
 from datetime import timedelta
+from unittest.mock import patch
 from rest_framework import status
 import json
 
@@ -28,6 +29,7 @@ from ..quantum_recovery_models import (
     RecoveryAuditLog,
     RecoveryShardType
 )
+from ..tasks import start_guardian_recovery
 from shared.tests import sealed_share_fixtures as fx
 
 User = get_user_model()
@@ -56,11 +58,13 @@ class TestRecoveryInitiation(TestCase):
     
     def test_initiate_recovery_success(self):
         """Test successful recovery initiation"""
-        response = self.client.post('/api/auth/quantum-recovery/initiate_recovery/', {
-            'email': 'test@example.com',
-            'requester_public_key': fx.hybrid_public_key(),
-            'device_fingerprint': 'test_fp_' + ('a' * 64)
-        }, content_type='application/json')
+        with patch.object(start_guardian_recovery, 'delay',
+                          side_effect=lambda *a: start_guardian_recovery.apply(args=a)):
+            response = self.client.post('/api/auth/quantum-recovery/initiate_recovery/', {
+                'email': 'test@example.com',
+                'requester_public_key': fx.hybrid_public_key(),
+                'device_fingerprint': 'test_fp_' + ('a' * 64)
+            }, content_type='application/json')
         
         # Should create recovery attempt
         self.assertTrue(RecoveryAttempt.objects.filter(
@@ -94,8 +98,11 @@ class TestRecoveryInitiation(TestCase):
             'device_fingerprint': 'test_fp'
         }, content_type='application/json')
         
-        # Should fail if recovery is disabled
-        self.assertIn(response.status_code, [400, 403])
+        # The same answer as any other email, and no attempt
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(RecoveryAttempt.objects.filter(
+            recovery_setup__user=self.user
+        ).exists())
 
 
 @pytest.mark.django_db

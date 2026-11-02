@@ -20,6 +20,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from auth_module.tasks import start_guardian_recovery
 from auth_module.quantum_recovery_models import (
     GuardianApproval,
     PasskeyRecoverySetup,
@@ -184,6 +185,11 @@ class GuardianInvitationTests(TestCase):
 class GuardianRecoveryFlowTests(TestCase):
     def setUp(self):
         cache.clear()  # completion throttle counters
+        # What initiate queues runs here, so the tests can use the attempt
+        patcher = patch.object(start_guardian_recovery, 'delay',
+                               side_effect=lambda *a: start_guardian_recovery.apply(args=a))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.user = User.objects.create_user('owner', 'owner@example.com', 'Owner-Pass-1!')
         owner = APIClient()
         owner.force_authenticate(self.user)
