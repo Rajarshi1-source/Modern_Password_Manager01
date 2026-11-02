@@ -199,8 +199,14 @@ export default function SocialMeshDEKRecover() {
         <section data-testid="social-mesh-dek-recover">
           <h1>Recover with Social-Mesh</h1>
           <p role="alert" data-testid="sm-recover-unavailable">
-            This recovery is not available. If you set up guardians, use{' '}
-            <Link to="/recovery/guardian/start">guardian recovery</Link>.
+            This recovery is not available, and a recovery circle cannot recover
+            your account. Guardian recovery is separate: it works only if you set
+            up guardians for it, and a circle alone will not send you a recovery
+            email. If you did, use{' '}
+            <Link to="/recovery/guardian/start">guardian recovery</Link>. Otherwise
+            use your <Link to="/recovery/key/use-v2">recovery key</Link> or{' '}
+            <Link to="/recovery/time-lock/recover">time-locked recovery</Link>, if
+            you set one up.
           </p>
         </section>
       );
