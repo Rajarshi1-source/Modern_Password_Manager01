@@ -570,3 +570,30 @@ class WorkerRegistrationTests(TestCase):
         for name in ('request_guardian_approvals', 'send_guardian_approval_request',
                      'send_guardian_invitation'):
             self.assertIn(f'auth_module.quantum_recovery_tasks.{name}', app.tasks)
+
+
+class StaleTokenTests(GuardianFlowBase):
+    """A browser may still send an old token, on steps that need no sign-in."""
+
+    def _post(self, name, body=None):
+        cache.clear()
+        return self.anon.post(reverse(name), body or {}, format='json').status_code
+
+    def test_a_stale_bearer_token_does_not_stop_the_anonymous_steps(self):
+        self.anon.credentials(HTTP_AUTHORIZATION='Bearer stale')
+        attempt, token = self._start()  # asserts its own 200
+        self.assertEqual(self._confirm(attempt, token).status_code, 200)
+        requester = {'attempt_id': str(attempt.id), 'requester_token': token}
+        self.assertEqual(self._post('quantum-recovery-progress', requester), 200)
+        self.assertEqual(self._post('quantum-recovery-complete', requester), 400)  # still waiting
+        for name in ('quantum-recovery-approve', 'quantum-recovery-guardian-share',
+                     'quantum-recovery-guardian-invitation',
+                     'quantum-recovery-accept-invitation'):
+            self.assertEqual(self._post(name), 400, name)
+        self.assertEqual(self._post('vault-recovery-factor-lookup'), 400)
+        self.assertEqual(self._post('vault-wrapped-dek-recover-rotate'), 400)
+
+    def test_a_stale_bearer_token_still_fails_where_sign_in_is_needed(self):
+        self.anon.credentials(HTTP_AUTHORIZATION='Bearer stale')
+        self.assertEqual(self._post('quantum-recovery-setup'), 401)
+        self.assertEqual(self.anon.get(reverse('quantum-recovery-get-status')).status_code, 401)

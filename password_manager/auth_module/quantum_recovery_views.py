@@ -11,7 +11,7 @@ Provides REST API endpoints for:
 
 from rest_framework import viewsets, status
 from rest_framework.authentication import SessionAuthentication
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from auth_module.authentication import RevocableJWTAuthentication as JWTAuthentication
@@ -125,6 +125,15 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
         if getattr(self, 'action', None) in self.PUBLIC_ACTIONS:
             return [AllowAny()]
         return super().get_permissions()
+
+    def initialize_request(self, request, *args, **kwargs):
+        # A stale bearer token must not turn these into a 401: they use tokens
+        # from the body and never read request.user. Done here because DRF
+        # chooses authenticators before it sets self.action.
+        request = super().initialize_request(request, *args, **kwargs)
+        if self.action in self.PUBLIC_ACTIONS:
+            request.authenticators = ()
+        return request
 
     # auth_module/urls.py binds each action with as_view(), which ignores
     # @action(throttle_classes=...), so the recovery limit is applied here.
@@ -1061,6 +1070,7 @@ def _is_uuid(value):
 
 
 @api_view(['POST'])
+@authentication_classes([])  # a stale bearer token must not turn this into a 401
 @permission_classes([AllowAny])
 def guardian_invitation(request):
     """
@@ -1086,6 +1096,7 @@ def guardian_invitation(request):
 
 
 @api_view(['POST'])
+@authentication_classes([])  # a stale bearer token must not turn this into a 401
 @permission_classes([AllowAny])
 def accept_guardian_invitation(request):
     """

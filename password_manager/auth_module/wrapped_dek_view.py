@@ -179,6 +179,7 @@ class WrappedDEKRecoveryRotateView(APIView):
     preserved either way.
     """
 
+    authentication_classes = []  # a stale bearer token must not turn this into a 401
     permission_classes = [AllowAny]
     throttle_classes = [RecoveryCompleteThrottle]
 
