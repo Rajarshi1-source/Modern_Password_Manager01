@@ -64,7 +64,6 @@ Organized by feature/domain for maintainability.
 | `PasskeyPrimaryRecoveryInitiate.jsx` | Initiate passkey recovery |
 | `PasswordRecovery.jsx` | Password recovery flow |
 | `RecoveryKeySetup.jsx` | Setup recovery key |
-| `QuantumRecoverySetup.jsx` | Quantum-safe recovery setup |
 | `TwoFactorSetup.jsx` | Configure 2FA (TOTP, SMS) |
 | `OAuthCallback.jsx` | OAuth redirect handler |
 | `SocialLoginButtons.jsx` | Google, GitHub, etc. login buttons |

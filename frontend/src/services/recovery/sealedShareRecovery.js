@@ -128,6 +128,24 @@ export function abandonTokenHash(keyPair) {
   return toB64(sha256(fromB64(abandonToken(keyPair))));
 }
 
+/**
+ * Requester: the token that shows the server this is the device that asked for
+ * a guardian recovery. Derived from the one-time secret key, so nothing else
+ * has it. The server gets SHA-256 of it at initiation (`requesterTokenHash`).
+ */
+export function requesterToken(keyPair) {
+  const secret = fromB64(keyPair.secretKey);
+  try {
+    return toB64(sha256(concat(encoder.encode('pwm-recovery-requester-token-v1|'), secret)));
+  } finally {
+    secret.fill(0);
+  }
+}
+
+export function requesterTokenHash(keyPair) {
+  return toB64(sha256(fromB64(requesterToken(keyPair))));
+}
+
 /** Guardian or requester: a new hybrid key pair, base64-encoded. */
 export async function newHolderKeyPair() {
   const { publicKey, secretKey } = await generateHybridKeyPair();

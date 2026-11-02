@@ -39,7 +39,12 @@ from .quantum_recovery_models import (
 from .recovery_notice import dispatch as dispatch_task, notify as notify_recovery
 from .recovery_throttling import RecoveryInitiateThrottle, RecoveryThrottle
 from .services.quantum_crypto_service import quantum_crypto_service
-from .tasks import start_guardian_recovery
+from .quantum_recovery_tasks import request_guardian_approvals, send_guardian_invitation
+from .tasks import (
+    GUARDIAN_UNCONFIRMED_WINDOW_HOURS,
+    confirmed_guardian_attempts,
+    start_guardian_recovery,
+)
 from shared import sealed_shares
 from shared.client_ip import get_client_ip
 
@@ -94,7 +99,8 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
     # yet. complete_recovery returns only shares re-sealed to the requester's
     # one-time key, which nobody else can open.
     PUBLIC_ACTIONS = {'initiate_recovery', 'respond_to_challenge', 'approve_recovery',
-                      'guardian_share', 'complete_recovery'}
+                      'guardian_share', 'confirm_recovery', 'recovery_progress',
+                      'complete_recovery'}
 
     def get_permissions(self):
         if getattr(self, 'action', None) in self.PUBLIC_ACTIONS:
@@ -145,12 +151,16 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             # Check if recovery already setup. A pending setup (guardians not
             # yet accepted) counts too: the user has one setup at most. A
             # setup from before client-side sealing holds no recoverable
-            # secret (it cannot complete), so it is replaced once the new
-            # request is valid.
+            # secret (it cannot complete), and one with an invitation that ran
+            # out can never activate, so each is replaced once the new request
+            # is valid.
             legacy_setup = None
             if hasattr(user, 'passkey_recovery_setup'):
-                if not bytes(user.passkey_recovery_setup.secret_check or b''):
-                    legacy_setup = user.passkey_recovery_setup
+                current = user.passkey_recovery_setup
+                if (not bytes(current.secret_check or b'')
+                        or (not current.is_active and current.guardians.filter(
+                            status='pending', invitation_expires_at__lt=timezone.now()).exists())):
+                    legacy_setup = current
             if hasattr(user, 'passkey_recovery_setup') and legacy_setup is None:
                 return Response({
                     'error': 'Recovery system already configured'
@@ -228,7 +238,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     )
 
                     invitation_token = secrets.token_urlsafe(32)
-                    RecoveryGuardian.objects.create(
+                    guardian = RecoveryGuardian.objects.create(
                         recovery_setup=recovery_setup,
                         encrypted_guardian_info=g['email'].encode('utf-8'),  # Simplified
                         guardian_public_key=g['public_key'],
@@ -238,6 +248,8 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                         invitation_token=invitation_token,
                         invitation_expires_at=timezone.now() + timedelta(days=7)
                     )
+                    transaction.on_commit(lambda guardian_id=str(guardian.id): dispatch_task(
+                        send_guardian_invitation, guardian_id))
 
                     created_shards.append({
                         'type': 'guardian',
@@ -276,7 +288,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 'success': True,
                 'recovery_setup_id': str(recovery_setup.id),
                 'shards_created': created_shards,
-                'message': 'Recovery system initialized. Send guardian invitations to activate.'
+                'message': 'Recovery system initialized. Guardian invitations are on their way.'
             }, status=status.HTTP_201_CREATED)
 
         except Exception as e:
@@ -322,6 +334,9 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             return Response({
                 'recovery_configured': True,
                 'is_active': recovery_setup.is_active,
+                # setup_recovery replaces such a setup instead of refusing
+                'can_replace': not recovery_setup.is_active and guardians.filter(
+                    status='pending', invitation_expires_at__lt=timezone.now()).exists(),
                 'total_shards': recovery_setup.total_shards,
                 'threshold_shards': recovery_setup.threshold_shards,
                 'guardians': [{
@@ -351,11 +366,13 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
         {
             "email": "user@example.com",
             "device_fingerprint": "abc123...",
-            "requester_public_key": "<base64 one-time X25519 + ML-KEM-768 public key>"
+            "requester_public_key": "<base64 one-time X25519 + ML-KEM-768 public key>",
+            "requester_token_hash": "<base64 SHA-256 of the requester token>"
         }
 
         Guardians re-seal their shares to requester_public_key; the private
-        key stays on the requesting device.
+        key stays on the requesting device, which alone can derive the token
+        that confirm_recovery, recovery_progress and complete_recovery ask for.
 
         Every email gets the same synchronous work (validate, enqueue) and the
         same answer. The account lookup, the attempt and the email with its
@@ -375,6 +392,12 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 return Response({
                     'error': f"'requester_public_key' {sealed_shares.INVALID_HYBRID_PUBLIC_KEY}"
                 }, status=status.HTTP_400_BAD_REQUEST)
+            requester_token_hash = sealed_shares.decode_digest(
+                request.data.get('requester_token_hash'))
+            if requester_token_hash is None:
+                return Response({
+                    'error': f"'requester_token_hash' {sealed_shares.INVALID_DIGEST}"
+                }, status=status.HTTP_400_BAD_REQUEST)
 
             # Cut down here: the task must store whatever this request sent
             fingerprint = request.data.get('device_fingerprint')
@@ -385,6 +408,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 fingerprint[:255] if isinstance(fingerprint, str) else '',
                 get_client_ip(request, default='127.0.0.1'),  # nosec B104
                 request.META.get('HTTP_USER_AGENT', ''),
+                sealed_shares.b64(requester_token_hash),
             )
             # Nothing about the account: this is the same for every email.
             if not accepted:
@@ -605,16 +629,13 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     'error': 'Invalid or already processed approval token'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Check approval window
-            if timezone.now() > approval.approval_window_end:
-                approval.status = 'expired'
-                approval.save(update_fields=['status'])
-                return Response({
-                    'error': 'Approval window has expired'
-                }, status=status.HTTP_400_BAD_REQUEST)
+            closed = _approval_closed(approval)
+            if closed:
+                return closed
 
             with transaction.atomic():
                 approval.responded_at = timezone.now()
+                approval.response_ip = get_client_ip(request, default=None)
                 if approved:
                     approval.status = 'approved'
                     approval.shard_released = True
@@ -624,6 +645,21 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     approval.status = 'denied'
                     approval.shard_released = False
                 approval.save()
+
+                user = approval.recovery_attempt.recovery_setup.user
+                RecoveryAuditLog.objects.create(
+                    user=user,
+                    event_type='guardian_approved' if approved else 'guardian_denied',
+                    recovery_attempt_id=approval.recovery_attempt_id,
+                    event_data={
+                        'guardian_id': str(approval.guardian_id),
+                        'approval_id': str(approval.id),
+                    },
+                    ip_address=approval.response_ip,
+                    cryptographic_hash=hashlib.sha256(
+                        f"{user.id}:{time.time()}".encode()
+                    ).hexdigest(),
+                )
 
             return Response({
                 'success': True,
@@ -656,6 +692,9 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             return Response({
                 'error': 'Invalid or already processed approval token'
             }, status=status.HTTP_400_BAD_REQUEST)
+        closed = _approval_closed(approval)
+        if closed:
+            return closed
         attempt = approval.recovery_attempt
         if not bytes(attempt.requester_public_key):
             return Response({
@@ -720,12 +759,65 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def confirm_recovery(self, request):
+        """
+        The owner opened the emailed link on the device that asked: ask the
+        guardians. A stranger's request never gets this far, so it emails no
+        guardian and spends nothing from the monthly limit.
+
+        POST /api/auth/quantum-recovery/confirm_recovery/
+        Body: {"attempt_id": "uuid", "requester_token": "<base64>"}
+
+        Safe to repeat: it returns recovery_progress's answer.
+        """
+        attempt = _requester_attempt(request)
+        if attempt is None:
+            return Response({'error': 'Recovery attempt not found'},
+                            status=status.HTTP_404_NOT_FOUND)
+        with transaction.atomic():
+            # The same lock as tasks._start_guardian_attempt, for the limit
+            recovery_setup = PasskeyRecoverySetup.objects.select_for_update().get(
+                pk=attempt.recovery_setup_id)
+            attempt = RecoveryAttempt.objects.select_for_update().get(pk=attempt.pk)
+            if attempt.status == 'initiated':
+                link_ends = attempt.initiated_at + timedelta(hours=GUARDIAN_UNCONFIRMED_WINDOW_HOURS)
+                if attempt.is_expired() or timezone.now() > link_ends:
+                    return Response({'error': 'This link has expired; start recovery again'},
+                                    status=status.HTTP_400_BAD_REQUEST)
+                if (confirmed_guardian_attempts(recovery_setup).count()
+                        >= recovery_setup.max_recovery_attempts_per_month):
+                    return Response({'error': 'Too many recoveries this month; try again later'},
+                                    status=status.HTTP_429_TOO_MANY_REQUESTS)
+                attempt.status = 'guardian_approval'
+                attempt.save(update_fields=['status'])
+        # Also repeats a job that was lost before it asked anyone.
+        if attempt.status == 'guardian_approval' and not attempt.guardian_approvals.exists():
+            if not dispatch_task(request_guardian_approvals, str(attempt.id)):
+                return Response({'error': 'Recovery is temporarily unavailable. Try again later.'},
+                                status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response(_recovery_progress(attempt))
+
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def recovery_progress(self, request):
+        """
+        How far a recovery has got, for the device that asked for it.
+
+        POST /api/auth/quantum-recovery/recovery_progress/
+        Body: {"attempt_id": "uuid", "requester_token": "<base64>"}
+        """
+        attempt = _requester_attempt(request)
+        if attempt is None:
+            return Response({'error': 'Recovery attempt not found'},
+                            status=status.HTTP_404_NOT_FOUND)
+        return Response(_recovery_progress(attempt))
+
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def complete_recovery(self, request):
         """
         Hand the requester the shares guardians re-sealed to its one-time key.
 
         POST /api/auth/quantum-recovery/complete_recovery/
-        Body: {"attempt_id": "uuid"}
+        Body: {"attempt_id": "uuid", "requester_token": "<base64>"}
 
         Returns {"threshold", "secret_type", "secret_check", "sealed_shares"}.
         The requester's device opens the shares, recombines the seed, checks
@@ -733,12 +825,11 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
         (vault/wrapped-dek/recover-rotate). The server never reconstructs
         anything and grants no session here. A completed attempt answers
         again with the same shares, so a lost response can be retried; they
-        open only with the requester's key.
+        open only with the requester's key. Nothing is released until the wait
+        after the owner's alert has passed (_release_after).
         """
         try:
-            attempt = RecoveryAttempt.objects.select_related('recovery_setup').filter(
-                id=request.data.get('attempt_id')
-            ).first() if _is_uuid(request.data.get('attempt_id')) else None
+            attempt = _requester_attempt(request)
             if attempt is None:
                 return Response({'error': 'Recovery attempt not found'},
                                 status=status.HTTP_404_NOT_FOUND)
@@ -762,23 +853,15 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 return Response({'error': 'Recovery attempt expired'},
                                 status=status.HTTP_400_BAD_REQUEST)
 
-            # Verify trust score meets threshold
-            if attempt.trust_score < recovery_setup.minimum_challenge_success_rate:
+            release_after = _release_after(attempt)
+            if attempt.status != 'completed' and (
+                    release_after is None or timezone.now() < release_after):
                 return Response({
-                    'error': f'Insufficient trust score: {attempt.trust_score:.2f} (required: {recovery_setup.minimum_challenge_success_rate:.2f})'
+                    'error': 'Recovery is still in its waiting period',
+                    'release_after': release_after,
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            released = GuardianApproval.objects.filter(
-                recovery_attempt=attempt,
-                status='approved',
-                shard_released=True,
-                guardian__shard__is_honeypot=False,
-            ).select_related('guardian__shard').order_by('guardian__shard__shard_index')
-            sealed = [
-                {'share_index': a.guardian.shard.shard_index,
-                 'sealed_share': sealed_shares.b64(a.resealed_share)}
-                for a in released if bytes(a.resealed_share)
-            ]
+            sealed = _released_shares(attempt)
             if len(sealed) < recovery_setup.threshold_shards:
                 return Response({
                     'error': f'Insufficient shares: need {recovery_setup.threshold_shards}, have {len(sealed)}'
@@ -831,6 +914,79 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             return Response({
                 'error': 'Failed to complete recovery'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _requester_attempt(request):
+    """The attempt named in the request, for the device that asked for it: the
+    ID comes by email, and only that device can derive the token. The answer is
+    the same for an unknown ID and a wrong token."""
+    attempt_id = request.data.get('attempt_id')
+    attempt = RecoveryAttempt.objects.select_related('recovery_setup').filter(
+        id=attempt_id).first() if _is_uuid(attempt_id) else None
+    if attempt is None or not sealed_shares.share_proof_matches(
+            request.data.get('requester_token'), attempt.requester_token_hash):
+        return None
+    return attempt
+
+
+def _release_after(attempt):
+    """When shares may be released: the owner's alert plus their time to cancel.
+    None if the alert has not gone out, so nothing is released."""
+    if attempt.canary_alert_sent_at is None:
+        return None
+    return attempt.canary_alert_sent_at + timedelta(
+        hours=attempt.recovery_setup.canary_alert_window_hours)
+
+
+def _released_shares(attempt):
+    released = GuardianApproval.objects.filter(
+        recovery_attempt=attempt,
+        status='approved',
+        shard_released=True,
+        guardian__shard__is_honeypot=False,
+    ).select_related('guardian__shard').order_by('guardian__shard__shard_index')
+    return [
+        {'share_index': a.guardian.shard.shard_index,
+         'sealed_share': sealed_shares.b64(a.resealed_share)}
+        for a in released if bytes(a.resealed_share)
+    ]
+
+
+def _recovery_progress(attempt):
+    threshold = attempt.recovery_setup.threshold_shards
+    approvals_received = len(_released_shares(attempt))
+    release_after = _release_after(attempt)
+    return {
+        'status': attempt.status,
+        'threshold': threshold,
+        'guardians_asked': attempt.guardian_approvals.count(),
+        'approvals_received': approvals_received,
+        'denials': attempt.guardian_approvals.filter(status='denied').count(),
+        'release_after': release_after,
+        'expires_at': attempt.expires_at,
+        'ready': attempt.status == 'completed' or (
+            attempt.status == 'guardian_approval' and not attempt.is_expired()
+            and approvals_received >= threshold
+            and release_after is not None and timezone.now() >= release_after),
+    }
+
+
+def _approval_closed(approval):
+    """The refusal for an approval that cannot be used now, or None."""
+    attempt = approval.recovery_attempt
+    if attempt.status != 'guardian_approval' or attempt.is_expired():
+        return Response({'error': 'This recovery is no longer open'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    now = timezone.now()
+    if now > approval.approval_window_end:
+        approval.status = 'expired'
+        approval.save(update_fields=['status'])
+        return Response({'error': 'Approval window has expired'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    if now < approval.approval_window_start:
+        return Response({'error': 'This approval is not open yet'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    return None
 
 
 def _is_uuid(value):
@@ -951,345 +1107,3 @@ def accept_guardian_invitation(request):
         return Response({
             'error': 'Failed to accept invitation'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def guardian_approve_recovery(request):
-    """
-    Guardian approves a recovery attempt and releases their shard
-    
-    POST /api/auth/quantum-recovery/guardian-approve-recovery/
-    
-    Request body:
-    {
-        "approval_token": "token123",
-        "video_verification_id": "optional"
-    }
-    """
-    try:
-        approval_token = request.data.get('approval_token')
-        
-        approval = get_object_or_404(GuardianApproval, approval_token=approval_token)
-        
-        # Check if in approval window
-        if not approval.is_in_approval_window():
-            return Response({
-                'error': 'Outside of approval window. Please try again later.'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Check additional verification requirements
-        guardian = approval.guardian
-        if guardian.requires_video_verification:
-            video_id = request.data.get('video_verification_id')
-            if not video_id:
-                return Response({
-                    'error': 'Video verification required'
-                }, status=status.HTTP_400_BAD_REQUEST)
-            approval.video_verification_session_id = video_id
-            approval.video_verification_completed = True
-        
-        # Approve and release shard
-        approval.status = 'approved'
-        approval.responded_at = timezone.now()
-        approval.response_ip = request.META.get('REMOTE_ADDR', '')
-        approval.shard_released = True
-        approval.shard_released_at = timezone.now()
-        approval.save()
-        
-        # Update recovery attempt
-        attempt = approval.recovery_attempt
-        attempt.guardian_approvals_received = attempt.guardian_approvals_received + [str(guardian.id)]
-        attempt.save()
-        
-        # Log audit event
-        RecoveryAuditLog.objects.create(
-            user=attempt.recovery_setup.user,
-            event_type='guardian_approved',
-            recovery_attempt_id=attempt.id,
-            event_data={
-                'guardian_id': str(guardian.id),
-                'approval_id': str(approval.id)
-            },
-            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
-            cryptographic_hash=hashlib.sha256(
-                f"{attempt.recovery_setup.user.id}:{time.time()}".encode()
-            ).hexdigest(),
-        )
-        
-        return Response({
-            'success': True,
-            'message': 'Recovery approved. Shard released.'
-        })
-        
-    except Exception as e:
-        logger.error(f"Error approving recovery: {str(e)}")
-        return Response({
-            'error': 'Failed to approve recovery'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-    # Admin Dashboard Endpoints
-    
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
-    def admin_dashboard_stats(self, request):
-        """
-        Admin dashboard statistics
-        
-        GET /api/auth/quantum-recovery/admin_dashboard_stats/
-        
-        Requires: Admin/Staff permissions
-        """
-        # Check if user is staff/admin
-        if not request.user.is_staff:
-            return Response({
-                'error': 'Admin permissions required'
-            }, status=status.HTTP_403_FORBIDDEN)
-        
-        try:
-            from django.db.models import Count, Avg, Q
-            from django.utils import timezone
-            from datetime import timedelta
-            
-            # Time ranges
-            now = timezone.now()
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            week_ago = now - timedelta(days=7)
-            month_ago = now - timedelta(days=30)
-            
-            # Total statistics
-            total_attempts = RecoveryAttempt.objects.count()
-            total_setups = PasskeyRecoverySetup.objects.filter(is_active=True).count()
-            total_guardians = RecoveryGuardian.objects.filter(status='active').count()
-            
-            # Success rate
-            completed_attempts = RecoveryAttempt.objects.filter(status='completed')
-            success_count = completed_attempts.filter(recovery_successful=True).count()
-            success_rate = (success_count / total_attempts * 100) if total_attempts > 0 else 0
-            
-            # Average trust score
-            avg_trust_score = RecoveryAttempt.objects.aggregate(
-                avg_score=Avg('trust_score')
-            )['avg_score'] or 0
-            
-            # Active attempts (in progress)
-            active_attempts = RecoveryAttempt.objects.filter(
-                status__in=['initiated', 'challenge_phase', 'shard_collection', 'guardian_approval']
-            ).count()
-            
-            # Security alerts
-            honeypots_triggered = RecoveryAttempt.objects.filter(
-                honeypot_triggered=True
-            ).count()
-            
-            suspicious_attempts = RecoveryAttempt.objects.filter(
-                suspicious_activity_detected=True
-            ).count()
-            
-            # Recent activity
-            attempts_today = RecoveryAttempt.objects.filter(
-                initiated_at__gte=today_start
-            ).count()
-            
-            challenges_sent_today = TemporalChallenge.objects.filter(
-                sent_at__gte=today_start
-            ).count()
-            
-            # Trend data (last 7 days)
-            daily_attempts = []
-            for i in range(7):
-                day_start = today_start - timedelta(days=i)
-                day_end = day_start + timedelta(days=1)
-                count = RecoveryAttempt.objects.filter(
-                    initiated_at__gte=day_start,
-                    initiated_at__lt=day_end
-                ).count()
-                daily_attempts.append({
-                    'date': day_start.strftime('%Y-%m-%d'),
-                    'count': count
-                })
-            
-            # Status breakdown
-            status_breakdown = RecoveryAttempt.objects.values('status').annotate(
-                count=Count('id')
-            ).order_by('-count')
-            
-            return Response({
-                'overview': {
-                    'total_attempts': total_attempts,
-                    'active_setups': total_setups,
-                    'total_guardians': total_guardians,
-                    'success_rate': round(success_rate, 2),
-                    'avg_trust_score': round(avg_trust_score, 3),
-                    'active_attempts': active_attempts
-                },
-                'security': {
-                    'honeypots_triggered': honeypots_triggered,
-                    'suspicious_attempts': suspicious_attempts,
-                    'security_alert_rate': round(
-                        (suspicious_attempts / total_attempts * 100) if total_attempts > 0 else 0,
-                        2
-                    )
-                },
-                'today': {
-                    'attempts_initiated': attempts_today,
-                    'challenges_sent': challenges_sent_today
-                },
-                'trends': {
-                    'daily_attempts': list(reversed(daily_attempts))
-                },
-                'status_breakdown': list(status_breakdown)
-            })
-            
-        except Exception as e:
-            logger.error(f"Error fetching admin dashboard stats: {str(e)}")
-            return Response({
-                'error': 'Failed to fetch dashboard statistics'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
-    def admin_recent_attempts(self, request):
-        """
-        List recent recovery attempts with details
-        
-        GET /api/auth/quantum-recovery/admin_recent_attempts/?limit=20&status=initiated
-        
-        Requires: Admin/Staff permissions
-        """
-        if not request.user.is_staff:
-            return Response({
-                'error': 'Admin permissions required'
-            }, status=status.HTTP_403_FORBIDDEN)
-        
-        try:
-            limit = int(request.query_params.get('limit', 20))
-            status_filter = request.query_params.get('status', None)
-            
-            queryset = RecoveryAttempt.objects.select_related(
-                'recovery_setup__user'
-            ).order_by('-initiated_at')
-            
-            if status_filter:
-                queryset = queryset.filter(status=status_filter)
-            
-            attempts = queryset[:limit]
-            
-            data = []
-            for attempt in attempts:
-                data.append({
-                    'id': str(attempt.id),
-                    'user_email': attempt.recovery_setup.user.email,
-                    'status': attempt.status,
-                    'trust_score': round(attempt.trust_score, 3),
-                    'challenges_completed': attempt.challenges_completed,
-                    'challenges_sent': attempt.challenges_sent,
-                    'challenge_success_rate': attempt.challenge_success_rate,
-                    'honeypot_triggered': attempt.honeypot_triggered,
-                    'suspicious_activity': attempt.suspicious_activity_detected,
-                    'initiated_at': attempt.initiated_at.isoformat(),
-                    'completed_at': attempt.completed_at.isoformat() if attempt.completed_at else None,
-                    'recovery_successful': attempt.recovery_successful,
-                    'failure_reason': attempt.failure_reason,
-                    'initiated_from_ip': attempt.initiated_from_ip,
-                    'initiated_from_location': attempt.initiated_from_location
-                })
-            
-            return Response({
-                'count': len(data),
-                'attempts': data
-            })
-            
-        except Exception as e:
-            logger.error(f"Error fetching recent attempts: {str(e)}")
-            return Response({
-                'error': 'Failed to fetch recent attempts'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
-    def admin_security_alerts(self, request):
-        """
-        List security alerts and suspicious activities
-        
-        GET /api/auth/quantum-recovery/admin_security_alerts/?days=7
-        
-        Requires: Admin/Staff permissions
-        """
-        if not request.user.is_staff:
-            return Response({
-                'error': 'Admin permissions required'
-            }, status=status.HTTP_403_FORBIDDEN)
-        
-        try:
-            days = int(request.query_params.get('days', 7))
-            since = timezone.now() - timedelta(days=days)
-            
-            # Honeypot triggers
-            honeypot_attempts = RecoveryAttempt.objects.filter(
-                honeypot_triggered=True,
-                initiated_at__gte=since
-            ).select_related('recovery_setup__user').order_by('-initiated_at')
-            
-            # Suspicious activities
-            suspicious_attempts = RecoveryAttempt.objects.filter(
-                suspicious_activity_detected=True,
-                initiated_at__gte=since
-            ).select_related('recovery_setup__user').order_by('-initiated_at')
-            
-            # Failed attempts with low trust scores
-            failed_low_trust = RecoveryAttempt.objects.filter(
-                status='failed',
-                trust_score__lt=0.3,
-                initiated_at__gte=since
-            ).select_related('recovery_setup__user').order_by('-initiated_at')
-            
-            alerts = []
-            
-            for attempt in honeypot_attempts:
-                alerts.append({
-                    'type': 'honeypot_triggered',
-                    'severity': 'high',
-                    'attempt_id': str(attempt.id),
-                    'user_email': attempt.recovery_setup.user.email,
-                    'ip_address': attempt.initiated_from_ip,
-                    'location': attempt.initiated_from_location,
-                    'timestamp': attempt.initiated_at.isoformat(),
-                    'details': 'Honeypot shard accessed during recovery'
-                })
-            
-            for attempt in suspicious_attempts:
-                alerts.append({
-                    'type': 'suspicious_activity',
-                    'severity': 'medium',
-                    'attempt_id': str(attempt.id),
-                    'user_email': attempt.recovery_setup.user.email,
-                    'ip_address': attempt.initiated_from_ip,
-                    'location': attempt.initiated_from_location,
-                    'timestamp': attempt.initiated_at.isoformat(),
-                    'details': attempt.suspicious_activity_details
-                })
-            
-            for attempt in failed_low_trust:
-                alerts.append({
-                    'type': 'low_trust_failure',
-                    'severity': 'low',
-                    'attempt_id': str(attempt.id),
-                    'user_email': attempt.recovery_setup.user.email,
-                    'trust_score': round(attempt.trust_score, 3),
-                    'ip_address': attempt.initiated_from_ip,
-                    'timestamp': attempt.initiated_at.isoformat(),
-                    'details': f'Recovery failed with low trust score: {attempt.trust_score:.2f}'
-                })
-            
-            # Sort by timestamp descending
-            alerts.sort(key=lambda x: x['timestamp'], reverse=True)
-            
-            return Response({
-                'count': len(alerts),
-                'alerts': alerts[:50]  # Limit to 50 most recent
-            })
-            
-        except Exception as e:
-            logger.error(f"Error fetching security alerts: {str(e)}")
-            return Response({
-                'error': 'Failed to fetch security alerts'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-

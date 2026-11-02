@@ -206,10 +206,15 @@ class GuardianRecoveryFlowTests(TestCase):
         self.setup = PasskeyRecoverySetup.objects.get(user=self.user)
         self.assertTrue(self.setup.is_active)
         self.requester_key = fx.hybrid_public_key()
+        self.token, self.token_hash = fx.requester_token()
 
     def _initiate(self, **body):
         return self.anon.post(reverse('quantum-recovery-initiate'), {
-            'email': 'owner@example.com', **body}, format='json')
+            'email': 'owner@example.com', 'requester_token_hash': self.token_hash, **body},
+            format='json')
+
+    def _holder(self, attempt):
+        return {'attempt_id': str(attempt.id), 'requester_token': self.token}
 
     def test_initiation_needs_a_requester_key_for_every_email(self):
         for email in ('owner@example.com', 'nobody@example.com'):
@@ -231,7 +236,8 @@ class GuardianRecoveryFlowTests(TestCase):
         self._initiate(requester_public_key=self.requester_key)
         attempt = RecoveryAttempt.objects.get()
         attempt.status = 'guardian_approval'
-        attempt.trust_score = 0.95
+        # The owner's alert went out and the wait after it has passed.
+        attempt.canary_alert_sent_at = timezone.now() - timedelta(hours=49)
         attempt.save()
         approvals = []
         for i, g in enumerate(RecoveryGuardian.objects.order_by('shard__shard_index')):
@@ -272,13 +278,13 @@ class GuardianRecoveryFlowTests(TestCase):
         self.assertEqual(r.status_code, 200, r.content)
         resealed[1] = s
         # One share is below the threshold of two.
-        r = self.anon.post(url, {'attempt_id': str(attempt.id)}, format='json')
+        r = self.anon.post(url, self._holder(attempt), format='json')
         self.assertEqual(r.status_code, 400, r.content)
         r = self.anon.post(approve, {'approval_token': 'token-2', 'approved': True,
                                      'resealed_share': (s := fx.sealed_share())}, format='json')
         resealed[3] = s
 
-        r = self.anon.post(url, {'attempt_id': str(attempt.id)}, format='json')
+        r = self.anon.post(url, self._holder(attempt), format='json')
         self.assertEqual(r.status_code, 200, r.content)
         body = r.json()
         self.assertEqual(body['secret_check'], self.secret_check)
@@ -290,31 +296,37 @@ class GuardianRecoveryFlowTests(TestCase):
         self.assertEqual(attempt.status, 'completed')
         # A retry (say, after a lost response) gets the same shares; they open
         # only with the requester's key.
-        r = self.anon.post(url, {'attempt_id': str(attempt.id)}, format='json')
+        r = self.anon.post(url, self._holder(attempt), format='json')
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(r.json()['sealed_shares'], body['sealed_shares'])
         # ...even once the attempt's window has passed.
         attempt.expires_at = timezone.now() - timedelta(minutes=1)
         attempt.save(update_fields=['expires_at'])
         cache.clear()  # the completion URL allows three calls an hour
-        r = self.anon.post(url, {'attempt_id': str(attempt.id)}, format='json')
+        r = self.anon.post(url, self._holder(attempt), format='json')
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual(r.json()['sealed_shares'], body['sealed_shares'])
 
-    def test_low_trust_or_expired_attempts_release_nothing(self):
+    def test_attempts_in_their_wait_or_expired_release_nothing(self):
         attempt, _ = self._attempt_with_approvals()
         for i in (0, 1):
             self.anon.post(reverse('quantum-recovery-approve'), {
                 'approval_token': f'token-{i}', 'approved': True,
                 'resealed_share': fx.sealed_share()}, format='json')
         url = reverse('quantum-recovery-complete')
-        attempt.trust_score = 0.1
+        attempt.canary_alert_sent_at = timezone.now() - timedelta(hours=47)
         attempt.save()
-        self.assertEqual(self.anon.post(url, {'attempt_id': str(attempt.id)}, format='json').status_code, 400)
-        attempt.trust_score = 0.95
+        r = self.anon.post(url, self._holder(attempt), format='json')
+        self.assertEqual(r.status_code, 400)
+        self.assertNotIn('sealed_shares', r.json())
+        attempt.canary_alert_sent_at = None  # no alert, no release
+        attempt.save()
+        self.assertEqual(self.anon.post(url, self._holder(attempt), format='json').status_code, 400)
+        attempt.canary_alert_sent_at = timezone.now() - timedelta(hours=49)
+        cache.clear()  # the completion URL allows three calls an hour
         attempt.expires_at = timezone.now() - timedelta(minutes=1)
         attempt.save()
-        self.assertEqual(self.anon.post(url, {'attempt_id': str(attempt.id)}, format='json').status_code, 400)
+        self.assertEqual(self.anon.post(url, self._holder(attempt), format='json').status_code, 400)
         self.assertEqual(self.anon.post(url, {'attempt_id': 'not-a-uuid'}, format='json').status_code, 404)
 
     def test_completion_is_rate_limited_at_its_url(self):
@@ -329,5 +341,5 @@ class GuardianRecoveryFlowTests(TestCase):
         self.setup.secret_check = b''
         self.setup.save()
         r = self.anon.post(reverse('quantum-recovery-complete'),
-                           {'attempt_id': str(attempt.id)}, format='json')
+                           self._holder(attempt), format='json')
         self.assertEqual(r.status_code, 410, r.content)

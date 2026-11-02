@@ -9,6 +9,8 @@ import {
   newHolderKeyPair,
   proveShareHolding,
   recoverSeed,
+  requesterToken,
+  requesterTokenHash,
   resealShareForRequester,
   sealSeedForGuardians,
   toB64,
@@ -173,5 +175,22 @@ describe('guardian recovery on the client', () => {
     expect(abandonTokenHash(keyPair)).toBe(toB64(sha256(fromB64(token))));
     expect(token).not.toBe(abandonToken(await newHolderKeyPair()));
     expect(token).not.toContain(keyPair.secretKey.slice(0, 16));
+  });
+
+  it('computes the key fingerprint the server puts in the emailed link', () => {
+    // The same vector is in auth_module/tests/test_guardian_recovery_flow.py.
+    const key = toB64(Uint8Array.from({ length: 32 }, (_, i) => i));
+    expect(keyFingerprint(key)).toBe('94CC-6B14-F58E-8B99-A0CC');
+  });
+
+  it('derives a requester token only the secret key gives, and sends its hash', async () => {
+    const a = await newHolderKeyPair();
+    const b = await newHolderKeyPair();
+    expect(requesterToken(a)).toBe(requesterToken(a));
+    expect(requesterToken(a)).not.toBe(requesterToken(b));
+    expect(requesterToken({ ...b, publicKey: a.publicKey })).toBe(requesterToken(b));
+    expect(requesterTokenHash(a)).not.toBe(requesterToken(a));
+    expect(requesterTokenHash(a)).toBe(toB64(sha256(fromB64(requesterToken(a)))));
+    expect(requesterToken(a)).not.toBe(abandonToken(a));
   });
 });

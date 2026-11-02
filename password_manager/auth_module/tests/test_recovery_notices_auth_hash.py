@@ -321,7 +321,8 @@ class RecoveryNoticeTests(TestCase):
         with self.captureOnCommitCallbacks(execute=True):
             r = self.anon.post('/api/auth/quantum-recovery/initiate_recovery/',
                                {'email': 'owner@example.com',
-                                'requester_public_key': fx.hybrid_public_key()}, format='json')
+                                'requester_public_key': fx.hybrid_public_key(),
+                                'requester_token_hash': fx.requester_token()[1]}, format='json')
         self.assertEqual(r.status_code, 200, r.content)
         RecoveryNotice.objects.get(user=self.user, event='guardian_recovery_started')
         self.assertEqual(self._cancel(self._cancel_token(mail.outbox[-1])).status_code, 200)
@@ -462,10 +463,13 @@ class NoticeCancelRaceTests(TestCase):
         setup = PasskeyRecoverySetup.objects.create(user=self.user, total_shards=3,
                                                     threshold_shards=0, is_active=True,
                                                     secret_check=base64.b64decode(fx.seed_check()))
+        token, token_hash = fx.requester_token()
         attempt = RecoveryAttempt.objects.create(
             recovery_setup=setup, status='shard_collection', initiated_from_ip='127.0.0.1',
-            shards_required=2, guardian_approvals_required=2, trust_score=0.95,
+            shards_required=2, guardian_approvals_required=2,
             requester_public_key=base64.b64decode(fx.hybrid_public_key()),
+            requester_token_hash=base64.b64decode(token_hash),
+            canary_alert_sent_at=timezone.now() - timedelta(hours=49),
             expires_at=timezone.now() + timedelta(days=1))
 
         def cancel_in_flight(*args, **kwargs):
@@ -478,7 +482,7 @@ class NoticeCancelRaceTests(TestCase):
         with patch('auth_module.quantum_recovery_views.GuardianApproval.objects.filter',
                    side_effect=cancel_in_flight):
             r = authed.post('/api/auth/quantum-recovery/complete_recovery/',
-                            {'attempt_id': str(attempt.pk)}, format='json')
+                            {'attempt_id': str(attempt.pk), 'requester_token': token}, format='json')
         self.assertEqual(r.status_code, 400, r.content)
         self.assertEqual(RecoveryAttempt.objects.get(pk=attempt.pk).status, 'cancelled')
 

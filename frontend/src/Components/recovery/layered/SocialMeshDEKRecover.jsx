@@ -45,9 +45,10 @@ import { bytesToHex } from '../../../utils/hex';
 const RecoveryInitiation = lazy(() => import('../social/RecoveryInitiation'));
 const RecoveryProgress = lazy(() => import('../social/RecoveryProgress'));
 
-// Mirror of TIER2_ENROLL_BLOCKED on the enroll page. RecoveryProgress
-// now opens the re-sealed shares and recombines the seed on this
-// device; lift both gates together after an end-to-end browser run.
+// Mirror of TIER2_ENROLL_BLOCKED on the enroll page. These pages drive
+// social-recovery circles, whose accept and attest pages still need a
+// hand-made Ed25519 signature and ZK proof, so no user can finish them.
+// /recovery/guardian/* is the working path for the `social_mesh` factor.
 const TIER2_RECOVER_BLOCKED = true;
 
 /**
@@ -197,12 +198,8 @@ export default function SocialMeshDEKRecover() {
         <section data-testid="social-mesh-dek-recover">
           <h1>Recover with Social-Mesh</h1>
           <p role="alert" data-testid="sm-recover-unavailable">
-            Social-Mesh recovery is not yet available. The current poll
-            endpoint cannot deliver the reconstructed seed without
-            violating the zero-knowledge property of the vault DEK; this
-            page is blocked until the client-side Shamir + Kyber pipeline
-            lands. Until then, please use Recovery Key or Time-Locked
-            recovery.
+            This recovery is not available. If you set up guardians, use{' '}
+            <a href="/recovery/guardian/start">guardian recovery</a>.
           </p>
         </section>
       );

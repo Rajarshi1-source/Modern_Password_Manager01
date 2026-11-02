@@ -28,6 +28,10 @@ Seed check: ``SHA-256("pwm-recovery-seed-check-v1|" || seed)``, sent at setup
 and returned at completion so the requester's device can tell a correct
 reconstruction from a wrong one. The seed is 32 random bytes, so the digest
 does not help a guess.
+
+Key fingerprint: the first 10 bytes of
+``SHA-256("pwm-recovery-key-fingerprint-v1|" || hybrid public key)``, as upper
+hex in groups of four. People read it out to check a key over another channel.
 """
 
 import base64
@@ -107,6 +111,13 @@ def share_proof_matches(proof_b64, stored_proof_hash) -> bool:
     if len(stored) != DIGEST_SIZE or proof is None:
         return False
     return hmac.compare_digest(hashlib.sha256(proof).digest(), stored)
+
+
+def key_fingerprint(public_key) -> str:
+    """keyFingerprint() in frontend/src/services/recovery/sealedShareRecovery.js."""
+    digest = hashlib.sha256(b'pwm-recovery-key-fingerprint-v1|' + bytes(public_key)).digest()
+    hex_digits = digest[:10].hex().upper()
+    return '-'.join(hex_digits[i:i + 4] for i in range(0, len(hex_digits), 4))
 
 
 def b64(raw) -> str:

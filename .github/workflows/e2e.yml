@@ -206,6 +206,8 @@ jobs:
           cd password_manager
           python manage.py migrate --noinput
           python manage.py runserver 0.0.0.0:8000 &
+          # guardian_recovery.spec.js needs its queued tasks to run
+          celery -A password_manager worker --pool=solo --loglevel=warning &
           # Bounded polling instead of a fixed sleep: fails the step
           # outright if Django never becomes ready within 60s, rather than
           # letting Playwright start hammering a server that isn't
