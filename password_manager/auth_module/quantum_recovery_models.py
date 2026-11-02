@@ -84,6 +84,21 @@ class PasskeyRecoverySetup(models.Model):
     def __str__(self):
         return f"Recovery Setup for {self.user.username} ({'Active' if self.is_active else 'Inactive'})"
     
+    def is_replaceable(self):
+        """Whether setup_recovery replaces this setup instead of refusing. One
+        from before client-side sealing holds no recoverable secret (it cannot
+        complete), one whose wrapped vault key was revoked opens nothing
+        (recovery_notice.unlock_locked_account), and one with an invitation that
+        ran out can never activate."""
+        if not bytes(self.secret_check or b''):
+            return True
+        if self.shards.filter(secret_type='vault_dek_seed').exists() \
+                and not self.user.recovery_factors.filter(
+                    factor_type='social_mesh', status='active').exists():
+            return True
+        return not self.is_active and self.guardians.filter(
+            status='pending', invitation_expires_at__lt=timezone.now()).exists()
+
     def is_travel_locked(self):
         """Check if recovery is currently locked due to travel mode"""
         if not self.travel_lock_enabled or not self.travel_lock_until:

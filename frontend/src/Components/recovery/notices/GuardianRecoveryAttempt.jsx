@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
 import recoveryFactorService from '../../../services/recoveryFactorService';
@@ -53,6 +53,9 @@ export default function GuardianRecoveryAttempt() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [done, setDone] = useState(false);
+  // Kept while the username is retried: fetching the shares again uses up the
+  // hourly recovery limit.
+  const recombined = useRef('');
 
   const validLink = ATTEMPT_ID.test(attemptId) && KEY_FINGERPRINT.test(fingerprint);
 
@@ -119,27 +122,31 @@ export default function GuardianRecoveryAttempt() {
   const recover = (e) => {
     e.preventDefault();
     return run(async () => {
-      const { data } = await ApiService.quantumRecovery.completeRecovery({
-        attempt_id: attemptId, requester_token: token,
-      });
-      await ensureHybridKemReady();
-      const keyPair = await loadRequesterKeyPair(fingerprint);
-      let seed;
-      try {
-        seed = await recoverSeed({
-          keyPair,
-          sealedShares: data.sealed_shares.map((s) => s.sealed_share),
-          threshold: data.threshold,
-          secretCheck: data.secret_check,
+      if (!recombined.current) {
+        const { data } = await ApiService.quantumRecovery.completeRecovery({
+          attempt_id: attemptId, requester_token: token,
         });
-      } catch {
-        throw new Error('Your guardians’ shares did not recombine. Start recovery again.');
+        await ensureHybridKemReady();
+        const keyPair = await loadRequesterKeyPair(fingerprint);
+        let seed;
+        try {
+          seed = await recoverSeed({
+            keyPair,
+            sealedShares: data.sealed_shares.map((s) => s.sealed_share),
+            threshold: data.threshold,
+            secretCheck: data.secret_check,
+          });
+        } catch {
+          throw new Error('Your guardians’ shares did not recombine. Start recovery again.');
+        }
+        recombined.current = bytesToHex(seed);
+        seed.fill(0);
       }
-      const recoveredHex = bytesToHex(seed);
-      seed.fill(0);
+      const recoveredHex = recombined.current;
       // A decoy for an unknown username, so a wrong one fails at the unwrap.
       const wrapped = await recoveryFactorService.lookupRecoveryFactor(username.trim(), 'social_mesh');
       await sessionVaultCryptoV3.unlockWithRecoveryFactor(wrapped.blob, recoveredHex, wrapped.dek_id);
+      recombined.current = '';
       setFactor(wrapped);
       setSeedHex(recoveredHex);
     }, 'Could not recover. Check the username in the email and try again.');

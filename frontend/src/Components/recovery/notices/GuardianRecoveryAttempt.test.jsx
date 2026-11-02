@@ -17,10 +17,16 @@ vi.mock('../../../services/api', () => ({
   },
 }));
 vi.mock('../../../services/recovery/holderKeyStore', () => keys);
-vi.mock('../../../services/sessionVaultCryptoV3', () => ({ default: {} }));
-vi.mock('../../../services/recoveryFactorService', () => ({ default: {} }));
+const vault = vi.hoisted(() => ({ unlockWithRecoveryFactor: vi.fn() }));
+const factors = vi.hoisted(() => ({ lookupRecoveryFactor: vi.fn() }));
+const recoverSeed = vi.hoisted(() => vi.fn());
+vi.mock('../../../services/sessionVaultCryptoV3', () => ({ default: vault }));
+vi.mock('../../../services/recoveryFactorService', () => ({ default: factors }));
 vi.mock('../../../services/quantum/hybridKem', () => ({
   ensureHybridKemReady: vi.fn(), generateHybridKeyPair: vi.fn(), openSealed: vi.fn(), sealToHybridKey: vi.fn(),
+}));
+vi.mock('../../../services/recovery/sealedShareRecovery', async (original) => ({
+  ...(await original()), recoverSeed,
 }));
 
 import GuardianRecoveryAttempt from './GuardianRecoveryAttempt';
@@ -132,6 +138,53 @@ describe('GuardianRecoveryAttempt', () => {
     renderAt(LINK);
     await screen.findByTestId('guardian-recovery-recover');
     expect(api.completeRecovery).not.toHaveBeenCalled();
+  });
+
+  describe('recovering', () => {
+    const submit = async (username) => {
+      fireEvent.change(screen.getByTestId('guardian-recovery-username'), { target: { value: username } });
+      fireEvent.click(screen.getByTestId('guardian-recovery-recover'));
+    };
+
+    beforeEach(() => {
+      api.recoveryProgress.mockResolvedValue(progress({ approvals_received: 2, ready: true }));
+      api.completeRecovery.mockResolvedValue({
+        data: { sealed_shares: [{ sealed_share: 'a' }, { sealed_share: 'b' }], threshold: 2, secret_check: 'c' },
+      });
+      recoverSeed.mockImplementation(async () => new Uint8Array(32).fill(5));
+      factors.lookupRecoveryFactor.mockResolvedValue({ blob: {}, dek_id: 'd' });
+      vault.unlockWithRecoveryFactor.mockResolvedValue(undefined);
+    });
+
+    it('fetches the shares once when only the username was wrong', async () => {
+      vault.unlockWithRecoveryFactor.mockRejectedValueOnce(new Error('unwrap'));
+      renderAt(LINK);
+      await screen.findByTestId('guardian-recovery-recover');
+
+      await submit('typo');
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/Check the username/));
+      await submit('owner');
+
+      await screen.findByTestId('guardian-recovery-new-password');
+      expect(api.completeRecovery).toHaveBeenCalledTimes(1);
+      expect(recoverSeed).toHaveBeenCalledTimes(1);
+      expect(factors.lookupRecoveryFactor).toHaveBeenLastCalledWith('owner', 'social_mesh');
+      const hex = '05'.repeat(32);
+      expect(vault.unlockWithRecoveryFactor).toHaveBeenLastCalledWith({}, hex, 'd');
+    });
+
+    it('fetches the shares again when the fetch itself failed', async () => {
+      api.completeRecovery.mockRejectedValueOnce({ response: { status: 500 } });
+      renderAt(LINK);
+      await screen.findByTestId('guardian-recovery-recover');
+
+      await submit('owner');
+      await screen.findByRole('alert');
+      await submit('owner');
+
+      await screen.findByTestId('guardian-recovery-new-password');
+      expect(api.completeRecovery).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('stops on a cancelled recovery', async () => {

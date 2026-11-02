@@ -99,6 +99,42 @@ class GuardianRecoverySetupTests(TestCase):
         self.assertEqual(self._active_factors().get().pk, earlier.pk)
         self.assertFalse(PasskeyRecoverySetup.objects.filter(user=self.user).exists())
 
+    def _post_factor(self, factor_type='social_mesh'):
+        factor = fx.recovery_factor(self.user)
+        return self.client.post(reverse('vault-recovery-factors'), {
+            'factor_type': factor_type, 'dek_id': factor['dek_id'],
+            'blob': factor['blob'], 'auth_hash': factor['auth_hash'],
+        }, format='json')
+
+    def test_the_generic_endpoint_cannot_replace_the_key_behind_a_setup(self):
+        cache.clear()  # that endpoint allows three calls an hour
+        self.assertEqual(self._setup([_guardian(i)[0] for i in (1, 2, 3)]).status_code, 201)
+        kept = self._active_factors().get()
+        for active in (False, True):  # waiting for guardians, then in use
+            PasskeyRecoverySetup.objects.filter(user=self.user).update(is_active=active)
+            self.assertEqual(self._post_factor().status_code, 409)
+            self.assertEqual(self._active_factors().get().pk, kept.pk)
+
+    def test_the_generic_endpoint_still_enrols_what_no_setup_depends_on(self):
+        cache.clear()  # that endpoint allows three calls an hour
+        self.assertEqual(self._post_factor().status_code, 201)  # no setup yet
+        self.assertEqual(self._setup([_guardian(i)[0] for i in (1, 2, 3)]).status_code, 201)
+        self.assertEqual(self._post_factor('recovery_key').status_code, 201)
+
+    def test_a_setup_whose_key_was_revoked_can_be_set_up_again(self):
+        cache.clear()  # the status and factor endpoints are limited
+        guardians = [_guardian(i)[0] for i in (1, 2, 3)]
+        self.assertEqual(self._setup(guardians).status_code, 201)
+        PasskeyRecoverySetup.objects.filter(user=self.user).update(is_active=True)
+        self.assertFalse(self.client.get(
+            reverse('quantum-recovery-get-status')).json()['can_replace'])
+        self._active_factors().update(status='revoked')
+        self.assertTrue(self.client.get(
+            reverse('quantum-recovery-get-status')).json()['can_replace'])
+        again = fx.recovery_factor(self.user)
+        self.assertEqual(self._setup(guardians, recovery_factor=again).status_code, 201)
+        self.assertEqual(self._active_factors().get().auth_hash, again['auth_hash'])
+
     def test_status_offers_replacing_a_setup_from_before_client_sealing(self):
         PasskeyRecoverySetup.objects.create(
             user=self.user, total_shards=3, threshold_shards=2, is_active=True,
