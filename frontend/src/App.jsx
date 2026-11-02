@@ -2316,8 +2316,8 @@ function App() {
                   )
                 } />
                 <Route path="/recovery/guardian/start" element={<GuardianRecoveryStart />} />
-                <Route path="/recovery/guardian-invite/:token" element={<GuardianInvite />} />
-                <Route path="/recovery/guardian-approve/:token" element={<GuardianApprove />} />
+                <Route path="/recovery/guardian-invite" element={<GuardianInvite />} />
+                <Route path="/recovery/guardian-approve" element={<GuardianApprove />} />
                 <Route path="/recovery/time-lock/cancel" element={<TimeLockCancel />} />
                 <Route path="/security/recovery-notices" element={
                   !isAuthenticated ? <Navigate to="/" /> : <RecoveryNotices />

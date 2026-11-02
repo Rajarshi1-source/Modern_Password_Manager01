@@ -421,7 +421,7 @@ class GuardianEmailTests(GuardianFlowBase):
         message = mail.outbox[0]
         self.assertEqual(message.to, [self.approval.guardian.encrypted_guardian_info.decode()])
         self.assertIn(
-            f'https://app.example.com/recovery/guardian-approve/{self.approval.approval_token}',
+            f'https://app.example.com/recovery/guardian-approve#{self.approval.approval_token}',
             message.body)
         self.assertIn('owner', message.body)
 
@@ -571,7 +571,7 @@ class InvitationTests(GuardianFlowBase):
                          {'g1@example.com', 'g2@example.com', 'g3@example.com'})
         for s in r.json()['shards_created']:
             message = next(m for m in mail.outbox if m.to == [s['guardian_email']])
-            self.assertIn(f"/recovery/guardian-invite/{s['invitation_token']}", message.body)
+            self.assertIn(f"/recovery/guardian-invite#{s['invitation_token']}", message.body)
 
     def test_a_setup_with_a_lapsed_invitation_can_be_replaced(self):
         user, client = self._second_owner()

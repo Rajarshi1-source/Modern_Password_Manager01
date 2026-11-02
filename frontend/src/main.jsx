@@ -1,3 +1,4 @@
+import { linkToken } from './services/recovery/linkToken' // first: see the note in that file
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import * as Sentry from '@sentry/react'
@@ -13,7 +14,9 @@ if (import.meta.env.VITE_SENTRY_DSN) {
     dsn: import.meta.env.VITE_SENTRY_DSN,
     integrations: [
       Sentry.browserTracingIntegration(),
-      Sentry.replayIntegration({ maskAllText: true, blockAllMedia: true }),
+      // Replay records the navigation timing entry, whose URL still has the
+      // fragment after it leaves the address bar, so a guardian link gets none.
+      ...(linkToken() ? [] : [Sentry.replayIntegration({ maskAllText: true, blockAllMedia: true })]),
     ],
     tracesSampleRate: parseFloat(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE || '0.1'),
     replaysSessionSampleRate: 0,

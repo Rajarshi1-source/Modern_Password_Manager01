@@ -238,7 +238,8 @@ def send_guardian_approval_request(self, approval_id):
             return False
 
         user = attempt.recovery_setup.user
-        approval_url = (f"{settings.FRONTEND_URL.rstrip('/')}/recovery/guardian-approve/"
+        # In the fragment, so the token reaches no server's logs (linkToken.js).
+        approval_url = (f"{settings.FRONTEND_URL.rstrip('/')}/recovery/guardian-approve#"
                         f"{approval.approval_token}")
         try:
             send_mail(
@@ -281,7 +282,7 @@ def send_guardian_invitation(self, guardian_id):
         id=guardian_id, status='pending').first()
     if guardian is None or not guardian.is_invitation_valid():
         return False
-    invitation_url = (f"{settings.FRONTEND_URL.rstrip('/')}/recovery/guardian-invite/"
+    invitation_url = (f"{settings.FRONTEND_URL.rstrip('/')}/recovery/guardian-invite#"
                       f"{guardian.invitation_token}")
     try:
         send_mail(
