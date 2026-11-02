@@ -9,6 +9,8 @@ Tests end-to-end recovery scenarios including:
 - Rate limiting
 """
 
+import base64
+
 import pytest
 from django.test import TestCase, Client
 from django.contrib.auth import get_user_model
@@ -53,6 +55,7 @@ class TestRecoveryInitiation(TestCase):
             user=self.user,
             total_shards=5,
             threshold_shards=3,
+            secret_check=base64.b64decode(fx.seed_check()),
             is_active=True
         )
     

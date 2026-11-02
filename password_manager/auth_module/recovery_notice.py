@@ -159,6 +159,9 @@ def dispatch(task, *args):
     waiting for it would let an anonymous caller time whether an account
     exists or has a recovery backup. The pool caps its threads and connections
     however long the outage, and a normal shutdown finishes what it holds.
+
+    Returns False if the task could be neither queued nor handed to the pool
+    (a shutdown refuses new work), for a caller whose answer promises it runs.
     """
     try:
         task.delay(*args)
@@ -168,6 +171,8 @@ def dispatch(task, *args):
             _fallback_pool.submit(_run_task, task, args)
         except Exception:
             logger.exception('Recovery notice %s failed', task.name)
+            return False
+    return True
 
 
 def cancelled_since(user_id, when):

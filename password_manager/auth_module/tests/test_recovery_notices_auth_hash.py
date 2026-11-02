@@ -316,7 +316,8 @@ class RecoveryNoticeTests(TestCase):
     def test_cancelling_a_started_guardian_recovery_cancels_the_attempt(self):
         from auth_module.quantum_recovery_models import PasskeyRecoverySetup, RecoveryAttempt
         PasskeyRecoverySetup.objects.create(user=self.user, total_shards=3, threshold_shards=2,
-                                            is_active=True)
+                                            is_active=True,
+                                            secret_check=base64.b64decode(fx.seed_check()))
         with self.captureOnCommitCallbacks(execute=True):
             r = self.anon.post('/api/auth/quantum-recovery/initiate_recovery/',
                                {'email': 'owner@example.com',

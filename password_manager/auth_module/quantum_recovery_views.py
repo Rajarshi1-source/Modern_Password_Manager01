@@ -46,8 +46,8 @@ from shared.client_ip import get_client_ip
 logger = logging.getLogger(__name__)
 
 GUARDIAN_RECOVERY_MESSAGE = (
-    'If guardian recovery is available for this account, a link to continue '
-    'has been sent to its email address.'
+    'If guardian recovery is available for this account, an email about it '
+    'has been sent to its address.'
 )
 
 
@@ -378,7 +378,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
 
             # Cut down here: the task must store whatever this request sent
             fingerprint = request.data.get('device_fingerprint')
-            dispatch_task(
+            accepted = dispatch_task(
                 start_guardian_recovery,
                 email,
                 sealed_shares.b64(requester_public_key),
@@ -386,6 +386,11 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 get_client_ip(request, default='127.0.0.1'),  # nosec B104
                 request.META.get('HTTP_USER_AGENT', ''),
             )
+            # Nothing about the account: this is the same for every email.
+            if not accepted:
+                return Response({
+                    'error': 'Recovery is temporarily unavailable. Try again later.'
+                }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
             return Response({'message': GUARDIAN_RECOVERY_MESSAGE})
 
         except Exception as e:

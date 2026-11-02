@@ -37,7 +37,7 @@ def _setup_for(email, **fields):
     user = User.objects.create_user(email.split('@')[0], email, 'Owner-Pass-1!')
     return PasskeyRecoverySetup.objects.create(
         user=user, total_shards=3, threshold_shards=2,
-        **{'is_active': True, **fields},
+        **{'is_active': True, 'secret_check': base64.b64decode(fx.seed_check()), **fields},
     )
 
 
@@ -59,6 +59,7 @@ class AccountFixtureMixin:
         User.objects.create_user('nosetup', 'nosetup@example.com', 'Owner-Pass-1!')
         _setup_for('active@example.com')
         _setup_for('inactive@example.com', is_active=False)
+        _setup_for('legacy@example.com', secret_check=b'')
         _setup_for('locked@example.com', travel_lock_enabled=True,
                    travel_lock_until=timezone.now() + timedelta(days=7))
         _used_up(_setup_for('limited@example.com'))
@@ -83,6 +84,7 @@ class InitiateAnswersEveryEmailAlikeTests(AccountFixtureMixin, TestCase):
         'nosetup@example.com',
         'active@example.com',
         'inactive@example.com',
+        'legacy@example.com',
         'locked@example.com',
         'limited@example.com',
         'disabled@example.com',
@@ -178,13 +180,45 @@ class InitiateTaskTests(AccountFixtureMixin, TestCase):
     def test_only_an_active_setup_gets_an_attempt_or_an_email(self):
         before = RecoveryAttempt.objects.count()
         for email in ('nobody@example.com', 'nosetup@example.com', 'inactive@example.com',
-                      'locked@example.com', 'limited@example.com', 'disabled@example.com'):
+                      'legacy@example.com', 'locked@example.com', 'limited@example.com', 'disabled@example.com'):
             with self.subTest(email=email):
                 cache.clear()
                 self.assertEqual(self._post(email).status_code, 200)
                 self.assertEqual(RecoveryAttempt.objects.count(), before)
                 self.assertEqual(mail.outbox, [])
                 self.assertFalse(RecoveryNotice.objects.exists())
+
+    def _second_setup_on_shared_email(self):
+        user = User.objects.create_user('shared3', 'shared@example.com', 'Owner-Pass-1!')
+        return PasskeyRecoverySetup.objects.create(
+            user=user, total_shards=3, threshold_shards=2, is_active=True,
+            secret_check=base64.b64decode(fx.seed_check()))
+
+    def test_every_account_on_a_shared_email_gets_its_own_attempt_and_email(self):
+        self._second_setup_on_shared_email()
+        self.assertEqual(self._post('shared@example.com').status_code, 200)
+        attempts = RecoveryAttempt.objects.filter(recovery_setup__user__email='shared@example.com')
+        self.assertEqual(attempts.count(), 2)
+        self.assertEqual(len(mail.outbox), 2)
+        for attempt in attempts:
+            self.assertTrue(any(str(attempt.id) in m.body and attempt.recovery_setup.user.username in m.body
+                                for m in mail.outbox))
+
+    def test_a_used_up_account_does_not_stop_another_on_the_same_email(self):
+        first = PasskeyRecoverySetup.objects.filter(user__email='shared@example.com').order_by('pk').first()
+        _used_up(first)
+        second = self._second_setup_on_shared_email()
+        self._post('shared@example.com')
+        self.assertEqual(second.recovery_attempts.count(), 1)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_a_travel_locked_account_does_not_stop_another_on_the_same_email(self):
+        PasskeyRecoverySetup.objects.filter(user__email='shared@example.com').update(
+            travel_lock_enabled=True, travel_lock_until=timezone.now() + timedelta(days=7))
+        second = self._second_setup_on_shared_email()
+        self._post('shared@example.com')
+        self.assertEqual(second.recovery_attempts.count(), 1)
+        self.assertEqual(len(mail.outbox), 1)
 
     def test_an_email_two_accounts_share_reaches_the_one_with_a_setup(self):
         self.assertEqual(self._post('shared@example.com').status_code, 200)
@@ -196,9 +230,49 @@ class InitiateTaskTests(AccountFixtureMixin, TestCase):
         setup = PasskeyRecoverySetup.objects.get(user__email='active@example.com')
         for _ in range(setup.max_recovery_attempts_per_month + 1):
             cache.clear()
-            self.assertEqual(self._post('active@example.com').status_code, 200)
+            r = self._post('active@example.com', requester_public_key=fx.hybrid_public_key())
+            self.assertEqual(r.status_code, 200)
         self.assertEqual(setup.recovery_attempts.count(), setup.max_recovery_attempts_per_month)
         self.assertEqual(len(mail.outbox), setup.max_recovery_attempts_per_month)
+
+    def _redeliver(self):
+        from auth_module.tasks import start_guardian_recovery
+        return start_guardian_recovery.apply(args=(
+            'active@example.com', self.key, 'fp', '127.0.0.1', '')).get()
+
+    def test_a_redelivered_task_spends_no_slot_and_sends_no_second_email(self):
+        self._post('active@example.com')
+        attempt = RecoveryAttempt.objects.get(recovery_setup__user__email='active@example.com')
+        self.assertEqual(self._redeliver(), 1)
+        self.assertEqual(attempt.recovery_setup.recovery_attempts.count(), 1)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_a_task_lost_before_its_email_sends_it_when_redelivered(self):
+        # The worker died after the attempt committed and before the email
+        self._post('active@example.com')
+        attempt = RecoveryAttempt.objects.get(recovery_setup__user__email='active@example.com')
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(canary_alert_sent_at=None)
+        mail.outbox.clear()
+        self.assertEqual(self._redeliver(), 1)
+        self.assertEqual(attempt.recovery_setup.recovery_attempts.count(), 1)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(str(attempt.id), mail.outbox[0].body)
+
+    def test_the_attempt_id_stays_out_of_the_task_result(self):
+        # Celery logs a task's return value and keeps it in the result backend
+        self._post('active@example.com')
+        attempt = RecoveryAttempt.objects.get(recovery_setup__user__email='active@example.com')
+        self.assertNotIn(str(attempt.id), repr(self._redeliver()))
+
+    def test_a_redelivered_task_does_not_revive_a_cancelled_attempt(self):
+        self._post('active@example.com')
+        attempt = RecoveryAttempt.objects.get(recovery_setup__user__email='active@example.com')
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(status='cancelled', canary_alert_sent_at=None)
+        mail.outbox.clear()
+        self._redeliver()
+        self.assertEqual(mail.outbox, [])
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, 'cancelled')
 
     def test_an_oversized_fingerprint_does_not_lose_the_attempt(self):
         self._post('active@example.com', device_fingerprint='x' * 5000)
@@ -211,6 +285,24 @@ class InitiateTaskTests(AccountFixtureMixin, TestCase):
         attempt = RecoveryAttempt.objects.get(recovery_setup__user__email='active@example.com')
         self.assertIsNone(attempt.canary_alert_sent_at)
         self.assertFalse(RecoveryNotice.objects.get(user=attempt.recovery_setup.user).email_sent)
+        self.assertEqual(attempt.status, 'failed')
+
+    def test_undelivered_emails_do_not_use_up_the_monthly_limit(self):
+        setup = PasskeyRecoverySetup.objects.get(user__email='active@example.com')
+        for _ in range(setup.max_recovery_attempts_per_month + 1):
+            cache.clear()
+            with patch('django.core.mail.send_mail', return_value=0):
+                self._post('active@example.com')
+        cache.clear()
+        self._post('active@example.com')
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(setup.recovery_attempts.exclude(status='failed').count(), 1)
+
+    def test_a_failed_recovery_still_counts_toward_the_monthly_limit(self):
+        setup = _used_up(PasskeyRecoverySetup.objects.get(user__email='active@example.com'))
+        setup.recovery_attempts.update(status='failed', failure_reason='Wrong answers')
+        self._post('active@example.com')
+        self.assertEqual(mail.outbox, [])
 
     def test_a_broker_outage_gives_the_same_answer(self):
         from auth_module.tasks import start_guardian_recovery
@@ -222,3 +314,13 @@ class InitiateTaskTests(AccountFixtureMixin, TestCase):
                 self.assertEqual((r.status_code, r.content),
                                  (baseline.status_code, baseline.content))
         self.assertEqual(pool.submit.call_count, 2)
+
+    def test_a_job_nothing_accepted_is_a_503_for_every_email(self):
+        from auth_module.tasks import start_guardian_recovery
+        with patch.object(start_guardian_recovery, 'delay', side_effect=OSError('broker down')), \
+                patch('auth_module.recovery_notice._fallback_pool') as pool:
+            pool.submit.side_effect = RuntimeError('cannot schedule new futures after shutdown')
+            answers = {(r.status_code, r.content) for r in (
+                self._post('nobody@example.com'), self._post('active@example.com'))}
+        self.assertEqual(len(answers), 1, answers)
+        self.assertEqual(answers.pop()[0], 503)
