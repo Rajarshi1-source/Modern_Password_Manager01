@@ -16,6 +16,7 @@ from django.utils import timezone
 from datetime import timedelta
 import hashlib
 import random
+import smtplib
 import time as _time
 import logging
 
@@ -203,6 +204,17 @@ def guardians_left_unasked(attempt):
     return any(str(approval_id) not in emailed for approval_id in open_ids)
 
 
+def _mail_failure_is_temporary(exc):
+    """Whether sending again could work, given an OSError from send_mail (which
+    SMTPException is): a lost connection or a 4xx reply such as greylisting. A
+    5xx reply, such as a refused address, would only repeat."""
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        return any(400 <= code < 500 for code, _ in exc.recipients.values())
+    if isinstance(exc, smtplib.SMTPResponseException):
+        return 400 <= exc.smtp_code < 500
+    return True
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=600)
 def send_guardian_approval_request(self, approval_id):
     """
@@ -240,7 +252,9 @@ def send_guardian_approval_request(self, approval_id):
                 None,
                 [approval.guardian.encrypted_guardian_info.decode('utf-8')],
             )
-        except Exception as exc:
+        except OSError as exc:
+            if not _mail_failure_is_temporary(exc):
+                raise
             raise self.retry(exc=exc)
 
         RecoveryAuditLog.objects.create(
@@ -280,7 +294,9 @@ def send_guardian_invitation(self, guardian_id):
             None,
             [guardian.encrypted_guardian_info.decode('utf-8')],
         )
-    except Exception as exc:
+    except OSError as exc:
+        if not _mail_failure_is_temporary(exc):
+            raise
         raise self.retry(exc=exc)
     return True
 

@@ -8,6 +8,7 @@ The whole path with real client crypto is in frontend/e2e/guardian_recovery.spec
 import base64
 import json
 import re
+import smtplib
 from datetime import timedelta
 from io import StringIO
 from unittest.mock import patch
@@ -442,6 +443,39 @@ class GuardianEmailTests(GuardianFlowBase):
                              side_effect=RuntimeError('retry')) as retry:
             send_guardian_approval_request.apply(args=[str(self.approval.id)])
         retry.assert_called_once()
+        self.assertFalse(RecoveryAuditLog.objects.filter(
+            event_type='guardian_approval_requested').exists())
+
+    def _both_tasks_retry(self, error):
+        """Whether each guardian email task retries when sending raises error."""
+        guardian = self.approval.guardian
+        RecoveryGuardian.objects.filter(pk=guardian.pk).update(
+            status='pending', invitation_expires_at=timezone.now() + timedelta(days=1))
+        retried = []
+        for task, target in ((send_guardian_approval_request, self.approval.id),
+                             (send_guardian_invitation, guardian.id)):
+            with patch('auth_module.quantum_recovery_tasks.send_mail', side_effect=error), \
+                    patch.object(task, 'retry', side_effect=RuntimeError('retry')) as retry:
+                result = task.apply(args=[str(target)])
+            self.assertEqual(result.state, 'FAILURE')
+            retried.append(retry.called)
+        return retried
+
+    def test_a_temporary_mail_failure_is_retried(self):
+        for error in (TimeoutError('slow'),
+                      smtplib.SMTPServerDisconnected('gone'),
+                      smtplib.SMTPDataError(451, b'busy'),
+                      smtplib.SMTPRecipientsRefused({'g@example.com': (450, b'greylisted')})):
+            with self.subTest(error=error):
+                self.assertEqual(self._both_tasks_retry(error), [True, True])
+
+    def test_a_refused_address_or_a_bug_is_not_retried(self):
+        for error in (smtplib.SMTPRecipientsRefused({'g@example.com': (550, b'no such user')}),
+                      smtplib.SMTPDataError(554, b'rejected'),
+                      ValueError('bad header'),
+                      TypeError('bug')):
+            with self.subTest(error=error):
+                self.assertEqual(self._both_tasks_retry(error), [False, False])
         self.assertFalse(RecoveryAuditLog.objects.filter(
             event_type='guardian_approval_requested').exists())
 
