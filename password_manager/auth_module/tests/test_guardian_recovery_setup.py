@@ -115,6 +115,14 @@ class GuardianRecoverySetupTests(TestCase):
             self.assertEqual(self._post_factor().status_code, 409)
             self.assertEqual(self._active_factors().get().pk, kept.pk)
 
+    def test_the_generic_endpoint_cannot_add_a_key_the_guardians_shares_cannot_open(self):
+        cache.clear()  # that endpoint allows three calls an hour
+        self.assertEqual(self._setup([_guardian(i)[0] for i in (1, 2, 3)]).status_code, 201)
+        PasskeyRecoverySetup.objects.filter(user=self.user).update(is_active=True)
+        self._active_factors().update(status='revoked')
+        self.assertEqual(self._post_factor().status_code, 409)
+        self.assertFalse(self._active_factors().exists())
+
     def test_the_generic_endpoint_still_enrols_what_no_setup_depends_on(self):
         cache.clear()  # that endpoint allows three calls an hour
         self.assertEqual(self._post_factor().status_code, 201)  # no setup yet

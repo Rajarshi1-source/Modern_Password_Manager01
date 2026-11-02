@@ -152,10 +152,14 @@ class RecoveryFactorListCreateView(APIView):
                     # factor, so replacing it alone would leave them opening
                     # nothing: setup_recovery writes the two together. dek_id
                     # is no bar here, as a signed-in session can read it. Same
-                    # lock as setup_recovery, so neither can pass the other.
+                    # lock as setup_recovery, so neither can pass the other. A
+                    # replaceable setup still counts: a key added here, under a
+                    # different seed, would look healthy and no share would open it.
                     User.objects.select_for_update().get(pk=request.user.pk)
                     setup = PasskeyRecoverySetup.objects.filter(user=request.user).first()
-                    if setup is not None and not setup.is_replaceable():
+                    if setup is not None and (
+                            not setup.is_replaceable()
+                            or setup.shards.filter(secret_type='vault_dek_seed').exists()):
                         return Response(
                             {
                                 'error': 'use /api/auth/quantum-recovery/setup_recovery/',
@@ -459,6 +463,7 @@ class RecoveryFactorLookupView(APIView):
     Throttled with the standard recovery family. Audit-logged when a
     real factor is hit.
     """
+    authentication_classes = []  # a stale bearer token must not turn this into a 401
     permission_classes = [AllowAny]
     throttle_classes = [RecoveryThrottle]
 

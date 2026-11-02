@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const socialRecovery = vi.hoisted(() => ({ listCircles: vi.fn(), createCircle: vi.fn() }));
@@ -26,8 +26,9 @@ describe('CircleSetup', () => {
 
   it('offers no new circle and points at guardian recovery', async () => {
     render(<MemoryRouter><CircleSetup /></MemoryRouter>);
-    const notice = await screen.findByTestId('circle-setup-unavailable');
-    expect(notice.querySelector('a').getAttribute('href')).toBe('/recovery/guardian/setup');
+    const notice = await screen.findByRole('alert');
+    expect(within(notice).getByRole('link', { name: 'guardian recovery' }).getAttribute('href'))
+      .toBe('/recovery/guardian/setup');
     expect(screen.queryByRole('button', { name: /new circle/i })).toBeNull();
     expect(screen.queryByText('Create Recovery Circle')).toBeNull();
     await screen.findByText('No recovery circles yet');
@@ -43,6 +44,6 @@ describe('CircleSetup', () => {
     });
     render(<MemoryRouter><CircleSetup /></MemoryRouter>);
     await screen.findByText(/3f2b8c1e/);
-    expect(screen.getByTestId('circle-setup-unavailable').textContent).toMatch(/cannot\s+recover/);
+    expect(screen.getByRole('alert').textContent).toMatch(/cannot\s+recover/);
   });
 });
