@@ -27,6 +27,9 @@ Scans are required:
 - During CI/CD builds
 - After dependency upgrades
 
+### Docker Build Context
+`.dockerignore` (repo root) and `frontend/.dockerignore` keep local files out of images: `.env` files, private keys, local databases, logs, and virtualenvs. Without them, `COPY password_manager/ .` would bake a developer's `password_manager/.env` into a locally built image, and `load_dotenv()` would load it. Each build context needs its own file, so a new context needs one too.
+
 ---
 
 ## ⚠️ Accepted & Tracked Risks

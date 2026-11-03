@@ -1,0 +1,49 @@
+# Build context for images built from the repo root (docker/backend/Dockerfile,
+# docker/frontend/Dockerfile, docker/tor/Dockerfile). `COPY password_manager/ .`
+# and `COPY frontend/ .` take whatever is in the working tree, so anything local
+# that is not listed here ships in a locally built image. CI builds from a clean
+# checkout; the risk is an image built or pushed from a developer's machine.
+#
+# frontend/Dockerfile uses context ./frontend and has its own frontend/.dockerignore.
+#
+# password_manager/ml_models/ stays in the context on purpose: a trained
+# classifier in the build context is how it ships.
+
+# Secrets. settings/base.py calls load_dotenv(), so a baked /app/.env is loaded.
+**/.env
+**/.env.*
+!**/*.example
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/id_rsa*
+**/*adminsdk*.json
+
+# Local data and logs
+**/db.sqlite3*
+**/*.log
+password_manager/logs/*
+password_manager/media/*
+password_manager/staticfiles/*
+
+# Repository and tool state
+.git
+.claude
+.cursor
+.vscode
+
+# Dependencies and build output, which each image installs or builds itself
+canny
+**/venv
+**/.venv
+**/ENV
+**/node_modules
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.coverage
+**/htmlcov
+frontend/dist
+frontend/build
+frontend/test-results
