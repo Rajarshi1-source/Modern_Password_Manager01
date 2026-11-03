@@ -30,9 +30,10 @@ const WRAPPING_KEY_ID = 'aes-gcm-v1';
 // Its message is written for the person using the page; other errors here
 // (a blocked database, a full disk) are not. Pages tell them apart by name.
 class KeyStorageError extends Error {
-  constructor(message) {
+  constructor(message, { keyLost = false } = {}) {
     super(message);
     this.name = 'KeyStorageError';
+    this.keyLost = keyLost;
   }
 }
 
@@ -87,15 +88,15 @@ const indexedDbBackend = {
 };
 
 let backend = indexedDbBackend;
-let wrappingKeyPromise = null;
 
 /** Tests only: replace the IndexedDB backend ({get, add}). */
 export function _setWrappingKeyBackendForTests(testBackend) {
   backend = testBackend || indexedDbBackend;
-  wrappingKeyPromise = null;
 }
 
-async function loadWrappingKey() {
+// Read from IndexedDB every time, not cached: a key held only in memory would
+// keep working after IndexedDB is cleared, then fail after a reload.
+async function wrappingKey() {
   const existing = await backend.get(WRAPPING_KEY_ID);
   if (existing) return existing;
   const key = await crypto.subtle.generateKey(
@@ -112,16 +113,6 @@ async function loadWrappingKey() {
     if (stored) return stored;
     throw err;
   }
-}
-
-function wrappingKey() {
-  if (!wrappingKeyPromise) {
-    wrappingKeyPromise = loadWrappingKey().catch((err) => {
-      wrappingKeyPromise = null;
-      throw err;
-    });
-  }
-  return wrappingKeyPromise;
 }
 
 async function seal(keyPair, label) {
@@ -149,10 +140,14 @@ async function unseal(stored, label) {
     // Part of this site's data is gone or changed: most likely IndexedDB was
     // cleared and localStorage was not, so the wrapping key no longer matches.
     if (err?.name !== 'OperationError') throw err;
+    // Do not advise clearing site data: that also deletes the wrapped vault
+    // keys kept in localStorage, which can lock someone out of their vault.
     throw new KeyStorageError(
       'The recovery key in this browser can no longer be opened, because part of this '
-      + "site's stored data was cleared or changed. To make a new key, clear this site's "
-      + 'data, then tell whoever relies on this key so they can set up their guardians again.',
+      + "site's stored data was cleared or changed. You can make a new one on the guardian "
+      + 'key page (/recovery/guardian-key), then tell whoever relies on the old key so they '
+      + 'can set up their guardians again.',
+      { keyLost: true },
     );
   }
   const secret = new Uint8Array(plain);
@@ -201,7 +196,7 @@ function exclusively(name, fn) {
  * Concurrent first uses (two tabs, two components) get the same pair.
  * Throws if the stored pair cannot be opened: handing out its public key
  * would have an owner seal a share that no one can open. The stored pair is
- * left in place, so a mistaken failure here destroys nothing.
+ * left in place until someone chooses replaceLostGuardianKey.
  */
 export function getOrCreateGuardianPublicKey() {
   return exclusively('pwm-recovery-guardian-key', async () => {
@@ -209,6 +204,28 @@ export function getOrCreateGuardianPublicKey() {
     if (existing?.publicKey && existing?.wrappedSecretKey) {
       await unseal(existing, GUARDIAN_KEY);
       return existing.publicKey;
+    }
+    const keyPair = await newHolderKeyPair();
+    write(GUARDIAN_KEY, await seal(keyPair, GUARDIAN_KEY));
+    return keyPair.publicKey;
+  });
+}
+
+/**
+ * Makes a new guardian key pair, but only if the stored one cannot be opened:
+ * a key that still works is returned as it is, and any other failure (a
+ * blocked database) throws, so this can never replace a good key.
+ */
+export function replaceLostGuardianKey() {
+  return exclusively('pwm-recovery-guardian-key', async () => {
+    const existing = read(GUARDIAN_KEY);
+    if (existing?.publicKey && existing?.wrappedSecretKey) {
+      try {
+        await unseal(existing, GUARDIAN_KEY);
+        return existing.publicKey;
+      } catch (err) {
+        if (!err?.keyLost) throw err;
+      }
     }
     const keyPair = await newHolderKeyPair();
     write(GUARDIAN_KEY, await seal(keyPair, GUARDIAN_KEY));

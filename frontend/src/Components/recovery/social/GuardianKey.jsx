@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { getOrCreateGuardianPublicKey } from '../../../services/recovery/holderKeyStore';
+import {
+  getOrCreateGuardianPublicKey,
+  replaceLostGuardianKey,
+} from '../../../services/recovery/holderKeyStore';
 import { keyFingerprint } from '../../../services/recovery/sealedShareRecovery';
 
 /**
@@ -12,16 +15,36 @@ import { keyFingerprint } from '../../../services/recovery/sealedShareRecovery';
 export default function GuardianKey() {
   const [publicKey, setPublicKey] = useState('');
   const [error, setError] = useState('');
+  const [keyLost, setKeyLost] = useState(false);
+
+  const showFailure = (err) => {
+    setKeyLost(Boolean(err?.keyLost));
+    setError(err?.name === 'KeyStorageError'
+      ? err.message
+      : 'Could not create a guardian key in this browser.');
+  };
 
   useEffect(() => {
-    getOrCreateGuardianPublicKey()
-      .then(setPublicKey)
-      .catch((err) => setError(err?.name === 'KeyStorageError'
-        ? err.message
-        : 'Could not create a guardian key in this browser.'));
+    getOrCreateGuardianPublicKey().then(setPublicKey).catch(showFailure);
   }, []);
 
-  if (error) return <p role="alert">{error}</p>;
+  const replaceKey = () => {
+    setError('');
+    replaceLostGuardianKey().then(setPublicKey).catch(showFailure);
+  };
+
+  if (error) {
+    return (
+      <section data-testid="guardian-key">
+        <p role="alert">{error}</p>
+        {keyLost ? (
+          <button type="button" onClick={replaceKey} data-testid="guardian-key-replace">
+            Make a new guardian key
+          </button>
+        ) : null}
+      </section>
+    );
+  }
   if (!publicKey) return <p>Creating your guardian key…</p>;
 
   return (

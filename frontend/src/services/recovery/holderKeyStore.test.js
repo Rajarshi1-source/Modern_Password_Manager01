@@ -7,6 +7,7 @@ import {
   loadGuardianKeyPair,
   loadRequesterKeyPair,
   newRequesterKeyPair,
+  replaceLostGuardianKey,
   saveRequesterKeyPair,
 } from './holderKeyStore';
 import { proveShareHolding, sealSeedForGuardians } from './sealedShareRecovery';
@@ -21,6 +22,7 @@ function memoryBackend() {
       if (map.has(id)) throw new Error('exists');
       map.set(id, value);
     },
+    clear() { map.clear(); },
   };
 }
 
@@ -80,14 +82,45 @@ describe('holderKeyStore', () => {
   });
 
   it('does not hand out a guardian key whose wrapping key is gone', async () => {
+    const backend = memoryBackend();
+    _setWrappingKeyBackendForTests(backend);
     await getOrCreateGuardianPublicKey();
     const stored = { ...window.localStorage };
-    // IndexedDB cleared, localStorage kept.
-    _setWrappingKeyBackendForTests(memoryBackend());
-    const lost = { name: 'KeyStorageError', message: expect.stringContaining('can no longer be opened') };
+    // IndexedDB cleared, localStorage kept, this tab still open.
+    backend.clear();
+    const lost = { name: 'KeyStorageError', keyLost: true };
     await expect(getOrCreateGuardianPublicKey()).rejects.toMatchObject(lost);
     await expect(loadGuardianKeyPair()).rejects.toMatchObject(lost);
     expect({ ...window.localStorage }).toEqual(stored);
+  });
+
+  it('never advises clearing site data, which deletes wrapped vault keys', async () => {
+    const backend = memoryBackend();
+    _setWrappingKeyBackendForTests(backend);
+    await getOrCreateGuardianPublicKey();
+    backend.clear();
+    const err = await getOrCreateGuardianPublicKey().catch((e) => e);
+    expect(err.message).toContain('/recovery/guardian-key');
+    expect(err.message).not.toMatch(/clear this site/i);
+  });
+
+  it('replaces only a guardian key that cannot be opened', async () => {
+    const backend = memoryBackend();
+    _setWrappingKeyBackendForTests(backend);
+    const original = await getOrCreateGuardianPublicKey();
+    expect(await replaceLostGuardianKey()).toBe(original);
+    const blocked = new Error('blocked');
+    const { get } = backend;
+    backend.get = async () => { throw blocked; };
+    await expect(replaceLostGuardianKey()).rejects.toBe(blocked);
+    backend.get = get;
+    expect(await getOrCreateGuardianPublicKey()).toBe(original);
+
+    backend.clear();
+    const replacement = await replaceLostGuardianKey();
+    expect(replacement).not.toBe(original);
+    expect(await getOrCreateGuardianPublicKey()).toBe(replacement);
+    expect((await loadGuardianKeyPair()).publicKey).toBe(replacement);
   });
 
   it('keeps requester keys per request and forgets them', async () => {
