@@ -36,6 +36,7 @@ from auth_module.quantum_recovery_tasks import (
     send_guardian_approval_request,
     send_guardian_invitation,
 )
+from auth_module.quantum_recovery_views import RECOVERY_PAUSED
 from auth_module.tasks import start_guardian_recovery
 from shared import sealed_shares
 from shared.tests import sealed_share_fixtures as fx
@@ -699,6 +700,95 @@ class RotationNeedsAFinishedRecoveryTests(GuardianFlowBase):
         RecoveryAttempt.objects.filter(pk=proof['attempt_id']).update(
             expires_at=timezone.now() - timedelta(minutes=1))
         self.assertEqual(self._rotate(**proof).status_code, 403)
+
+
+class TravelLockTests(GuardianFlowBase):
+    """A lock pauses an attempt that started before it, not only new ones."""
+
+    _approved = ProgressAndReleaseTests._approved
+    _complete = ProgressAndReleaseTests._complete
+    _rotate = RotationNeedsAFinishedRecoveryTests._rotate
+    _finished = RotationNeedsAFinishedRecoveryTests._finished
+
+    def _lock(self, until=timedelta(days=1)):
+        PasskeyRecoverySetup.objects.filter(pk=self.setup.pk).update(
+            travel_lock_enabled=True, travel_lock_until=timezone.now() + until)
+
+    def _unlock(self):
+        self._lock(until=timedelta(minutes=-1))
+
+    def test_a_locked_account_asks_no_guardian_until_the_lock_ends(self):
+        attempt, token = self._start()
+        self._lock()
+        r = self._confirm(attempt, token)
+        self.assertEqual((r.status_code, r.json()['error']), (400, RECOVERY_PAUSED))
+        self.queued.assert_not_called()
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, 'initiated')
+        self.assertFalse(attempt.guardian_approvals.exists())
+
+        self._unlock()
+        self.assertEqual(self._confirm(attempt, token).status_code, 200)
+        self.assertEqual(self.queued.call_count, 3)
+
+    def test_a_confirmed_attempt_cannot_ask_again_during_a_lock(self):
+        attempt, token = self._start()
+        self._confirm(attempt, token)
+        self._open_windows(attempt)
+        self._lock()
+        self.assertEqual(self._confirm(attempt, token).status_code, 400)
+        self.queued.assert_not_called()
+
+    def test_a_queued_email_waits_out_a_lock_and_can_be_sent_after_it(self):
+        attempt, token = self._start()
+        self._confirm(attempt, token)
+        approval = attempt.guardian_approvals.first()
+        self._open_windows(attempt)
+        mail.outbox.clear()
+        self._lock()
+        send_guardian_approval_request.apply(args=[str(approval.id)])
+        self.assertEqual(mail.outbox, [])
+        self.assertFalse(RecoveryAuditLog.objects.filter(
+            event_type='guardian_approval_requested').exists())
+
+        self._unlock()
+        send_guardian_approval_request.apply(args=[str(approval.id)])
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_a_lock_holds_back_the_shares_of_an_attempt_past_its_wait(self):
+        attempt, token = self._approved()
+        RecoveryAttempt.objects.filter(pk=attempt.pk).update(
+            canary_alert_sent_at=timezone.now() - timedelta(hours=49))
+        self._lock()
+        r = self._complete(attempt, token)
+        self.assertEqual((r.status_code, r.json()['error']), (400, RECOVERY_PAUSED))
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, 'guardian_approval')
+
+        self._unlock()
+        self.assertEqual(self._complete(attempt, token).status_code, 200)
+
+    def test_a_lock_stops_a_finished_recovery_setting_a_password(self):
+        proof = self._finished()
+        self._lock()
+        self.assertEqual(self._rotate(**proof).status_code, 403)
+        self.assertEqual(VaultWrappedDEK.objects.get(user=self.user).blob,
+                         self.setup_body['recovery_factor']['blob'])
+        attempt = RecoveryAttempt.objects.get(pk=proof['attempt_id'])
+        self.assertIsNone(attempt.password_rotated_at)
+
+        self._unlock()
+        self.assertEqual(self._rotate(**proof).status_code, 200)
+
+    def test_a_guardian_can_still_deny_during_a_lock(self):
+        attempt, token = self._start()
+        self._confirm(attempt, token)
+        self._open_windows(attempt)
+        self._lock()
+        approval = attempt.guardian_approvals.first()
+        r = self.anon.post(reverse('quantum-recovery-approve'), {
+            'approval_token': approval.approval_token, 'approved': False}, format='json')
+        self.assertEqual(r.status_code, 200, r.content)
 
 
 class E2EHelperTests(GuardianFlowBase):

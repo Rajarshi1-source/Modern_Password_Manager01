@@ -94,7 +94,7 @@ def _finished_guardian_attempt(user, request):
     if attempt is None or not sealed_shares.share_proof_matches(
             request.data.get('requester_token'), attempt.requester_token_hash):
         return None
-    return attempt
+    return None if attempt.recovery_setup.is_travel_locked() else attempt
 
 
 class VaultWrappedDEKView(APIView):
@@ -359,8 +359,9 @@ class WrappedDEKRecoveryRotateView(APIView):
                 if attempt is None:
                     return Response(
                         {'error': 'This recovery cannot set a master password: it has '
-                                  'not finished, or it already set one. Try signing in '
-                                  'with the new one, or start recovery again.'},
+                                  'not finished, it is paused on this account, or it '
+                                  'already set one. Try signing in with the new one, or '
+                                  'start recovery again.'},
                         status=403,
                     )
 
