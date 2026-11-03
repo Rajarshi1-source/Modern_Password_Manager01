@@ -293,6 +293,9 @@ const ApiService = {
   
   // Error handler helper
   handleError: (error) => {
+    // Not a request failure: holderKeyStore writes this message for the user.
+    if (error?.name === 'KeyStorageError') return { error: error.message };
+
     console.error('API Error:', error);
     
     if (error.response) {

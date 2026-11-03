@@ -27,10 +27,12 @@ describe('GuardianKey', () => {
     getOrCreateGuardianPublicKey.mockRejectedValue(
       Object.assign(new Error('Lost.'), { name: 'KeyStorageError', keyLost: true }),
     );
-    replaceLostGuardianKey.mockResolvedValue('');
+    const replacement = 'AAECAw==';
+    replaceLostGuardianKey.mockResolvedValue(replacement);
     render(<GuardianKey />);
     fireEvent.click(await screen.findByTestId('guardian-key-replace'));
     expect(replaceLostGuardianKey).toHaveBeenCalledTimes(1);
+    expect((await screen.findByTestId('guardian-public-key')).value).toBe(replacement);
   });
 
   it('does not show other errors as they are', async () => {
