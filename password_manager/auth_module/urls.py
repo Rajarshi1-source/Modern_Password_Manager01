@@ -196,6 +196,7 @@ urlpatterns = [
     # Recovery notices: in-app list and the "this wasn't me" link
     path('recovery-notices/', recovery_notice_views.list_recovery_notices, name='recovery-notices'),
     path('recovery-notices/cancel/', recovery_notice_views.cancel_recovery_notice, name='recovery-notice-cancel'),
+    path('recovery-notices/acknowledge-exposure/', recovery_notice_views.acknowledge_vault_exposure, name='recovery-notice-acknowledge-exposure'),
     
     # ==================== Quantum Recovery Endpoints ====================
     path('quantum-recovery/setup_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'setup_recovery'}), name='quantum-recovery-setup'),

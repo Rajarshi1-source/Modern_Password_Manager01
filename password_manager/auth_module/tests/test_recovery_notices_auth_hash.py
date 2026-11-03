@@ -752,6 +752,97 @@ class UnlockLockedAccountTests(TestCase):
         replaced.refresh_from_db()
         self.assertEqual(replaced.status, 'active')
 
+    def _bundle_enrolled_time_lock(self, age=timedelta(days=20)):
+        """A time-locked factor and its server half, paired as the bundle view does."""
+        from auth_module.quantum_recovery_models import RecoveryAuditLog
+        from auth_module.time_locked_models import TimeLockedRecovery
+        factor = self._factor('time_locked', age=age)
+        half = TimeLockedRecovery.objects.create(user=self.user, server_half=b'half')
+        TimeLockedRecovery.objects.filter(pk=half.pk).update(enrolled_at=timezone.now() - age)
+        RecoveryAuditLog.objects.create(user=self.user, event_type='setup_created', event_data={
+            'subsystem': 'time_locked_bundle', 'recovery_id': half.pk, 'factor_id': factor.pk})
+        return factor, half
+
+    def _replace_time_lock_after_a_recovery(self, **half_state):
+        """The owner's time-locked factor, replaced by whoever completed a recovery."""
+        from auth_module.recovery_models_v2 import RecoveryWrappedDEK
+        from auth_module.time_locked_models import TimeLockedRecovery
+        self._vault()
+        self._factor('recovery_key')
+        self._factor('passkey')
+        owners, owners_half = self._bundle_enrolled_time_lock()
+        self.assertEqual(self._rotate().status_code, 200)
+        RecoveryWrappedDEK.objects.filter(pk=owners.pk).update(status='revoked', revoked_at=timezone.now())
+        TimeLockedRecovery.objects.filter(pk=owners_half.pk).update(is_active=False, **half_state)
+        attackers, attackers_half = self._bundle_enrolled_time_lock(age=timedelta(0))
+        self._lock_from_last_mail()
+        self._unlock()
+        for row in (owners, owners_half, attackers, attackers_half):
+            row.refresh_from_db()
+        return owners, owners_half, attackers, attackers_half
+
+    def test_a_replaced_time_locked_factor_comes_back_with_its_server_half(self):
+        from auth_module.time_locked_models import TimeLockedRecovery
+        owners, owners_half, attackers, attackers_half = self._replace_time_lock_after_a_recovery(
+            canary_state=TimeLockedRecovery.CanaryState.ALERTING,
+            release_after=timezone.now() - timedelta(days=1), canary_ack_token='started-by-them')
+        self.assertEqual(owners.status, 'active')
+        self.assertEqual(attackers.status, 'revoked')
+        self.assertFalse(attackers_half.is_active)
+        self.assertTrue(owners_half.is_active)
+        # A delay someone else started must not be left to release the owner's half.
+        self.assertEqual(owners_half.canary_state, TimeLockedRecovery.CanaryState.QUIET)
+        self.assertIsNone(owners_half.release_after)
+        self.assertEqual(owners_half.canary_ack_token, '')
+        self.assertEqual(bytes(owners_half.server_half), b'half')
+
+    def _assert_half_does_not_come_back(self, state):
+        owners, owners_half, _, attackers_half = self._replace_time_lock_after_a_recovery(
+            canary_state=state)
+        self.assertEqual(owners.status, 'revoked')
+        self.assertFalse(owners_half.is_active)
+        self.assertFalse(attackers_half.is_active)
+
+    def test_a_released_server_half_does_not_come_back(self):
+        self._assert_half_does_not_come_back('expired')
+
+    def test_a_cancelled_server_half_does_not_come_back(self):
+        self._assert_half_does_not_come_back('acknowledged')
+
+    def test_unlock_keeps_the_time_lock_of_a_factor_that_was_not_touched(self):
+        self._vault()
+        self._factor('recovery_key')
+        owners, owners_half = self._bundle_enrolled_time_lock()
+        self._recover_then_lock()
+        self._unlock()
+        owners.refresh_from_db()
+        owners_half.refresh_from_db()
+        self.assertEqual(owners.status, 'active')
+        self.assertTrue(owners_half.is_active)
+
+    def test_the_app_warns_of_the_exposed_vault_until_the_owner_acknowledges(self):
+        self._lock()
+        self._unlock()
+        client = APIClient()
+        client.force_authenticate(self.user)
+        listed = client.get('/api/auth/recovery-notices/').json()
+        self.assertIsNotNone(listed['vault_exposed_since'])
+        r = client.post('/api/auth/recovery-notices/acknowledge-exposure/')
+        self.assertEqual(r.status_code, 200)
+        self.assertIsNone(client.get('/api/auth/recovery-notices/').json()['vault_exposed_since'])
+        self.assertEqual(APIClient().post('/api/auth/recovery-notices/acknowledge-exposure/').status_code, 401)
+
+    def test_a_later_unlock_warns_again(self):
+        from auth_module.recovery_notice import acknowledge_exposure, unacknowledged_exposure
+        self._lock()
+        self._unlock()
+        self.assertIsNotNone(unacknowledged_exposure(self.user))
+        acknowledge_exposure(self.user)
+        self.assertIsNone(unacknowledged_exposure(self.user))
+        self._lock()
+        self._unlock()
+        self.assertIsNotNone(unacknowledged_exposure(self.user))
+
     def test_a_disable_after_a_manual_reactivation_is_not_lifted(self):
         self._lock()
         self.user.is_active = True

@@ -50,5 +50,6 @@ class Command(BaseCommand):
             f'{revoked} recovery factor(s) revoked and {restored} restored; the owner was emailed at '
             f'{user.email} and sets a new password with "Forgot password". The email also tells them '
             'to enroll a new recovery factor and change the stored passwords, since whoever '
-            'completed a recovery may have read the vault.'
+            'completed a recovery may have read the vault, and the app repeats that until they '
+            'acknowledge it.'
         )

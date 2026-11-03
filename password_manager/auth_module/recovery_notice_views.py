@@ -3,6 +3,7 @@ Recovery notices (auth_module/recovery_notice.py).
 
 GET  /api/auth/recovery-notices/          the account's recent notices (in-app)
 POST /api/auth/recovery-notices/cancel/   {"token": ...} "this wasn't me"
+POST /api/auth/recovery-notices/acknowledge-exposure/   ends the warning after an unlock
 """
 
 from rest_framework import status
@@ -18,7 +19,7 @@ from rest_framework.response import Response
 from .recovery_throttling import RecoveryNoticeCancelThrottle
 
 from .models import RecoveryNotice
-from .recovery_notice import cancel_from_notice
+from .recovery_notice import acknowledge_exposure, cancel_from_notice, unacknowledged_exposure
 
 CANCEL_ANSWER = (
     'If that link was valid and not expired, the recovery it reported has been stopped. '
@@ -30,7 +31,7 @@ CANCEL_ANSWER = (
 @permission_classes([IsAuthenticated])
 def list_recovery_notices(request):
     notices = RecoveryNotice.objects.filter(user=request.user)[:50]
-    return Response({'notices': [{
+    return Response({'vault_exposed_since': unacknowledged_exposure(request.user), 'notices': [{
         'id': str(n.id),
         'event': n.event,
         'description': n.get_event_display(),
@@ -40,6 +41,13 @@ def list_recovery_notices(request):
         'ip_address': n.ip_address,
         'user_agent': n.user_agent,
     } for n in notices]})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def acknowledge_vault_exposure(request):
+    acknowledge_exposure(request.user)
+    return Response({'vault_exposed_since': None})
 
 
 @api_view(['POST'])

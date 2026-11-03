@@ -57,6 +57,7 @@ const GuardianApprove = lazy(() => import('./Components/recovery/guardian/Guardi
 const GuardianRecoveryStart = lazy(() => import('./Components/recovery/guardian/GuardianRecoveryStart'));
 const GuardianRecoveryAttempt = lazy(() => import('./Components/recovery/notices/GuardianRecoveryAttempt'));
 const RecoveryNotices = lazy(() => import('./Components/recovery/notices/RecoveryNotices'));
+const VaultExposureBanner = lazy(() => import('./Components/recovery/notices/VaultExposureBanner'));
 const TimeLockCancel = lazy(() => import('./Components/recovery/notices/TimeLockCancel'));
 const PasskeyManagement = lazy(() => import('./Components/auth/PasskeyManagement'));
 const CircadianSettings = lazy(() => import('./Components/settings/CircadianSettings'));
@@ -2285,6 +2286,7 @@ function App() {
               onClose={() => setShowVaultUnlock(false)}
             />
             <Suspense fallback={<LoadingIndicator />}>
+              {isAuthenticated ? <VaultExposureBanner /> : null}
               <Routes>
                 <Route path="/" element={mainContent} />
                 <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : mainContent} />

@@ -185,6 +185,7 @@ const ApiService = {
   // their emails (auth_module/recovery_notice.py)
   recoveryNotices: {
     list: () => api.get('/auth/recovery-notices/'),
+    acknowledgeExposure: () => api.post('/auth/recovery-notices/acknowledge-exposure/'),
     cancel: (token) => api.post('/auth/recovery-notices/cancel/', { token }, { _noAuthRedirect: true }),
     cancelTimeLock: (token) => api.post('/auth/vault/time-locked/canary-ack/', { token }, { _noAuthRedirect: true }),
   },

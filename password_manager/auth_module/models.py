@@ -375,6 +375,9 @@ class RecoveryNotice(models.Model):
     # whoever completed the recovery holds its secret.
     recovery_factor = models.ForeignKey('RecoveryWrappedDEK', null=True, blank=True,
                                         on_delete=models.SET_NULL, related_name='+')
+    # On an account_unlocked notice: the owner has said they changed the stored
+    # passwords, which ends the in-app warning.
+    exposure_acknowledged_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['-created_at']

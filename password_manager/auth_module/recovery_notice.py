@@ -266,10 +266,11 @@ def factors_to_restore(user):
     lock can remove the owner's way back. Only a status changes; the server still
     never sees a factor's secret.
 
-    Leaves out a factor a recovery used, a type that keeps an active factor,
-    time-locked factors, whose server half is a separate row with its own one-shot
-    state, and social_mesh factors if shares were released, since whoever holds
-    them can rebuild the seed: the owner enrolls those types again.
+    Leaves out a factor a recovery used, a type that keeps an active factor, a
+    time-locked factor with no server half left to pair it with
+    (``_time_locked_half``), and social_mesh factors if shares were released,
+    since whoever holds them can rebuild the seed: the owner enrolls those types
+    again.
     """
     from .recovery_models_v2 import RecoveryWrappedDEK, VaultWrappedDEK
 
@@ -285,13 +286,59 @@ def factors_to_restore(user):
         user=user, status=RecoveryWrappedDEK.Status.REVOKED,
         created_at__lt=since, revoked_at__gte=since,
         dek_id__in=VaultWrappedDEK.objects.filter(user=user).values('dek_id'),
-    ).exclude(pk__in=used).exclude(
-        factor_type=RecoveryWrappedDEK.FactorType.TIME_LOCKED,
-    ).order_by('created_at')
+    ).exclude(pk__in=used).order_by('created_at')
     if _shares_released_since(user, since):
         replaced = replaced.exclude(factor_type=RecoveryWrappedDEK.FactorType.SOCIAL_MESH)
-    latest = {f.factor_type: f.pk for f in replaced if f.factor_type not in kept_types}
+    latest = {
+        f.factor_type: f.pk for f in replaced
+        if f.factor_type not in kept_types
+        and (f.factor_type != RecoveryWrappedDEK.FactorType.TIME_LOCKED
+             or _time_locked_half(f) is not None)
+    }
     return list(latest.values())
+
+
+def _time_locked_half(factor):
+    """The server half enrolled with this time-locked factor, if it was never
+    released or cancelled. Only the enroll-bundle audit entry pairs the two rows,
+    so a factor from before that endpoint has none and stays revoked."""
+    from .quantum_recovery_models import RecoveryAuditLog
+    from .time_locked_models import TimeLockedRecovery
+
+    entry = RecoveryAuditLog.objects.filter(
+        user_id=factor.user_id, event_type='setup_created',
+        event_data__subsystem='time_locked_bundle', event_data__factor_id=factor.pk,
+    ).first()
+    if entry is None:
+        return None
+    return TimeLockedRecovery.objects.filter(
+        pk=entry.event_data.get('recovery_id'), user_id=factor.user_id, completed_at__isnull=True,
+    ).exclude(canary_state__in=[TimeLockedRecovery.CanaryState.EXPIRED,
+                                TimeLockedRecovery.CanaryState.ACKNOWLEDGED]).first()
+
+
+def _settle_time_locked_rows(user, since, restored):
+    """Keep one active server half: the one of a restored factor, as if never
+    started, since an anonymous release would use up its one-shot state. A half
+    enrolled since the lock's period began goes with its factor."""
+    from .recovery_models_v2 import RecoveryWrappedDEK
+    from .time_locked_models import TimeLockedRecovery
+
+    factor = RecoveryWrappedDEK.objects.filter(
+        pk__in=restored, factor_type=RecoveryWrappedDEK.FactorType.TIME_LOCKED).first()
+    half = _time_locked_half(factor) if factor is not None else None
+    active = TimeLockedRecovery.objects.filter(user=user, is_active=True)
+    if half is None:
+        if since is not None:
+            active.filter(enrolled_at__gte=since).update(is_active=False)
+        return
+    active.exclude(pk=half.pk).update(is_active=False)
+    half.is_active = True
+    half.canary_state = TimeLockedRecovery.CanaryState.QUIET
+    half.release_after = half.initiated_at = half.last_canary_sent = None
+    half.canary_ack_token = ''
+    half.save(update_fields=['is_active', 'canary_state', 'release_after', 'initiated_at',
+                             'last_canary_sent', 'canary_ack_token'])
 
 
 def leaves_no_recovery_factor(user):
@@ -317,7 +364,8 @@ def unlock_locked_account(user, operator, reason):
     Returns how many factors were revoked and restored. The owner sets a
     new password through "Forgot password", which goes to the account's email,
     and is told of the unlock; that notice's cancel link locks the account
-    again if support was deceived.
+    again if support was deceived, and the app warns that the vault may have been
+    read until the owner acknowledges it (``unacknowledged_exposure``).
     """
     from .login_verifier import revoke_sessions
     from .models import RecoveryNotice, UserPasskey
@@ -328,11 +376,13 @@ def unlock_locked_account(user, operator, reason):
     # Worked out first: it depends on the notices changed below.
     revoked = list(factors_to_revoke(user).values_list('pk', flat=True))
     restored = factors_to_restore(user)
+    _, since = _lock_period(user)
     # In this order: a type allows one active factor at a time.
     RecoveryWrappedDEK.objects.filter(pk__in=revoked).update(
         status=RecoveryWrappedDEK.Status.REVOKED, revoked_at=timezone.now())
     RecoveryWrappedDEK.objects.filter(pk__in=restored).update(
         status=RecoveryWrappedDEK.Status.ACTIVE, revoked_at=None)
+    _settle_time_locked_rows(user, since, restored)
     # Older links must not lock the restored account again; the notice below
     # brings a new one.
     now = timezone.now()
@@ -366,6 +416,26 @@ def clear_stale_lock(sender, instance, created=False, raw=False, update_fields=N
     if update_fields is not None and 'is_active' not in update_fields:
         return
     RecoveryNotice.objects.filter(user=instance, locked_account=True).update(locked_account=False)
+
+
+def unacknowledged_exposure(user):
+    """When support last unlocked the account, if the owner has not said they
+    have dealt with what follows from it. Whoever caused the lock may have read
+    the vault, and the server cannot tell or undo that: it can only keep saying
+    so until the owner has changed the stored passwords. Holds no vault data."""
+    from .models import RecoveryNotice
+
+    return RecoveryNotice.objects.filter(
+        user=user, event='account_unlocked', exposure_acknowledged_at__isnull=True,
+    ).values_list('created_at', flat=True).first()
+
+
+def acknowledge_exposure(user):
+    from .models import RecoveryNotice
+
+    RecoveryNotice.objects.filter(
+        user=user, event='account_unlocked', exposure_acknowledged_at__isnull=True,
+    ).update(exposure_acknowledged_at=timezone.now())
 
 
 def _lock_account(user):
