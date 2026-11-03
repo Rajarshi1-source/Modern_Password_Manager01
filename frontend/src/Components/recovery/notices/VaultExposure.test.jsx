@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import RecoveryNotices from './RecoveryNotices';
 import VaultExposureBanner from './VaultExposureBanner';
@@ -60,7 +60,49 @@ describe('vault exposure warning', () => {
   it('banner shows nothing when the check fails', async () => {
     ApiService.recoveryNotices.list.mockRejectedValue(new Error('down'));
     render(<MemoryRouter><VaultExposureBanner /></MemoryRouter>);
-    await waitFor(() => expect(ApiService.recoveryNotices.list).toHaveBeenCalled());
+    await act(async () => {
+      await ApiService.recoveryNotices.list.mock.results[0].value.catch(() => {});
+    });
     expect(screen.queryByTestId('vault-exposure-banner')).toBeNull();
+  });
+
+  it('banner checks again after a failed check', async () => {
+    vi.useFakeTimers();
+    try {
+      ApiService.recoveryNotices.list.mockRejectedValueOnce(new Error('down'));
+      ApiService.recoveryNotices.list.mockResolvedValue(exposed);
+      render(<MemoryRouter><VaultExposureBanner /></MemoryRouter>);
+      await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+      expect(ApiService.recoveryNotices.list).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('vault-exposure-banner')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('page offers a retry when the notices do not load', async () => {
+    ApiService.recoveryNotices.list.mockRejectedValueOnce(new Error('down'));
+    ApiService.recoveryNotices.list.mockResolvedValue(exposed);
+    ApiService.handleError.mockReturnValue({});
+    render(<MemoryRouter><RecoveryNotices /></MemoryRouter>);
+    fireEvent.click(await screen.findByTestId('recovery-notices-retry'));
+    await screen.findByTestId('vault-exposure-warning');
+  });
+});
+
+describe('recovery notice requests', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['cancel', (n) => n.cancel('tok-123'),
+      ['/auth/recovery-notices/cancel/', { token: 'tok-123' }, { _noAuthRedirect: true }]],
+    ['acknowledgeExposure', (n) => n.acknowledgeExposure(),
+      ['/auth/recovery-notices/acknowledge-exposure/']],
+  ])('%s sends what the endpoint reads', async (_name, call, expected) => {
+    const { default: RealApi, api } = await vi.importActual('../../../services/api');
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: {} });
+    await call(RealApi.recoveryNotices);
+    expect(post).toHaveBeenCalledWith(...expected);
+    post.mockRestore();
   });
 });

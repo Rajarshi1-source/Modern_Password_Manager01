@@ -100,16 +100,20 @@ class NotificationService:
                 to=[user.email]
             )
             msg.attach_alternative(html_message, "text/html")
-            msg.send()
-            notice.email_sent = True
-            notice.save(update_fields=['email_sent'])
-            
+            # 0 without an exception: the account has no email address.
+            sent = msg.send()
+            if sent:
+                notice.email_sent = True
+                notice.save(update_fields=['email_sent'])
+            else:
+                logger.warning("Canary alert email not delivered for attempt %s", attempt.id)
+
             # Send SMS if available and user has phone number
             if hasattr(user, 'phone_number') and user.phone_number and self.twilio_client:
                 self.send_canary_alert_sms(user, notice.cancel_link)
             
-            logger.info(f"Sent canary alert to {user.email} for attempt {attempt.id}")
-            return True
+            logger.info(f"Handled canary alert to {user.email} for attempt {attempt.id}")
+            return bool(sent)
             
         except Exception as e:
             logger.error(f"Failed to send canary alert: {str(e)}")

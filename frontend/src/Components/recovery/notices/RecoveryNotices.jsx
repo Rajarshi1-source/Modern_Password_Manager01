@@ -13,7 +13,8 @@ export default function RecoveryNotices() {
   const [exposedSince, setExposedSince] = useState(null);
   const [error, setError] = useState('');
 
-  useEffect(() => {
+  function load() {
+    setError('');
     ApiService.recoveryNotices.list()
       .then((resp) => {
         setNotices(resp.data?.notices || []);
@@ -23,7 +24,9 @@ export default function RecoveryNotices() {
         const data = ApiService.handleError(err) || {};
         setError(data.error || data.detail || 'Could not load notices.');
       });
-  }, []);
+  }
+
+  useEffect(load, []);
 
   async function acknowledge() {
     setError('');
@@ -36,7 +39,15 @@ export default function RecoveryNotices() {
     }
   }
 
-  if (notices === null) return error ? <p role="alert">{error}</p> : <p>Loading…</p>;
+  if (notices === null) {
+    if (!error) return <p>Loading…</p>;
+    return (
+      <>
+        <p role="alert">{error}</p>
+        <button type="button" onClick={load} data-testid="recovery-notices-retry">Try again</button>
+      </>
+    );
+  }
 
   return (
     <section data-testid="recovery-notices">
