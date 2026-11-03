@@ -62,6 +62,9 @@ GUARDIAN_RECOVERY_MESSAGE = (
     'If guardian recovery is available for this account, an email about it '
     'has been sent to its address.'
 )
+# A travel lock also stops an attempt that started before it. Only the device
+# that asked sees this: the request itself answers the same for every account.
+RECOVERY_PAUSED = 'Recovery is paused on this account. Try again later.'
 
 
 def _parse_sealed_guardian(g):
@@ -847,6 +850,8 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             recovery_setup = PasskeyRecoverySetup.objects.select_for_update().get(
                 pk=attempt.recovery_setup_id)
             attempt = RecoveryAttempt.objects.select_for_update().get(pk=attempt.pk)
+            if recovery_setup.is_travel_locked():
+                return Response({'error': RECOVERY_PAUSED}, status=status.HTTP_400_BAD_REQUEST)
             if attempt.status == 'initiated':
                 link_ends = attempt.initiated_at + timedelta(hours=GUARDIAN_UNCONFIRMED_WINDOW_HOURS)
                 if attempt.is_expired() or timezone.now() > link_ends:
@@ -902,6 +907,9 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 return Response({'error': 'Recovery attempt not found'},
                                 status=status.HTTP_404_NOT_FOUND)
             recovery_setup = attempt.recovery_setup
+
+            if recovery_setup.is_travel_locked():
+                return Response({'error': RECOVERY_PAUSED}, status=status.HTTP_400_BAD_REQUEST)
 
             if not bytes(recovery_setup.secret_check) or not bytes(attempt.requester_public_key):
                 return Response({

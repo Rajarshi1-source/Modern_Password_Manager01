@@ -230,6 +230,7 @@ def send_guardian_approval_request(self, approval_id):
             return False
         attempt = approval.recovery_attempt
         if (attempt.status != 'guardian_approval' or attempt.is_expired()
+                or attempt.recovery_setup.is_travel_locked()
                 or timezone.now() > approval.approval_window_end):
             return False
         if RecoveryAuditLog.objects.filter(
