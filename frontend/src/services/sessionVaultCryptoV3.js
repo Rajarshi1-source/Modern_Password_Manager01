@@ -12,6 +12,9 @@
  *   5. Recovery factors = wrap the DEK under additional KEKs (recovery
  *      key, social-mesh seed, time-lock seed). Recovery uses any of
  *      those KEKs to retrieve the DEK.
+ *   6. After a recovery compromise `replaceVaultKey` swaps in a new DEK. The old
+ *      one is kept encrypted under the new one (`retired_keys`), so items and
+ *      backups still sealed under it stay readable until they are re-encrypted.
  *
  * ZK invariant: master password, recovery key, and unwrapped DEK never
  * leave the browser. Only the envelope (with `wrapped`, `iv`, `salt`)
@@ -53,6 +56,8 @@ const WRAPPED_DEK_URL = '/api/auth/vault/wrapped-dek/';
 // the `recovery-factors/lookup/` endpoint.
 const WRAPPED_DEK_RECOVER_ROTATE_URL = '/api/auth/vault/wrapped-dek/recover-rotate/';
 const RECOVERY_FACTORS_URL = '/api/auth/vault/recovery-factors/';
+const REPLACE_KEY_URL = '/api/auth/vault/wrapped-dek/replace-key/';
+const RETIRED_KEY_VERSION = 'rdek-1';
 
 let sessionDEK = null; // CryptoKey, non-extractable
 let sessionDEKId = null; // UUID string from server
@@ -65,6 +70,11 @@ let sessionDEKId = null; // UUID string from server
 // 3 requests/hour/user (RecoveryThrottle), a budget login already spends
 // one of, so a verify-by-GET would starve the NEXT login's unlock.
 let sessionWrappedBlob = null;
+// Replaced DEKs, oldest first, each encrypted under the one that replaced it.
+// Independent of the master password and of every recovery factor, so neither
+// a password change nor a recovery can lose them. Opened on first need.
+let sessionRetiredKeys = [];
+let retiredKeyCache = new Map();
 
 // ─── Encoding helpers ───────────────────────────────────────────────
 const toB64 = (b) => {
@@ -186,6 +196,61 @@ async function computeAuthHash(recoverySecret) {
   return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+const retiredKeyAad = (dekId) => new TextEncoder().encode(`retired-dek-v1|${dekId}`);
+
+async function sealRetiredKey(replacementDek, retiredDekX, dekId) {
+  const iv = randomBytes(12);
+  const raw = await window.crypto.subtle.exportKey('raw', retiredDekX);
+  const wrapped = await window.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv, additionalData: retiredKeyAad(dekId) },
+    replacementDek,
+    raw,
+  );
+  new Uint8Array(raw).fill(0);
+  return {
+    v: RETIRED_KEY_VERSION,
+    dek_id: dekId,
+    iv: toB64(iv),
+    wrapped: toB64(new Uint8Array(wrapped)),
+  };
+}
+
+async function openRetiredKey(entry, replacementDek) {
+  const raw = await window.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: fromB64(entry.iv), additionalData: retiredKeyAad(entry.dek_id) },
+    replacementDek,
+    fromB64(entry.wrapped),
+  );
+  const key = await window.crypto.subtle.importKey(
+    'raw',
+    raw,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
+  new Uint8Array(raw).fill(0);
+  return key;
+}
+
+// The replaced DEK with this id, walking back from the current one, or null.
+async function retiredKeyFor(dekId) {
+  const cache = retiredKeyCache; // a lock during the walk replaces the live map
+  if (cache.has(dekId)) return cache.get(dekId);
+  let key = sessionDEK;
+  try {
+    for (let i = sessionRetiredKeys.length - 1; i >= 0; i -= 1) {
+      const entry = sessionRetiredKeys[i];
+      // eslint-disable-next-line no-await-in-loop -- each key opens the next
+      key = await openRetiredKey(entry, key);
+      cache.set(entry.dek_id, key);
+      if (entry.dek_id === dekId) return key;
+    }
+  } catch {
+    return null; // a damaged entry: the item reads as stale, and nothing is lost
+  }
+  return null;
+}
+
 async function reimportNonExtractable(extractableKey) {
   const raw = await window.crypto.subtle.exportKey('raw', extractableKey);
   return window.crypto.subtle.importKey(
@@ -214,6 +279,8 @@ export async function enrollWithMasterPassword(masterPassword) {
   sessionDEK = await reimportNonExtractable(dek);
   sessionDEKId = data.dek_id;
   sessionWrappedBlob = blob;
+  sessionRetiredKeys = [];
+  retiredKeyCache = new Map();
   return { dekId: sessionDEKId };
 }
 
@@ -225,6 +292,8 @@ export async function unlockWithMasterPassword(masterPassword) {
   sessionDEK = await unwrapDEK(data.blob, masterPassword, { extractable: false });
   sessionDEKId = data.dek_id;
   sessionWrappedBlob = data.blob;
+  sessionRetiredKeys = Array.isArray(data.retired_keys) ? data.retired_keys : [];
+  retiredKeyCache = new Map();
   return { dekId: sessionDEKId };
 }
 
@@ -242,6 +311,59 @@ export async function changeMasterPassword(oldPassword, newPassword) {
   // the new one -- a worse bug than the unverified derivation it exists to
   // close.
   sessionWrappedBlob = blob;
+}
+
+/**
+ * Replace the DEK after a recovery compromise (VaultKeyReplaceView).
+ *
+ * The server writes the new wrapped DEK and the sealed old one together, so
+ * there is no state with no working key, and it ends every session, this one
+ * included. The next sign-in re-encrypts the rows (`legacyVaultMigration`).
+ * Both new ciphertexts are opened again before anything leaves the browser:
+ * a key sent in a form that cannot be opened would lose the vault.
+ *
+ * @param {string} masterPassword - Checked by unwrapping the current envelope.
+ * @param {string} username - Account name the login verifier is derived from.
+ * @returns {Promise<{dekId: string}>}
+ */
+export async function replaceVaultKey(masterPassword, username) {
+  if (!sessionDEK || !sessionWrappedBlob) throw new Error('Vault is locked.');
+  const oldDekX = await unwrapDEK(sessionWrappedBlob, masterPassword, { extractable: true });
+  const oldDekId = sessionDEKId;
+  const newDek = await window.crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 256 },
+    true, // extractable for wrapKey
+    ['encrypt', 'decrypt'],
+  );
+  const saltBytes = randomBytes(16);
+  const kek = await deriveKEK(masterPassword, saltBytes);
+  const blob = await wrapDEK(newDek, kek, DEFAULT_KDF, saltBytes);
+  const retiredKey = await sealRetiredKey(newDek, oldDekX, oldDekId);
+
+  const probe = toB64(randomBytes(16));
+  const reopenedNew = await unwrapDEK(blob, masterPassword, { extractable: true });
+  const reopenedOld = await openRetiredKey(retiredKey, reopenedNew);
+  const iv = randomBytes(12);
+  const sealed = await window.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    reopenedOld,
+    new TextEncoder().encode(probe),
+  );
+  const opened = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, oldDekX, sealed);
+  if (new TextDecoder().decode(opened) !== probe) {
+    throw new Error('The new vault key failed its check. Nothing was changed.');
+  }
+
+  const loginVerifier = await deriveLoginVerifier(masterPassword, username);
+  const { data } = await axios.post(REPLACE_KEY_URL, {
+    dek_id: oldDekId,
+    blob,
+    retired_key: retiredKey,
+    login_verifier: loginVerifier,
+  });
+  // This session has ended on the server, and holds a key that is now replaced.
+  clearSessionKey();
+  return { dekId: data.dek_id };
 }
 
 // ─── Public API: recovery factor enroll / use ─────────────────────
@@ -308,6 +430,8 @@ export async function buildRecoveryFactorEnvelope({ secret, masterPassword }) {
 export async function unlockWithRecoveryFactor(blob, secret, dekId) {
   sessionDEK = await unwrapDEK(blob, secret, { extractable: false });
   sessionDEKId = dekId;
+  sessionRetiredKeys = [];
+  retiredKeyCache = new Map();
   return sessionDEK;
 }
 
@@ -422,6 +546,8 @@ export async function rewrapMasterPasswordFromRecovery({
   // Install the same DEK as the live session key, non-extractable.
   sessionDEK = await reimportNonExtractable(dekX);
   sessionDEKId = dekId;
+  sessionRetiredKeys = [];
+  retiredKeyCache = new Map();
   // Same reasoning as `changeMasterPassword`: `newPassword` is now the
   // master password in force, so the cache must describe it, not the
   // pre-recovery one.
@@ -439,10 +565,14 @@ export const hasSessionKey = () => sessionDEK !== null;
  * Returns `null` when the vault is locked.
  */
 export const getSessionDEKId = () => sessionDEKId;
+/** Whether this session knows of replaced DEKs whose rows may need re-encrypting. */
+export const hasRetiredKeys = () => sessionRetiredKeys.length > 0;
 export const clearSessionKey = () => {
   sessionDEK = null;
   sessionDEKId = null;
   sessionWrappedBlob = null;
+  sessionRetiredKeys = [];
+  retiredKeyCache = new Map();
 };
 
 /**
@@ -527,13 +657,15 @@ export async function decryptItem(payloadStr) {
   ) {
     return { _legacyPlaintext: true };
   }
+  let key = sessionDEK;
   if (parsed.dek_id && sessionDEKId && parsed.dek_id !== sessionDEKId) {
-    return { _staleDek: true };
+    key = await retiredKeyFor(parsed.dek_id);
+    if (!key) return { _staleDek: true };
   }
-  if (!sessionDEK) throw new Error('Vault is locked.');
+  if (!key) throw new Error('Vault is locked.');
   const buf = await window.crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: fromB64(parsed.iv) },
-    sessionDEK,
+    key,
     fromB64(parsed.ct),
   );
   return JSON.parse(new TextDecoder().decode(buf));
@@ -543,6 +675,8 @@ export default {
   enrollWithMasterPassword,
   unlockWithMasterPassword,
   changeMasterPassword,
+  replaceVaultKey,
+  hasRetiredKeys,
   enrollRecoveryFactor,
   buildRecoveryFactorEnvelope,
   unlockWithRecoveryFactor,

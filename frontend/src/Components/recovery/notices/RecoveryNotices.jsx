@@ -1,16 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import ApiService from '../../../services/api';
+import ReplaceVaultKey from './ReplaceVaultKey';
 
 /**
  * In-app list of the account's recovery and reset notices (the same events
  * the security emails report), newest first, and after a support unlock the
  * warning that the vault may have been read. Nothing can undo that, so the
  * warning stays, here and in VaultExposureBanner, until the owner says the
- * stored passwords are changed.
+ * stored passwords are changed. The owner replaces the vault key from here too.
  */
 export default function RecoveryNotices() {
   const [notices, setNotices] = useState(null);
   const [exposedSince, setExposedSince] = useState(null);
+  const [keyReplacedAt, setKeyReplacedAt] = useState(null);
+  const [username, setUsername] = useState('');
   const [error, setError] = useState('');
 
   function load() {
@@ -19,6 +22,8 @@ export default function RecoveryNotices() {
       .then((resp) => {
         setNotices(resp.data?.notices || []);
         setExposedSince(resp.data?.vault_exposed_since || null);
+        setKeyReplacedAt(resp.data?.vault_key_replaced_at || null);
+        setUsername(resp.data?.username || '');
       })
       .catch((err) => {
         const data = ApiService.handleError(err) || {};
@@ -61,11 +66,21 @@ export default function RecoveryNotices() {
             after a recovery you reported as not yours. Whoever completed it may
             have seen everything stored in your vault.
           </p>
+          {keyReplacedAt && new Date(keyReplacedAt) >= new Date(exposedSince) ? (
+            <p data-testid="vault-key-replaced">
+              Your vault key was replaced on {new Date(keyReplacedAt).toLocaleString()}.
+            </p>
+          ) : (
+            <ReplaceVaultKey username={username} />
+          )}
           <ol>
             <li>Change every password stored in your vault, on the sites they belong to.</li>
             <li>Replace other secrets stored there, such as notes, card numbers and authenticator seeds.</li>
             <li>Enroll a new recovery factor, and check the ones you already have are yours.</li>
           </ol>
+          {keyReplacedAt && new Date(keyReplacedAt) >= new Date(exposedSince) ? null : (
+            <p>Confirming this ends the warning, and the vault key can no longer be replaced from here.</p>
+          )}
           <button type="button" onClick={acknowledge} data-testid="vault-exposure-acknowledge">
             I have done this
           </button>

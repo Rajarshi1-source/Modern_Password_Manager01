@@ -19,7 +19,8 @@
  *     them under v3. No-op if nothing is left to migrate. The first
  *     per-account run does the bulk of the work; subsequent runs
  *     catch items that missed the first pass (network blip, PUT
- *     failure, etc.).
+ *     failure, etc.). It then moves rows still sealed under a replaced
+ *     v3 DEK onto the current one (`reencryptRetiredKeyItems`).
  *
  * ZK invariant: the master password and DEK never leave the
  * browser. Each rewrite is decrypt-with-old / encrypt-with-new /
@@ -106,6 +107,58 @@ async function fetchAllVaultItems() {
     break; // Unrecognised shape — stop and report what we have.
   }
   return out;
+}
+
+const STALE_ITEMS_URL = '/api/auth/vault/wrapped-dek/stale-items/';
+
+/**
+ * Re-encrypt rows still sealed under a replaced DEK. A row that cannot be read
+ * stays as it is, under a key that is still kept, and any failure (a 429 on a
+ * large vault, say) just leaves the rest for the next login.
+ *
+ * @returns {Promise<number>} How many rows moved to the current DEK.
+ */
+async function reencryptRetiredKeyItems() {
+  let rewritten = 0;
+  try {
+    let after = null;
+    for (let page = 0; page < FETCH_ALL_MAX_PAGES; page += 1) {
+      // eslint-disable-next-line no-await-in-loop -- sequential by design
+      const { data } = await axios.get(STALE_ITEMS_URL, { params: after ? { after } : {} });
+      const items = [];
+      for (const row of data.items) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const plain = await sessionVaultCryptoV3.decryptItem(row.encrypted_data);
+          // `{}` is how decryptItem answers an envelope it cannot parse: writing
+          // that back would replace the row with an empty item.
+          if (plain?._staleDek || plain?._legacyPlaintext || !Object.keys(plain || {}).length) {
+            continue;
+          }
+          items.push({
+            id: row.id,
+            updated_at: row.updated_at,
+            // eslint-disable-next-line no-await-in-loop
+            encrypted_data: await sessionVaultCryptoV3.encryptItem(plain),
+          });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(`legacyVaultMigration: left item ${row.id} as it is:`, err?.message);
+        }
+      }
+      if (items.length) {
+        // eslint-disable-next-line no-await-in-loop
+        const { data: written } = await axios.post(STALE_ITEMS_URL, { items });
+        rewritten += written.rewritten;
+      }
+      after = data.next;
+      if (!after) break;
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('legacyVaultMigration: re-encryption resumes at next login:', err?.message);
+  }
+  return rewritten;
 }
 
 /**
@@ -218,6 +271,9 @@ export async function migrateRemainingV2Items() {
         // eslint-disable-next-line no-console
         console.warn(`legacyVaultMigration: rewrite failed for ${item.id}:`, err);
       }
+    }
+    if (sessionVaultCryptoV3.hasRetiredKeys()) {
+      migratedCount += await reencryptRetiredKeyItems();
     }
     return { migratedCount, totalCount: list.length };
   })().finally(() => {

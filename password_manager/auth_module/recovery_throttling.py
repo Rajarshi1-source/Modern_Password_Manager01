@@ -18,6 +18,16 @@ from shared.log_safe import log_safe
 logger = logging.getLogger(__name__)
 
 
+class VaultKeySweepThrottle(SimpleRateThrottle):
+    """Per user, for re-encrypting rows after a vault key replacement. Its own
+    budget: a large vault must not use up the vault operations the app needs."""
+    scope = 'vault_key_sweep'
+    rate = '600/hour'
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {'scope': self.scope, 'ident': request.user.pk}
+
+
 class RecoveryThrottle(SimpleRateThrottle):
     """
     Strict rate limiting for recovery operations.

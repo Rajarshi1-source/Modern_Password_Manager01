@@ -1,5 +1,5 @@
 import sessionVaultCrypto from './sessionVaultCrypto';
-import sessionVaultCryptoV3 from './sessionVaultCryptoV3';
+import sessionVaultCryptoV3, { DEK_UNWRAP_FAILURE_MESSAGE } from './sessionVaultCryptoV3';
 
 /**
  * Decrypt a vault item's `encrypted_data` envelope into its plaintext object.
@@ -133,6 +133,24 @@ export async function encryptEnvelope(data) {
     return sessionVaultCryptoV3.encryptItem(data);
   }
   return sessionVaultCrypto.encryptItem(data);
+}
+
+/**
+ * Replace the vault key, from the screen that offers it. A decoy session must
+ * never reach the real key, and answers as a wrong password does, so the screen
+ * tells a coercer nothing about which kind of session this is. That includes
+ * the time taken: a wrong password costs one Argon2id derivation, so this does too.
+ *
+ * @param {string} masterPassword
+ * @param {string} username
+ * @returns {Promise<{dekId: string}>}
+ */
+export async function replaceVaultKey(masterPassword, username) {
+  if (sessionVaultCrypto.isDecoySession()) {
+    await sessionVaultCryptoV3.verifyMasterPassword(masterPassword).catch(() => {});
+    throw new Error(DEK_UNWRAP_FAILURE_MESSAGE);
+  }
+  return sessionVaultCryptoV3.replaceVaultKey(masterPassword, username);
 }
 
 /**

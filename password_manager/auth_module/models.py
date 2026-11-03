@@ -357,6 +357,7 @@ class RecoveryNotice(models.Model):
         ('social_recovery_started', 'Social recovery started'),
         ('social_recovery_completed', 'Social recovery completed'),
         ('account_unlocked', 'Account unlocked by support'),
+        ('vault_key_replaced', 'Vault key replaced'),
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

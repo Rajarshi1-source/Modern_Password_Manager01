@@ -105,6 +105,9 @@ export const VaultProvider = ({ children }) => {
 
   // Clean up mounted ref on unmount
   useEffect(() => {
+    // StrictMode runs this cleanup once at mount; without this every later
+    // list update would be dropped in development.
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
     };
@@ -325,11 +328,11 @@ export const VaultProvider = ({ children }) => {
         return { ...item, _decryptionFailed: true };
       }
 
-      // A `_legacyPlaintext` marker (or any payload with no usable object)
-      // is NOT editable: re-encrypting an empty form over it would corrupt the
+      // A `_legacyPlaintext` or `_staleDek` marker (or any payload with no usable
+      // object) is NOT editable: re-encrypting an empty form over it would corrupt the
       // item. Surface a failure placeholder the dashboard refuses to open, and
       // don't cache it so a later attempt (after a proper unlock) can retry.
-      if (!data || data._legacyPlaintext) {
+      if (!data || data._legacyPlaintext || data._staleDek) {
         return { ...item, _decryptionFailed: true };
       }
 

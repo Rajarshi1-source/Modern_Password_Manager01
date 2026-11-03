@@ -244,13 +244,13 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       # Before the main run, which stops at --max-failures=40 and has yet to
-      # reach this spec. Its own --output and reporter, as the main run clears
+      # reach these specs. Its own --output and reporter, as the main run clears
       # test-results/ and rewrites e2e-report/.
       - name: Run guardian recovery E2E test
         id: guardian
         working-directory: ./frontend
         run: >-
-          npx playwright test e2e/guardian_recovery.spec.js
+          npx playwright test e2e/guardian_recovery.spec.js e2e/vault_key_replace.spec.js
           --project=chromium --retries=0 --trace=retain-on-failure
           --reporter=list --output=guardian-test-results
 
@@ -284,7 +284,7 @@ jobs:
         # empty/useless playwright-report artifact. This flag records a
         # trace directly on failure regardless of retry count, without
         # re-enabling retries.
-        run: npm run test:e2e:ci -- --trace=retain-on-failure --grep-invert "recovers with guardians"
+        run: npm run test:e2e:ci -- --trace=retain-on-failure --grep-invert "recovers with guardians|replaces the vault key"
         continue-on-error: true
 
       - name: Note when Playwright never ran

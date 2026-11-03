@@ -31,7 +31,12 @@ from . import kyber_views
 # Import Quantum Recovery views
 from . import quantum_recovery_views
 # Import Layered Recovery Mesh views (Unit 4)
-from .wrapped_dek_view import VaultWrappedDEKView, WrappedDEKRecoveryRotateView
+from .wrapped_dek_view import (
+    VaultKeyReplaceView,
+    VaultStaleItemsView,
+    VaultWrappedDEKView,
+    WrappedDEKRecoveryRotateView,
+)
 # Import Layered Recovery Mesh views (Unit 5)
 from .recovery_factor_view import (
     RecoveryFactorListCreateView,
@@ -222,6 +227,9 @@ urlpatterns = [
     # rotation to (username, factor_type, dek_id) so only a caller
     # who has hit lookup with a real combination can rotate.
     path('vault/wrapped-dek/recover-rotate/', WrappedDEKRecoveryRotateView.as_view(), name='vault-wrapped-dek-recover-rotate'),
+    # New vault key after a recovery compromise, and the rows still sealed under an old one.
+    path('vault/wrapped-dek/replace-key/', VaultKeyReplaceView.as_view(), name='vault-wrapped-dek-replace-key'),
+    path('vault/wrapped-dek/stale-items/', VaultStaleItemsView.as_view(), name='vault-wrapped-dek-stale-items'),
     # Unit 5 — list/enroll wrapped-DEK recovery factors (recovery key,
     # social mesh, time-locked, passkey). Server stores ciphertext only.
     path('vault/recovery-factors/', RecoveryFactorListCreateView.as_view(), name='vault-recovery-factors'),

@@ -16,6 +16,7 @@ from rest_framework.decorators import (
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from .recovery_models_v2 import VaultWrappedDEK
 from .recovery_throttling import RecoveryNoticeCancelThrottle
 
 from .models import RecoveryNotice
@@ -31,7 +32,11 @@ CANCEL_ANSWER = (
 @permission_classes([IsAuthenticated])
 def list_recovery_notices(request):
     notices = RecoveryNotice.objects.filter(user=request.user)[:50]
-    return Response({'vault_exposed_since': unacknowledged_exposure(request.user), 'notices': [{
+    wrapped = VaultWrappedDEK.objects.filter(user=request.user).first()
+    return Response({'vault_exposed_since': unacknowledged_exposure(request.user),
+                     'vault_key_replaced_at': wrapped.key_replaced_at if wrapped else None,
+                     'username': request.user.username,
+                     'notices': [{
         'id': str(n.id),
         'event': n.event,
         'description': n.get_event_display(),

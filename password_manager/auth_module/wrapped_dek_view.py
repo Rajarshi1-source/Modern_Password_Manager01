@@ -15,11 +15,13 @@ PUT semantics:
     `RecoveryWrappedDEK` references the same `dek_id`) from being
     silently orphaned.
 """
+import json
 import uuid
 
 from django.contrib.auth.models import User
 from django.db import transaction
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -27,12 +29,14 @@ from rest_framework.views import APIView
 from auth_module.recovery_throttling import (
     RecoveryThrottle,
     RecoveryCompleteThrottle,
+    VaultKeySweepThrottle,
 )
 from auth_module.auth_hash import make_auth_hash_record
-from auth_module.recovery_notice import notify as notify_recovery
+from auth_module.recovery_notice import notify as notify_recovery, unacknowledged_exposure
 from auth_module.models import UserSalt
 from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
 from auth_module.quantum_recovery_models import RecoveryAttempt, RecoveryAuditLog
+from auth_module.time_locked_models import TimeLockedRecovery
 from auth_module.login_verifier import (
     is_login_verifier,
     revoke_sessions,
@@ -40,6 +44,7 @@ from auth_module.login_verifier import (
 )
 from shared import sealed_shares
 from shared.client_ip import get_client_ip
+from vault.models.vault_models import EncryptedVaultItem
 
 
 # Wrapped-DEK envelope versioning. The client (sessionVaultCryptoV3.js)
@@ -47,6 +52,11 @@ from shared.client_ip import get_client_ip
 # agree.
 ENVELOPE_VERSION = 'wdek-1'
 _REQUIRED_FIELDS = ('kdf', 'kdf_params', 'salt', 'iv', 'wrapped')
+# A replaced DEK, encrypted under the DEK that replaced it (sessionVaultCryptoV3.js).
+RETIRED_KEY_VERSION = 'rdek-1'
+# The item envelope of sessionVaultCryptoV3.encryptItem.
+ITEM_VERSION = 'svc-gcm-2'
+STALE_ITEMS_PAGE = 50
 
 
 def _valid_envelope(blob):
@@ -58,6 +68,35 @@ def _valid_envelope(blob):
     if not isinstance(blob, dict) or blob.get('v') != ENVELOPE_VERSION:
         return False
     return all(k in blob for k in _REQUIRED_FIELDS)
+
+
+def _valid_retired_key(entry, dek_id):
+    """The shape of a retired-key entry for ``dek_id``, without opening it."""
+    return (
+        isinstance(entry, dict)
+        and set(entry) == {'v', 'dek_id', 'iv', 'wrapped'}
+        and entry['v'] == RETIRED_KEY_VERSION
+        and entry['dek_id'] == str(dek_id)
+        and isinstance(entry['iv'], str) and 0 < len(entry['iv']) <= 64
+        and isinstance(entry['wrapped'], str) and 0 < len(entry['wrapped']) <= 128
+    )
+
+
+def _item_envelope(encrypted_data):
+    """The parsed v3 item envelope, or None if ``encrypted_data`` is not one.
+    Reads only the public fields; ``ct`` stays opaque."""
+    try:
+        parsed = json.loads(encrypted_data)
+    except (TypeError, ValueError):
+        return None
+    if (
+        not isinstance(parsed, dict)
+        or parsed.get('v') != ITEM_VERSION
+        or not isinstance(parsed.get('iv'), str)
+        or not isinstance(parsed.get('ct'), str)
+    ):
+        return None
+    return parsed
 
 
 _client_ip = get_client_ip
@@ -110,6 +149,7 @@ class VaultWrappedDEKView(APIView):
             'enrolled': True,
             'blob': row.blob,
             'dek_id': str(row.dek_id),
+            'retired_keys': row.retired_keys,
         })
 
     def put(self, request):
@@ -149,6 +189,165 @@ class VaultWrappedDEKView(APIView):
             user_agent=request.META.get('HTTP_USER_AGENT', '')[:1024],
         )
         return Response({'success': True, 'dek_id': str(row.dek_id)})
+
+
+class VaultKeyReplaceView(APIView):
+    """Replace the vault DEK after a recovery compromise.
+
+    Whoever completed the recovery may hold the DEK. The browser generates a new
+    one and sends it wrapped under the master password, with the old one
+    encrypted under the new one (``retired_key``). This writes them as one row:
+    there is no state in which the vault has no working key, and rows still
+    sealed under the old DEK stay readable until ``VaultStaleItemsView`` has
+    moved them. The server sees only ciphertext.
+
+    Every recovery factor wraps the old DEK, so all are revoked, and the sessions
+    end because any other device holds the old DEK in memory.
+
+    Only while a support unlock's exposure warning is open. That unlock has
+    already removed the credentials of whoever caused the lock. Before it, they
+    may hold the master password they set, and replacing the key would cut the
+    owner's factors off from the vault for good.
+
+    Request: ``{dek_id, blob, retired_key, login_verifier}``. The verifier proves
+    the master password, so a stolen session alone cannot do this.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [RecoveryThrottle]
+
+    def post(self, request):
+        user = request.user
+        blob = request.data.get('blob')
+        retired_key = request.data.get('retired_key')
+        login_verifier = request.data.get('login_verifier')
+        if not _valid_envelope(blob) or not is_login_verifier(login_verifier):
+            return Response({'error': 'invalid request'}, status=400)
+        if not user.check_password(login_verifier):
+            return Response({'error': 'Incorrect master password.'}, status=403)
+
+        with transaction.atomic():
+            row = VaultWrappedDEK.objects.select_for_update().filter(user=user).first()
+            if row is None:
+                return Response({'error': 'vault key not found'}, status=404)
+            old_dek_id = str(row.dek_id)
+            if old_dek_id != str(request.data.get('dek_id') or ''):
+                return Response({'error': 'dek_id mismatch'}, status=409)
+            if not _valid_retired_key(retired_key, old_dek_id):
+                return Response({'error': 'invalid request'}, status=400)
+            exposed_since = unacknowledged_exposure(user)
+            if exposed_since is None:
+                return Response(
+                    {'error': 'The vault key can only be replaced after support '
+                              'unlocks the account.'},
+                    status=403,
+                )
+            if row.key_replaced_at and row.key_replaced_at >= exposed_since:
+                return Response({'error': 'The vault key was already replaced.'}, status=409)
+
+            now = timezone.now()
+            row.blob = blob
+            row.dek_id = uuid.uuid4()
+            row.retired_keys = [*row.retired_keys, retired_key]
+            row.rotated_at = row.key_replaced_at = now
+            row.save(update_fields=['blob', 'dek_id', 'retired_keys', 'rotated_at',
+                                    'key_replaced_at', 'updated_at'])
+            RecoveryWrappedDEK.objects.filter(
+                user=user, status=RecoveryWrappedDEK.Status.ACTIVE,
+            ).update(status=RecoveryWrappedDEK.Status.REVOKED, revoked_at=now)
+            TimeLockedRecovery.objects.filter(user=user, is_active=True).update(is_active=False)
+            revoke_sessions(user)
+            notify_recovery(user, 'vault_key_replaced', request)
+            RecoveryAuditLog.objects.create(
+                user=user,
+                event_type='setup_updated',
+                event_data={
+                    'subsystem': 'wrapped_dek',
+                    'action': 'key_replaced',
+                    'old_dek_id': old_dek_id,
+                    'dek_id': str(row.dek_id),
+                },
+                ip_address=_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', '')[:1024],
+            )
+        return Response({'success': True, 'dek_id': str(row.dek_id)})
+
+
+class VaultStaleItemsView(APIView):
+    """Rows still sealed under a replaced DEK, and their re-encrypted versions.
+
+    Rows reach this state after a key replacement, and later from a restored
+    backup or a device's offline queue. The browser reads them through
+    ``retired_keys`` at each sign-in and writes them back under the current DEK
+    (``legacyVaultMigration``). Includes soft-deleted rows, which the vault list
+    does not. Other envelopes (v2, decoy) are not this key's to touch.
+
+    The write keeps ``updated_at``: nothing changed for the user, and a row
+    edited since it was read fails the match and is left for the next pass.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [VaultKeySweepThrottle]
+
+    def get(self, request):
+        row = VaultWrappedDEK.objects.filter(user=request.user).first()
+        if row is None:
+            return Response({'items': [], 'next': None})
+        stale = (
+            EncryptedVaultItem.objects
+            .filter(user=request.user, encrypted_data__contains=f'"v":"{ITEM_VERSION}"')
+            .exclude(encrypted_data__contains=f'"dek_id":"{row.dek_id}"')
+            .order_by('id')
+        )
+        after = request.query_params.get('after')
+        if after:
+            try:
+                stale = stale.filter(id__gt=uuid.UUID(after))
+            except ValueError:
+                return Response({'error': 'invalid cursor'}, status=400)
+        page = list(stale[:STALE_ITEMS_PAGE])
+        return Response({
+            'items': [
+                {
+                    'id': str(item.id),
+                    'encrypted_data': item.encrypted_data,
+                    'updated_at': item.updated_at.isoformat(),
+                }
+                for item in page if _item_envelope(item.encrypted_data) is not None
+            ],
+            # By page, not by what is left: a row the browser cannot read stays
+            # stale, and must not bring it back to the same page for ever.
+            'next': str(page[-1].id) if len(page) == STALE_ITEMS_PAGE else None,
+        })
+
+    def post(self, request):
+        items = request.data.get('items')
+        if not isinstance(items, list) or len(items) > STALE_ITEMS_PAGE:
+            return Response({'error': 'invalid items'}, status=400)
+        row = VaultWrappedDEK.objects.filter(user=request.user).first()
+        if row is None:
+            return Response({'error': 'vault key not found'}, status=404)
+        parsed = []
+        for item in items:
+            if not isinstance(item, dict):
+                return Response({'error': 'invalid items'}, status=400)
+            try:
+                item_id = uuid.UUID(str(item.get('id')))
+                updated_at = parse_datetime(str(item.get('updated_at')))
+            except ValueError:
+                return Response({'error': 'invalid items'}, status=400)
+            envelope = _item_envelope(item.get('encrypted_data'))
+            # Only forward: a stale device must not move a row back under an old key.
+            if updated_at is None or envelope is None or envelope.get('dek_id') != str(row.dek_id):
+                return Response({'error': 'invalid items'}, status=400)
+            parsed.append((item_id, updated_at, item['encrypted_data']))
+        rewritten = 0
+        with transaction.atomic():
+            for item_id, updated_at, encrypted_data in parsed:
+                rewritten += EncryptedVaultItem.objects.filter(
+                    id=item_id, user=request.user, updated_at=updated_at,
+                ).update(encrypted_data=encrypted_data)
+        return Response({'rewritten': rewritten})
 
 
 class WrappedDEKRecoveryRotateView(APIView):
