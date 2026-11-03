@@ -103,6 +103,34 @@ describe('holderKeyStore', () => {
     expect(await replaceLostGuardianKey()).not.toBe(original);
   });
 
+  it.each([
+    ['not JSON', 'not json'],
+    ['missing its wrapped secret', '{"publicKey":"AAEC"}'],
+  ])('keeps a damaged guardian record until it is replaced: %s', async (_, damaged) => {
+    const name = 'pwm.recovery.guardianKeyPair.v2';
+    window.localStorage.setItem(name, damaged);
+    await expect(getOrCreateGuardianPublicKey()).rejects.toMatchObject({ keyLost: true });
+    expect(window.localStorage.getItem(name)).toBe(damaged);
+    const replacement = await replaceLostGuardianKey();
+    expect((await loadGuardianKeyPair()).publicKey).toBe(replacement);
+  });
+
+  it('refuses a stored public key that is not the secret key\'s', async () => {
+    const original = await getOrCreateGuardianPublicKey();
+    const name = 'pwm.recovery.guardianKeyPair.v2';
+    const stored = window.localStorage.getItem(name);
+    const other = (await newRequesterKeyPair()).publicKey;
+    const swapped = JSON.stringify({ ...JSON.parse(stored), publicKey: other });
+    window.localStorage.setItem(name, swapped);
+    const lost = { name: 'KeyStorageError', keyLost: true };
+    await expect(getOrCreateGuardianPublicKey()).rejects.toMatchObject(lost);
+    await expect(loadGuardianKeyPair()).rejects.toMatchObject(lost);
+    expect(window.localStorage.getItem(name)).toBe(swapped);
+    const replacement = await replaceLostGuardianKey();
+    expect(replacement).not.toBe(other);
+    expect(replacement).not.toBe(original);
+  });
+
   it('tells a requester to start again, not to make a guardian key', async () => {
     const backend = memoryBackend();
     _setWrappingKeyBackendForTests(backend);

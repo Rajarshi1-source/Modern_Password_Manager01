@@ -17,6 +17,7 @@
  *
  * Nothing here is sent to the server except public keys and sealed values.
  */
+import { hybridKeyPairMatches } from '../quantum/hybridKem';
 import { fromB64, newHolderKeyPair, toB64 } from './sealedShareRecovery';
 
 const GUARDIAN_KEY = 'pwm.recovery.guardianKeyPair.v2';
@@ -129,6 +130,29 @@ async function seal(keyPair, label) {
   }
 }
 
+// Do not advise clearing site data: that also deletes the wrapped vault keys
+// kept in localStorage, which can lock someone out of their vault.
+function lostKeyError(label) {
+  return new KeyStorageError(
+    label === GUARDIAN_KEY
+      ? 'The recovery key in this browser can no longer be opened, because part of this '
+        + "site's stored data was cleared or changed. You can make a new one on the guardian "
+        + 'key page (/recovery/guardian-key), then tell whoever relies on the old key so they '
+        + 'can set up their guardians again.'
+      : 'This recovery can no longer be finished in this browser, because part of this '
+        + "site's stored data was cleared or changed. Start recovery again.",
+    { keyLost: true },
+  );
+}
+
+function holdsPublicKey(publicKeyB64, secret) {
+  try {
+    return hybridKeyPairMatches(fromB64(publicKeyB64), secret);
+  } catch {
+    return false;
+  }
+}
+
 async function unseal(stored, label) {
   let plain;
   try {
@@ -141,21 +165,14 @@ async function unseal(stored, label) {
     // cleared and localStorage was not, so the wrapping key no longer matches.
     // InvalidCharacterError is a stored value that is no longer valid base64.
     if (err?.name !== 'OperationError' && err?.name !== 'InvalidCharacterError') throw err;
-    // Do not advise clearing site data: that also deletes the wrapped vault
-    // keys kept in localStorage, which can lock someone out of their vault.
-    throw new KeyStorageError(
-      label === GUARDIAN_KEY
-        ? 'The recovery key in this browser can no longer be opened, because part of this '
-          + "site's stored data was cleared or changed. You can make a new one on the guardian "
-          + 'key page (/recovery/guardian-key), then tell whoever relies on the old key so they '
-          + 'can set up their guardians again.'
-        : 'This recovery can no longer be finished in this browser, because part of this '
-          + "site's stored data was cleared or changed. Start recovery again.",
-      { keyLost: true },
-    );
+    throw lostKeyError(label);
   }
   const secret = new Uint8Array(plain);
   try {
+    // AES-GCM authenticates the secret, not the public key stored beside it. A
+    // swapped public key would have an owner seal shares to someone else, and
+    // the fingerprint read out to them is computed from that same value.
+    if (!holdsPublicKey(stored.publicKey, secret)) throw lostKeyError(label);
     return { publicKey: stored.publicKey, secretKey: toB64(secret) };
   } finally {
     secret.fill(0);
@@ -209,6 +226,9 @@ export function getOrCreateGuardianPublicKey() {
       await unseal(existing, GUARDIAN_KEY);
       return existing.publicKey;
     }
+    // A damaged record is a lost key, not a missing one: someone may rely on
+    // it, so a new key is made only when they choose replaceLostGuardianKey.
+    if (window.localStorage.getItem(GUARDIAN_KEY) !== null) throw lostKeyError(GUARDIAN_KEY);
     const keyPair = await newHolderKeyPair();
     write(GUARDIAN_KEY, await seal(keyPair, GUARDIAN_KEY));
     return keyPair.publicKey;

@@ -117,6 +117,21 @@ export async function generateHybridKeyPair() {
 }
 
 /**
+ * Whether `publicKey` is the public half of `secretKey`. An ML-KEM-768 dk holds
+ * its ek after the 1152-byte decryption key (FIPS 203).
+ */
+export function hybridKeyPairMatches(publicKey, secretKey) {
+  if (publicKey.length !== HYBRID_PUBLIC_KEY_SIZE || secretKey.length !== HYBRID_SECRET_KEY_SIZE) {
+    return false;
+  }
+  const expected = concat(
+    x25519.getPublicKey(secretKey.subarray(0, X25519_SIZE)),
+    secretKey.subarray(X25519_SIZE + 1152, X25519_SIZE + 1152 + MLKEM_PK_SIZE),
+  );
+  return expected.every((b, i) => b === publicKey.at(i));
+}
+
+/**
  * Seal `plaintext` to a hybrid public key.
  * @param {Uint8Array} recipientPublicKey
  * @param {Uint8Array} plaintext
