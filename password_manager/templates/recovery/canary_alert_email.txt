@@ -18,14 +18,13 @@ RECOVERY DETAILS:
 Visit: {{ cancel_url }}
 
 IF THIS WAS YOU:
-No action needed. Continue following the recovery process. You will receive temporal challenges via email over the next few days.
+No action needed. Continue from the link in your recovery email, in the browser you started from.
 
 WHAT HAPPENS NEXT (if you don't cancel):
-1. You'll receive 5 identity verification challenges over 3 days
-2. Your guardians will be asked to approve the recovery
-3. If verified, account access will be restored
+1. Your guardians will be asked to approve the recovery
+2. After a waiting period, whoever started it can finish it
 
-⚠️ You have 48 hours to cancel this recovery if it's unauthorized.
+⚠️ You have {{ cancel_hours }} hours to cancel this recovery if it's unauthorized.
 
 ---
 This is an automated security alert from SecureVault Password Manager.

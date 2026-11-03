@@ -84,25 +84,24 @@
         </div>
         
         <div style="text-align: center;">
-            {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- cancel_url is server-built from settings.FRONTEND_URL + the attempt id (notification_service.py), never user-controlled #}
+            {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- cancel_url is server-built from settings.FRONTEND_URL + a random notice token (recovery_notice.py), never user-controlled #}
             <a href="{{ cancel_url }}" class="button-danger">🚫 CANCEL RECOVERY NOW</a>
         </div>
         
         <div style="margin-top: 30px; padding: 20px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 6px;">
             <h3 style="margin-top: 0; color: #155724;">If this was you:</h3>
-            <p>No action needed. Continue following the recovery process. You will receive temporal challenges via email over the next few days.</p>
+            <p>No action needed. Continue from the link in your recovery email, in the browser you started from.</p>
         </div>
         
         <hr style="margin: 30px 0;">
         
         <p><strong>What happens next if you don't cancel:</strong></p>
         <ol>
-            <li>You'll receive 5 identity verification challenges over 3 days</li>
             <li>Your guardians will be asked to approve the recovery</li>
-            <li>If verified, account access will be restored</li>
+            <li>After a waiting period, whoever started it can finish it</li>
         </ol>
         
-        <p style="color: #e74c3c; font-weight: bold;">⚠️ You have 48 hours to cancel this recovery if it's unauthorized.</p>
+        <p style="color: #e74c3c; font-weight: bold;">⚠️ You have {{ cancel_hours }} hours to cancel this recovery if it's unauthorized.</p>
     </div>
     
     <div class="footer">
