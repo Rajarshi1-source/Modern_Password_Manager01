@@ -117,6 +117,10 @@ test('a user who lost their master password recovers with guardians', async ({ b
   await first.goto(`${BASE_URL}/recovery/guardian-approve#${tokens[guardians[0].email]}`);
   await first.getByTestId('guardian-approve-code').fill('0000-0000-0000-0000-0000');
   expect(first.url()).toBe(`${BASE_URL}/recovery/guardian-approve`);
+  // The skip link changes the fragment. A reload here would lose the token and the code.
+  await first.locator('a.skip-link').focus();
+  await first.keyboard.press('Enter');
+  await expect(first).toHaveURL(/#main-content$/);
   await first.getByTestId('guardian-approve-submit').click();
   await expect(first.getByRole('alert')).toContainText('does not match');
   for (let i = 0; i < 2; i++) {

@@ -6,11 +6,14 @@
  * read the location while they start, and these routes load lazily, after them.
  */
 const LINK_PATHS = ['/recovery/guardian-approve', '/recovery/guardian-invite'];
+// secrets.token_urlsafe(32) on the server. Other fragments are ordinary anchors,
+// such as the app's skip link.
+const LINK_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
 let token = '';
 
 const hasLinkFragment = () => LINK_PATHS.includes(window.location.pathname)
-  && window.location.hash.length > 1;
+  && LINK_TOKEN.test(window.location.hash.slice(1));
 
 export function captureLinkToken() {
   if (!hasLinkFragment()) return;
