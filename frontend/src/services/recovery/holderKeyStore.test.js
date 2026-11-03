@@ -94,6 +94,26 @@ describe('holderKeyStore', () => {
     expect({ ...window.localStorage }).toEqual(stored);
   });
 
+  it('treats a stored value that is no longer base64 as a lost key', async () => {
+    const original = await getOrCreateGuardianPublicKey();
+    const name = 'pwm.recovery.guardianKeyPair.v2';
+    const stored = JSON.parse(window.localStorage.getItem(name));
+    window.localStorage.setItem(name, JSON.stringify({ ...stored, iv: '!not base64!' }));
+    await expect(getOrCreateGuardianPublicKey()).rejects.toMatchObject({ keyLost: true });
+    expect(await replaceLostGuardianKey()).not.toBe(original);
+  });
+
+  it('tells a requester to start again, not to make a guardian key', async () => {
+    const backend = memoryBackend();
+    _setWrappingKeyBackendForTests(backend);
+    await saveRequesterKeyPair('req-1', await newRequesterKeyPair());
+    backend.clear();
+    const err = await loadRequesterKeyPair('req-1').catch((e) => e);
+    expect(err).toMatchObject({ name: 'KeyStorageError', keyLost: true });
+    expect(err.message).toContain('Start recovery again');
+    expect(err.message).not.toContain('guardian-key');
+  });
+
   it('never advises clearing site data, which deletes wrapped vault keys', async () => {
     const backend = memoryBackend();
     _setWrappingKeyBackendForTests(backend);

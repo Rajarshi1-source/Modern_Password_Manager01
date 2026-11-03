@@ -117,6 +117,11 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
             done = await ApiService.socialRecovery.completeRequest(requestId);
           }
         } catch (fetchErr) {
+          if (fetchErr?.keyLost) {
+            // Every poll would fail the same way, so keep the guard set.
+            setError(fetchErr.message);
+            return;
+          }
           const code = fetchErr?.response?.status;
           if (code >= 400 && code < 500 && code !== 429) {
             // The server refused completion; every poll would get the same

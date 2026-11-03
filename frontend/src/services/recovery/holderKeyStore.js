@@ -139,14 +139,18 @@ async function unseal(stored, label) {
   } catch (err) {
     // Part of this site's data is gone or changed: most likely IndexedDB was
     // cleared and localStorage was not, so the wrapping key no longer matches.
-    if (err?.name !== 'OperationError') throw err;
+    // InvalidCharacterError is a stored value that is no longer valid base64.
+    if (err?.name !== 'OperationError' && err?.name !== 'InvalidCharacterError') throw err;
     // Do not advise clearing site data: that also deletes the wrapped vault
     // keys kept in localStorage, which can lock someone out of their vault.
     throw new KeyStorageError(
-      'The recovery key in this browser can no longer be opened, because part of this '
-      + "site's stored data was cleared or changed. You can make a new one on the guardian "
-      + 'key page (/recovery/guardian-key), then tell whoever relies on the old key so they '
-      + 'can set up their guardians again.',
+      label === GUARDIAN_KEY
+        ? 'The recovery key in this browser can no longer be opened, because part of this '
+          + "site's stored data was cleared or changed. You can make a new one on the guardian "
+          + 'key page (/recovery/guardian-key), then tell whoever relies on the old key so they '
+          + 'can set up their guardians again.'
+        : 'This recovery can no longer be finished in this browser, because part of this '
+          + "site's stored data was cleared or changed. Start recovery again.",
       { keyLost: true },
     );
   }
