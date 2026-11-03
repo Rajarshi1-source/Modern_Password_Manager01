@@ -19,6 +19,9 @@
 **/*.pfx
 **/id_rsa*
 **/*adminsdk*.json
+**/.npmrc
+**/.pypirc
+**/.netrc
 
 # Local data and logs
 **/db.sqlite3*
@@ -46,4 +49,8 @@ canny
 **/htmlcov
 frontend/dist
 frontend/build
-frontend/test-results
+
+# Playwright output: traces can hold recovery-flow data
+frontend/*test-results
+frontend/playwright-report
+frontend/e2e-report

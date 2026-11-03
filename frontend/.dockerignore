@@ -8,10 +8,15 @@
 **/*.key
 **/*.p12
 **/*.pfx
+**/.npmrc
 
 # Installed and built in the image; a local copy would overwrite `npm ci`.
 node_modules
 dist
 build
 coverage
-test-results
+
+# Playwright output: traces can hold recovery-flow data
+*test-results
+playwright-report
+e2e-report

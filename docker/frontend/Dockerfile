@@ -47,6 +47,23 @@ ARG VITE_BLOCKCHAIN_ENABLED=false
 ARG VITE_CONTRACT_ADDRESS
 ARG VITE_FHE_ENABLED=true
 
+# Other public settings the code reads. .dockerignore keeps frontend/.env* out
+# of the context, so pass these with --build-arg. Vite compiles them into the
+# public bundle, so never pass a secret here. No ENV: an ARG that is not passed
+# stays unset, and these exist only in this stage, not in the final image.
+ARG VITE_API_URL
+ARG VITE_API_TIMEOUT
+ARG VITE_FIREBASE_API_KEY
+ARG VITE_FIREBASE_APP_ID
+ARG VITE_FIREBASE_AUTH_DOMAIN
+ARG VITE_FIREBASE_DATABASE_URL
+ARG VITE_FIREBASE_MESSAGING_SENDER_ID
+ARG VITE_FIREBASE_PROJECT_ID
+ARG VITE_FIREBASE_STORAGE_BUCKET
+ARG VITE_SENTRY_DSN
+ARG VITE_SENTRY_RELEASE
+ARG VITE_SENTRY_TRACES_SAMPLE_RATE
+
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL} \
     VITE_WS_URL=${VITE_WS_URL} \
     VITE_BLOCKCHAIN_ENABLED=${VITE_BLOCKCHAIN_ENABLED} \
