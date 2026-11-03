@@ -21,4 +21,16 @@ describe('BehavioralRecoveryFlow', () => {
     expect(axios.get).not.toHaveBeenCalled();
     expect(axios.post).not.toHaveBeenCalled();
   });
+
+  it('sends only the email when starting from one', async () => {
+    axios.post.mockRejectedValue({ response: { status: 410, data: { message: 'Retired' } } });
+    render(
+      <MemoryRouter>
+        <BehavioralRecoveryFlow email="a@example.com" />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('Retired')).toBeTruthy();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(axios.post.mock.calls[0][1]).toEqual({ email: 'a@example.com' });
+  });
 });

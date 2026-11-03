@@ -27,6 +27,15 @@ const DB_NAME = 'pwm-recovery-keys';
 const DB_STORE = 'wrapping';
 const WRAPPING_KEY_ID = 'aes-gcm-v1';
 
+// Its message is written for the person using the page; other errors here
+// (a blocked database, a full disk) are not. Pages tell them apart by name.
+class KeyStorageError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'KeyStorageError';
+  }
+}
+
 function idbRequest(request) {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -46,7 +55,7 @@ function idbCommit(tx) {
 
 async function openDb() {
   if (typeof indexedDB === 'undefined') {
-    throw new Error('This browser cannot store recovery keys securely (no IndexedDB).');
+    throw new KeyStorageError('This browser cannot store recovery keys securely (no IndexedDB).');
   }
   const request = indexedDB.open(DB_NAME, 1);
   request.onupgradeneeded = () => request.result.createObjectStore(DB_STORE);
@@ -130,10 +139,23 @@ async function seal(keyPair, label) {
 }
 
 async function unseal(stored, label) {
-  const secret = new Uint8Array(await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: fromB64(stored.iv), additionalData: new TextEncoder().encode(label) },
-    await wrappingKey(), fromB64(stored.wrappedSecretKey),
-  ));
+  let plain;
+  try {
+    plain = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: fromB64(stored.iv), additionalData: new TextEncoder().encode(label) },
+      await wrappingKey(), fromB64(stored.wrappedSecretKey),
+    );
+  } catch (err) {
+    // Part of this site's data is gone or changed: most likely IndexedDB was
+    // cleared and localStorage was not, so the wrapping key no longer matches.
+    if (err?.name !== 'OperationError') throw err;
+    throw new KeyStorageError(
+      'The recovery key in this browser can no longer be opened, because part of this '
+      + "site's stored data was cleared or changed. To make a new key, clear this site's "
+      + 'data, then tell whoever relies on this key so they can set up their guardians again.',
+    );
+  }
+  const secret = new Uint8Array(plain);
   try {
     return { publicKey: stored.publicKey, secretKey: toB64(secret) };
   } finally {
@@ -177,11 +199,17 @@ function exclusively(name, fn) {
 /**
  * This device's guardian public key, creating the key pair on first use.
  * Concurrent first uses (two tabs, two components) get the same pair.
+ * Throws if the stored pair cannot be opened: handing out its public key
+ * would have an owner seal a share that no one can open. The stored pair is
+ * left in place, so a mistaken failure here destroys nothing.
  */
 export function getOrCreateGuardianPublicKey() {
   return exclusively('pwm-recovery-guardian-key', async () => {
     const existing = read(GUARDIAN_KEY);
-    if (existing?.publicKey && existing?.wrappedSecretKey) return existing.publicKey;
+    if (existing?.publicKey && existing?.wrappedSecretKey) {
+      await unseal(existing, GUARDIAN_KEY);
+      return existing.publicKey;
+    }
     const keyPair = await newHolderKeyPair();
     write(GUARDIAN_KEY, await seal(keyPair, GUARDIAN_KEY));
     return keyPair.publicKey;

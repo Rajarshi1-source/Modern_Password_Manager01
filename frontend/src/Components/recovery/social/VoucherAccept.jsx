@@ -22,7 +22,9 @@ const VoucherAccept = () => {
   useEffect(() => {
     getOrCreateGuardianPublicKey()
       .then(setGuardianPublicKey)
-      .catch(() => setError('Could not create a guardian key on this device.'));
+      .catch((err) => setError(err?.name === 'KeyStorageError'
+        ? err.message
+        : 'Could not create a guardian key on this device.'));
   }, []);
 
   const handleAccept = async (e) => {

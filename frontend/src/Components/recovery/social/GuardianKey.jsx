@@ -16,7 +16,9 @@ export default function GuardianKey() {
   useEffect(() => {
     getOrCreateGuardianPublicKey()
       .then(setPublicKey)
-      .catch(() => setError('Could not create a guardian key in this browser.'));
+      .catch((err) => setError(err?.name === 'KeyStorageError'
+        ? err.message
+        : 'Could not create a guardian key in this browser.'));
   }, []);
 
   if (error) return <p role="alert">{error}</p>;

@@ -1,0 +1,27 @@
+import React from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+
+vi.mock('../../../../services/recovery/holderKeyStore', () => ({
+  getOrCreateGuardianPublicKey: vi.fn(),
+}));
+
+import { getOrCreateGuardianPublicKey } from '../../../../services/recovery/holderKeyStore';
+import GuardianKey from '../GuardianKey';
+
+describe('GuardianKey', () => {
+  it('says why the key store failed when the store can explain it', async () => {
+    getOrCreateGuardianPublicKey.mockRejectedValue(
+      Object.assign(new Error('No IndexedDB here.'), { name: 'KeyStorageError' }),
+    );
+    render(<GuardianKey />);
+    expect((await screen.findByRole('alert')).textContent).toBe('No IndexedDB here.');
+  });
+
+  it('does not show other errors as they are', async () => {
+    getOrCreateGuardianPublicKey.mockRejectedValue(new Error('internal detail'));
+    render(<GuardianKey />);
+    expect((await screen.findByRole('alert')).textContent)
+      .toBe('Could not create a guardian key in this browser.');
+  });
+});
