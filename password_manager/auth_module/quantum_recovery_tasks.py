@@ -2,7 +2,6 @@
 Celery Tasks for Quantum-Resilient Recovery System
 
 Handles:
-- Temporal challenge distribution over 3-7 days
 - Guardian approval requests with randomized windows
 - Automatic recovery expiration
 - Canary alerts
@@ -27,119 +26,9 @@ from .quantum_recovery_models import (
     GuardianApproval,
     RecoveryAuditLog
 )
-from .services.challenge_generator import challenge_generator
+from .recovery_notice import CANCEL_WINDOW, create_notice
 
 logger = logging.getLogger(__name__)
-
-
-@shared_task
-def create_and_send_temporal_challenges(attempt_id):
-    """
-    Create and schedule temporal challenges for a recovery attempt
-    
-    Challenges are distributed over 3 days at random intervals
-    to verify identity through temporal patterns.
-    """
-    try:
-        attempt = RecoveryAttempt.objects.get(id=attempt_id)
-        recovery_setup = attempt.recovery_setup
-        user = recovery_setup.user
-        
-        # Generate personalized challenges using the challenge generator
-        challenges = challenge_generator.generate_challenge_set(user, num_challenges=5)
-        
-        distribution_days = recovery_setup.challenge_distribution_days
-        
-        for i, (challenge_type, question, answer) in enumerate(challenges):
-            # Randomize send time within distribution period
-            hours_offset = random.uniform(0, distribution_days * 24)
-            send_time = timezone.now() + timedelta(hours=hours_offset)
-            
-            # Encrypt challenge data
-            encrypted_question, encrypted_answer = challenge_generator.encrypt_challenge_data(
-                question, answer
-            )
-            
-            # Create challenge
-            challenge = TemporalChallenge.objects.create(
-                recovery_attempt=attempt,
-                challenge_type=challenge_type,
-                encrypted_challenge_data=encrypted_question,
-                encrypted_expected_response=encrypted_answer,
-                delivery_channel='email',  # Can be email, sms, app_notification
-                sent_to=user.email,
-                expected_response_time_window_start=send_time,
-                expected_response_time_window_end=send_time + timedelta(hours=24),
-                expires_at=send_time + timedelta(hours=48)
-            )
-            
-            # Schedule challenge delivery
-            send_temporal_challenge.apply_async(
-                args=[str(challenge.id)],
-                eta=send_time
-            )
-        
-        # Update attempt
-        attempt.challenges_sent = len(challenges)
-        attempt.status = 'challenge_phase'
-        attempt.save()
-        
-        logger.info(f"Created {len(challenges)} temporal challenges for attempt {attempt_id}")
-        
-    except Exception as e:
-        logger.error(f"Error creating temporal challenges: {str(e)}")
-
-
-@shared_task
-def send_temporal_challenge(challenge_id):
-    """
-    Send a temporal challenge to the user via specified channel
-    """
-    try:
-        challenge = TemporalChallenge.objects.get(id=challenge_id)
-        
-        # Check if challenge is still valid
-        if challenge.status != 'pending':
-            logger.info(f"Challenge {challenge_id} already processed, skipping")
-            return
-        
-        attempt = challenge.recovery_attempt
-        user = attempt.recovery_setup.user
-        
-        # Prepare challenge message based on type
-        message = prepare_challenge_message(challenge)
-        
-        # Send via appropriate channel
-        if challenge.delivery_channel == 'email':
-            send_challenge_email(user.email, message, challenge_id)
-        elif challenge.delivery_channel == 'sms':
-            send_challenge_sms(challenge.sent_to, message, challenge_id)
-        elif challenge.delivery_channel == 'app_notification':
-            send_challenge_push_notification(user, message, challenge_id)
-        
-        # Update challenge status
-        challenge.status = 'sent'
-        challenge.sent_at = timezone.now()
-        challenge.save()
-        
-        # Log audit event
-        RecoveryAuditLog.objects.create(
-            user=user,
-            event_type='challenge_sent',
-            recovery_attempt_id=attempt.id,
-            event_data={
-                'challenge_id': str(challenge_id),
-                'challenge_type': challenge.challenge_type
-            },
-            cryptographic_hash=hashlib.sha256(
-                f"{user.id}:{_time.time()}".encode()
-            ).hexdigest(),
-        )
-        
-        logger.info(f"Sent temporal challenge {challenge_id} to {user.email}")
-        
-    except Exception as e:
-        logger.error(f"Error sending temporal challenge {challenge_id}: {str(e)}")
 
 
 @shared_task
@@ -308,14 +197,18 @@ def send_canary_alert(attempt_id):
     """
     Send canary alert to legitimate user about recovery attempt
     
-    This gives the real user 48 hours to cancel if they didn't initiate recovery
+    This gives the real user time to cancel if they didn't initiate recovery
     """
     try:
         attempt = RecoveryAttempt.objects.get(id=attempt_id)
         user = attempt.recovery_setup.user
         
-        # Prepare canary alert message
-        cancel_url = f"https://securevault.com/recovery/cancel/{attempt.id}"
+        # The notice holds only a hash of the link's secret token, and its
+        # page cancels on a button press (recovery_notice.py).
+        notice = create_notice(user, 'guardian_recovery_started', attempt.initiated_from_ip,
+                               send_email=False)
+        cancel_url = notice.cancel_link
+        hours = int(CANCEL_WINDOW.total_seconds() // 3600)
         
         message = f"""
         ⚠️ URGENT: Account Recovery Initiated
@@ -324,7 +217,7 @@ def send_canary_alert(attempt_id):
         
         If this WAS you:
         - No action needed
-        - Check your email for recovery challenges
+        - Continue from the link in your recovery email
         
         If this WAS NOT you:
         - Your account may be under attack
@@ -336,18 +229,21 @@ def send_canary_alert(attempt_id):
         - Location: {attempt.initiated_from_location}
         - Time: {attempt.initiated_at}
         
-        You have 48 hours to cancel this recovery.
+        You have {hours} hours to cancel this recovery.
         """
         
         # Send via multiple channels for critical alert
         from django.core.mail import send_mail
-        send_mail(
+        sent = send_mail(
             subject='⚠️ URGENT: Account Recovery Initiated',
             message=message,
             from_email='security@securevault.com',
             recipient_list=[user.email],
             fail_silently=False
         )
+        if sent:
+            notice.email_sent = True
+            notice.save(update_fields=['email_sent'])
         
         # Also send SMS if available
         # send_sms(user.phone, message_short)
@@ -480,56 +376,6 @@ def generate_challenge_data(challenge_type, user, attempt):
     encrypted_response = expected.encode('utf-8')
     
     return encrypted_challenge, encrypted_response
-
-
-def prepare_challenge_message(challenge):
-    """
-    Prepare user-friendly challenge message
-    """
-    challenge_data = challenge.encrypted_challenge_data.decode('utf-8')
-    
-    message = f"""
-    Recovery Challenge {challenge.recovery_attempt.challenges_completed + 1}/5
-    
-    {challenge_data}
-    
-    Respond at: https://securevault.com/recovery/challenge/{challenge.id}
-    
-    This challenge expires in 48 hours.
-    """
-    
-    return message
-
-
-def send_challenge_email(email, message, challenge_id):
-    """
-    Send challenge via email
-    """
-    from django.core.mail import send_mail
-    
-    send_mail(
-        subject='SecureVault Recovery Challenge',
-        message=message,
-        from_email='noreply@securevault.com',
-        recipient_list=[email],
-        fail_silently=False
-    )
-
-
-def send_challenge_sms(phone, message, challenge_id):
-    """
-    Send challenge via SMS (placeholder)
-    """
-    # Implement SMS sending using Twilio or similar
-    pass
-
-
-def send_challenge_push_notification(user, message, challenge_id):
-    """
-    Send challenge via push notification (placeholder)
-    """
-    # Implement push notification using Firebase or similar
-    pass
 
 
 # Add these imports at the top

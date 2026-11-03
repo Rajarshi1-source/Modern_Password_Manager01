@@ -2,7 +2,6 @@
 Notification Service for Recovery System
 
 Handles email, SMS, and push notifications for:
-- Temporal challenges
 - Guardian approval requests
 - Canary alerts
 """
@@ -13,6 +12,7 @@ from django.conf import settings
 from django.utils.html import strip_tags
 import logging
 
+from auth_module.recovery_notice import CANCEL_WINDOW, create_notice
 from shared.circuit_breaker import twilio_breaker, CircuitBreakerOpen
 
 logger = logging.getLogger(__name__)
@@ -34,39 +34,6 @@ class NotificationService:
             except ImportError:
                 logger.warning("Twilio library not installed. SMS notifications disabled.")
     
-    def send_temporal_challenge_email(self, user, challenge):
-        """Send challenge via email"""
-        try:
-            context = {
-                'user': user,
-                'challenge_question': challenge.encrypted_challenge_data.decode('utf-8'),
-                'challenge_url': f"{settings.FRONTEND_URL}/recovery/challenge/{challenge.id}",
-                'expires_at': challenge.expires_at,
-                'challenge_number': challenge.recovery_attempt.challenges_completed + 1,
-                'total_challenges': challenge.recovery_attempt.challenges_sent
-            }
-            
-            # Render templates
-            html_message = render_to_string('recovery/challenge_email.html', context)
-            plain_message = render_to_string('recovery/challenge_email.txt', context)
-            
-            # Send email
-            msg = EmailMultiAlternatives(
-                subject='SecureVault Recovery Challenge',
-                body=plain_message,
-                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@securevault.com'),
-                to=[user.email]
-            )
-            msg.attach_alternative(html_message, "text/html")
-            msg.send()
-            
-            logger.info(f"Sent challenge email to {user.email} for challenge {challenge.id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to send challenge email: {str(e)}")
-            return False
-    
     def send_guardian_approval_email(self, guardian, approval):
         """Send approval request to guardian"""
         try:
@@ -76,7 +43,7 @@ class NotificationService:
             context = {
                 'guardian_email': guardian_email,
                 'user_email': user.email,
-                'approval_url': f"{settings.FRONTEND_URL}/recovery/guardian-approve#{approval.approval_token}",
+                'approval_url': f"{settings.FRONTEND_URL.rstrip('/')}/recovery/guardian-approve#{approval.approval_token}",
                 'expires_at': approval.approval_window_end,
                 'requires_video': guardian.requires_video_verification
             }
@@ -106,10 +73,15 @@ class NotificationService:
         """Send canary alert to user"""
         try:
             user = attempt.recovery_setup.user
+            # The notice holds only a hash of the link's secret token, and its
+            # page cancels on a button press (recovery_notice.py).
+            notice = create_notice(user, 'guardian_recovery_started', attempt.initiated_from_ip,
+                                   send_email=False)
             
             context = {
                 'user': user,
-                'cancel_url': f"{settings.FRONTEND_URL}/recovery/cancel/{attempt.id}",
+                'cancel_url': notice.cancel_link,
+                'cancel_hours': int(CANCEL_WINDOW.total_seconds() // 3600),
                 'ip_address': attempt.initiated_from_ip,
                 'location': attempt.initiated_from_location,
                 'initiated_at': attempt.initiated_at,
@@ -129,10 +101,12 @@ class NotificationService:
             )
             msg.attach_alternative(html_message, "text/html")
             msg.send()
+            notice.email_sent = True
+            notice.save(update_fields=['email_sent'])
             
             # Send SMS if available and user has phone number
             if hasattr(user, 'phone_number') and user.phone_number and self.twilio_client:
-                self.send_canary_alert_sms(user, attempt)
+                self.send_canary_alert_sms(user, notice.cancel_link)
             
             logger.info(f"Sent canary alert to {user.email} for attempt {attempt.id}")
             return True
@@ -141,7 +115,7 @@ class NotificationService:
             logger.error(f"Failed to send canary alert: {str(e)}")
             return False
     
-    def send_canary_alert_sms(self, user, attempt):
+    def send_canary_alert_sms(self, user, cancel_link):
         """Send canary alert via SMS"""
         if not self.twilio_client:
             logger.warning("Twilio not configured, skipping SMS")
@@ -150,7 +124,7 @@ class NotificationService:
         try:
             message = (
                 f"⚠️ URGENT: Someone initiated recovery for your SecureVault account. "
-                f"If this wasn't you, cancel immediately at: {settings.FRONTEND_URL}/recovery/cancel/{attempt.id}"
+                f"If this wasn't you, cancel immediately at: {cancel_link}"
             )
 
             with twilio_breaker:
