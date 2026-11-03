@@ -12,7 +12,7 @@ asgiref==3.9.1
 asn1crypto==1.5.1
 astunparse==1.6.3
 attrs==25.4.0
-Authlib==1.6.12
+Authlib==1.9.2
 authy==2.2.6
 autobahn==26.7.1
 Automat==25.4.16
@@ -134,6 +134,7 @@ Jinja2==3.1.6
 jmespath==1.0.1
 joblib==1.5.2
 josepy==2.2.0
+joserfc==1.7.7
 keras==3.15.1
 kombu==5.6.2
 legacy-cgi==2.6.4
