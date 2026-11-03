@@ -125,6 +125,19 @@ class RecoveryEmailLinkTests(GuardianFlowBase):
         notice = RecoveryNotice.objects.exclude(pk__in=earlier).get()
         self.assertFalse(notice.email_sent)
 
+    def test_an_email_with_no_recipient_is_not_marked_sent_and_the_sms_still_goes(self):
+        earlier = list(RecoveryNotice.objects.values_list('pk', flat=True))
+        service = NotificationService()
+        service.twilio_client = MagicMock()
+        self.user.phone_number = '+15550100'
+        self.attempt.recovery_setup.user = self.user
+        with override_settings(TWILIO_PHONE_NUMBER='+15550199'), \
+                patch('auth_module.services.notification_service.EmailMultiAlternatives.send',
+                      return_value=0):
+            self.assertFalse(service.send_canary_alert(self.attempt))
+        self.assertFalse(RecoveryNotice.objects.exclude(pk__in=earlier).get().email_sent)
+        service.twilio_client.messages.create.assert_called_once()
+
     def test_the_guardian_approval_links_reach_the_approval_page(self):
         send_guardian_approval_request.apply(args=[str(self.approval.id)])
         links = self._links(mail.outbox[-1])

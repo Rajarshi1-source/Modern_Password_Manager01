@@ -2,10 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import ApiService from '../../../services/api';
 
+const RETRY_MS = 30000;
+
 /**
  * Shown on every signed-in page after a support unlock, until the owner has
- * dealt with it on the recovery activity page. A failed check shows nothing:
- * the unlock email said the same.
+ * dealt with it on the recovery activity page. A failed check shows nothing
+ * new and tries again, so a brief outage does not hide the warning for the
+ * visit.
  */
 export default function VaultExposureBanner() {
   const { pathname } = useLocation();
@@ -13,10 +16,17 @@ export default function VaultExposureBanner() {
 
   useEffect(() => {
     let current = true;
-    ApiService.recoveryNotices.list()
-      .then((resp) => { if (current) setExposed(Boolean(resp.data?.vault_exposed_since)); })
-      .catch(() => {});
-    return () => { current = false; };
+    let timer;
+    const check = () => {
+      ApiService.recoveryNotices.list()
+        .then((resp) => { if (current) setExposed(Boolean(resp.data?.vault_exposed_since)); })
+        .catch(() => { if (current) timer = setTimeout(check, RETRY_MS); });
+    };
+    check();
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
   }, [pathname]);
 
   if (!exposed || pathname === '/security/recovery-notices') return null;

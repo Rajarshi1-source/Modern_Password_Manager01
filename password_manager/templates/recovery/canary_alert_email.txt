@@ -22,7 +22,7 @@ No action needed. Continue from the link in your recovery email, in the browser 
 
 WHAT HAPPENS NEXT (if you don't cancel):
 1. Your guardians will be asked to approve the recovery
-2. After a waiting period, whoever started it can finish it
+2. After a waiting period, and once enough guardians have approved, whoever started it can finish it
 
 ⚠️ You have {{ cancel_hours }} hours to cancel this recovery if it's unauthorized.
 

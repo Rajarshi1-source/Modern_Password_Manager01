@@ -2286,7 +2286,13 @@ function App() {
               onClose={() => setShowVaultUnlock(false)}
             />
             <Suspense fallback={<LoadingIndicator />}>
-              {isAuthenticated ? <VaultExposureBanner /> : null}
+              {isAuthenticated ? (
+                <ErrorBoundary fallbackMessage="Failed to load the vault exposure notice">
+                  <Suspense fallback={null}>
+                    <VaultExposureBanner />
+                  </Suspense>
+                </ErrorBoundary>
+              ) : null}
               <Routes>
                 <Route path="/" element={mainContent} />
                 <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : mainContent} />
