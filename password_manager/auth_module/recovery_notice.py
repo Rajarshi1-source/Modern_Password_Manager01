@@ -53,7 +53,7 @@ STARTED_EVENTS = {
 COMPLETED_EVENTS = {
     'reset_completed', 'recovery_completed', 'passkey_recovery_completed',
     'guardian_recovery_completed', 'social_recovery_completed',
-    'account_unlocked',
+    'account_unlocked', 'vault_key_replaced',
 }
 # Completions that hand out shares of a secret. They use no factor themselves,
 # but whoever holds the shares can rebuild the seed of a social_mesh factor.
@@ -70,6 +70,7 @@ _DESCRIPTIONS = {
     'social_recovery_started': 'Social recovery was started',
     'social_recovery_completed': 'Your vouchers released your recovery shares',
     'account_unlocked': 'Support unlocked your account; set a new password with "Forgot password"',
+    'vault_key_replaced': 'Your vault key was replaced and your recovery factors were removed',
 }
 
 

@@ -409,6 +409,7 @@ const ExportVault = ({ onClose }) => {
         for (const item of itemsToDecrypt) {
           try {
             const data = await decryptEnvelope(item.encrypted_data);
+            if (data?._staleDek) throw new Error('item is under a key this session cannot open');
             allDecryptedItems.push({ ...item, data, _decrypted: true, _lazyLoaded: false });
             // Count only successfully decrypted items (the UI labels this
             // "Decrypting items… (N)"); failures are skipped, not counted.

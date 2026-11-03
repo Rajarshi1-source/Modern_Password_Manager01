@@ -44,6 +44,15 @@ under an older master password to still recover the vault: every active
 ``RecoveryWrappedDEK`` row references the same ``dek_id``, so any factor can
 unwrap a copy of the DEK and the vault stays decryptable.
 
+Replacing the DEK
+-----------------
+After a recovery compromise whoever completed the recovery may hold the DEK, so
+``wrapped_dek_view.VaultKeyReplaceView`` swaps in a new one with a new ``dek_id``
+and revokes every factor, since each wraps the old DEK. The old DEK stays in
+``retired_keys``, encrypted under the DEK that replaced it, so rows and backups
+still sealed under it remain readable. That costs nothing: only a holder of the
+new DEK can open the entry, and whoever holds the old DEK already has it.
+
 Multi-Factor Mesh
 -----------------
 ``RecoveryWrappedDEK`` lets the same DEK be wrapped under multiple independent
@@ -85,6 +94,13 @@ class VaultWrappedDEK(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     rotated_at = models.DateTimeField(null=True, blank=True)
+    retired_keys = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Replaced DEKs, oldest first: [{v, dek_id, iv, wrapped}], each "
+                  "encrypted under the DEK that replaced it; server never inspects 'wrapped'.",
+    )
+    key_replaced_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'vault_wrapped_dek'
