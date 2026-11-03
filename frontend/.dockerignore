@@ -1,0 +1,17 @@
+# Build context for frontend/Dockerfile (context ./frontend). The root
+# .dockerignore does not apply to this context, and `COPY . .` takes the working
+# tree, so anything local that is not listed here ships in the image.
+**/.env
+**/.env.*
+!**/*.example
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+
+# Installed and built in the image; a local copy would overwrite `npm ci`.
+node_modules
+dist
+build
+coverage
+test-results
