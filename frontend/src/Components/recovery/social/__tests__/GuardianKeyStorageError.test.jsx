@@ -1,12 +1,16 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 vi.mock('../../../../services/recovery/holderKeyStore', () => ({
   getOrCreateGuardianPublicKey: vi.fn(),
+  replaceLostGuardianKey: vi.fn(),
 }));
 
-import { getOrCreateGuardianPublicKey } from '../../../../services/recovery/holderKeyStore';
+import {
+  getOrCreateGuardianPublicKey,
+  replaceLostGuardianKey,
+} from '../../../../services/recovery/holderKeyStore';
 import GuardianKey from '../GuardianKey';
 
 describe('GuardianKey', () => {
@@ -16,6 +20,17 @@ describe('GuardianKey', () => {
     );
     render(<GuardianKey />);
     expect((await screen.findByRole('alert')).textContent).toBe('No IndexedDB here.');
+    expect(screen.queryByTestId('guardian-key-replace')).toBeNull();
+  });
+
+  it('offers a new key only when the stored one is lost', async () => {
+    getOrCreateGuardianPublicKey.mockRejectedValue(
+      Object.assign(new Error('Lost.'), { name: 'KeyStorageError', keyLost: true }),
+    );
+    replaceLostGuardianKey.mockResolvedValue('');
+    render(<GuardianKey />);
+    fireEvent.click(await screen.findByTestId('guardian-key-replace'));
+    expect(replaceLostGuardianKey).toHaveBeenCalledTimes(1);
   });
 
   it('does not show other errors as they are', async () => {
