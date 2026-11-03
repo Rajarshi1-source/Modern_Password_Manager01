@@ -71,6 +71,25 @@ describe('holderKeyStore', () => {
     await expect(assertKeyStorageAvailable()).rejects.toThrow('QuotaExceededError');
   });
 
+  it('explains that a browser without IndexedDB cannot store keys', async () => {
+    _setWrappingKeyBackendForTests(null);
+    await expect(getOrCreateGuardianPublicKey()).rejects.toMatchObject({
+      name: 'KeyStorageError', message: expect.stringContaining('no IndexedDB'),
+    });
+    expect(window.localStorage.length).toBe(0);
+  });
+
+  it('does not hand out a guardian key whose wrapping key is gone', async () => {
+    await getOrCreateGuardianPublicKey();
+    const stored = { ...window.localStorage };
+    // IndexedDB cleared, localStorage kept.
+    _setWrappingKeyBackendForTests(memoryBackend());
+    const lost = { name: 'KeyStorageError', message: expect.stringContaining('can no longer be opened') };
+    await expect(getOrCreateGuardianPublicKey()).rejects.toMatchObject(lost);
+    await expect(loadGuardianKeyPair()).rejects.toMatchObject(lost);
+    expect({ ...window.localStorage }).toEqual(stored);
+  });
+
   it('keeps requester keys per request and forgets them', async () => {
     const keyPair = await newRequesterKeyPair();
     await saveRequesterKeyPair('req-1', keyPair);

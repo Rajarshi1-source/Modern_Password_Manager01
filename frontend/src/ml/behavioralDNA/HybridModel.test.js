@@ -27,6 +27,7 @@ describe('behavioral embeddings stay in the browser', () => {
     const api = new BackendAPI();
     await expect(api.generateEmbedding({ keystrokes: [1] })).rejects.toThrow();
     await expect(api.verifyProfile({ keystrokes: [1] }, [0.1])).rejects.toThrow();
+    await expect(api.createCommitments({ keystrokes: [1] })).rejects.toThrow();
     expect(axios.post).not.toHaveBeenCalled();
   });
 });
