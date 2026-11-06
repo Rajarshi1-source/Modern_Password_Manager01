@@ -195,7 +195,7 @@ networkx==3.5
 neurokit2==0.2.12
 nltk==3.10.4
 numpy==2.3.5
-oauthlib==4.0.0
+oauthlib==4.0.1
 opencv-contrib-python==4.13.0.92
 opencv-python==4.13.0.92
 opencv-python-headless==4.13.0.92
