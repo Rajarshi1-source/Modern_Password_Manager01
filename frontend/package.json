@@ -97,7 +97,7 @@
     "@babel/plugin-transform-modules-systemjs": "^7.29.4",
     "@types/react": "^18.3",
     "@types/react-dom": "^18.3",
-    "follow-redirects": "^1.16.1",
+    "follow-redirects": "^1.16.3",
     "@firebase/firestore": {
       "@grpc/grpc-js": "^1.14.6"
     }
