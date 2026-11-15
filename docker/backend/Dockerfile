@@ -16,7 +16,7 @@ ARG LIBOQSPY_COMMIT=62385cd99ababa2a4875257232c68dccda256e3b
 # -----------------------------------------------------------------------------
 # Stage 1: Crypto Builder - Compile liboqs and Python crypto libraries
 # -----------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS crypto-builder
+FROM python:3.15-slim-bookworm AS crypto-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -164,7 +164,7 @@ RUN rm -rf liboqs-python
 # -----------------------------------------------------------------------------
 # Stage 2: Dependencies Builder - Install Python dependencies
 # -----------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS deps-builder
+FROM python:3.15-slim-bookworm AS deps-builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -279,7 +279,7 @@ allow_patterns=['config.json', 'model.safetensors', 'tokenizer.json', 'tokenizer
 # -----------------------------------------------------------------------------
 # Stage 3: Production - Final optimized image
 # -----------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS production
+FROM python:3.15-slim-bookworm AS production
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
