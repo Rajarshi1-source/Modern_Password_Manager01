@@ -78,7 +78,7 @@ RUN npm run build
 # -----------------------------------------------------------------------------
 # Stage 3: Production - Nginx serving static files
 # -----------------------------------------------------------------------------
-FROM nginx:1.31.7-alpine AS production
+FROM nginx:1.31.8-alpine AS production
 
 # Refresh indexes and upgrade OS packages (libssl3, libxml2, etc.) then curl for health checks
 RUN apk update && apk upgrade --no-cache && apk add --no-cache curl
